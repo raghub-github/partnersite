@@ -2,6 +2,8 @@
 
 import React from 'react'
 import { Bell, User, LogOut, Menu } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import LogoutConfirmModal from './LogoutConfirmModal'
 
 interface MXHeaderProps {
   restaurantName?: string
@@ -14,7 +16,23 @@ export const MXHeader: React.FC<MXHeaderProps> = ({
   restaurantId = 'GMM0001',
   unreadCount = 0,
 }) => {
+  const router = useRouter()
   const [isDropdownOpen, setIsDropdownOpen] = React.useState(false)
+  const [showLogoutModal, setShowLogoutModal] = React.useState(false)
+  const [isLoggingOut, setIsLoggingOut] = React.useState(false)
+
+  const handleLogout = async () => {
+    setIsLoggingOut(true)
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' })
+      router.push('/auth/login')
+    } catch (error) {
+      console.error('Logout error:', error)
+    } finally {
+      setIsLoggingOut(false)
+      setShowLogoutModal(false)
+    }
+  }
 
   return (
     <header className="sticky top-0 z-50 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 shadow-2xl border-b border-slate-700">
@@ -64,7 +82,13 @@ export const MXHeader: React.FC<MXHeaderProps> = ({
                     <User size={16} />
                     Profile Settings
                   </button>
-                  <button className="w-full px-4 py-3 text-left text-sm text-slate-300 hover:bg-slate-700 transition-colors flex items-center gap-2 border-t border-slate-700">
+                  <button 
+                    onClick={() => {
+                      setIsDropdownOpen(false)
+                      setShowLogoutModal(true)
+                    }}
+                    className="w-full px-4 py-3 text-left text-sm text-slate-300 hover:bg-slate-700 transition-colors flex items-center gap-2 border-t border-slate-700"
+                  >
                     <LogOut size={16} />
                     Sign Out
                   </button>
@@ -85,6 +109,14 @@ export const MXHeader: React.FC<MXHeaderProps> = ({
           <div>Last sync: Just now</div>
         </div>
       </div>
+
+      {/* Logout Confirmation Modal */}
+      <LogoutConfirmModal
+        isOpen={showLogoutModal}
+        onClose={() => setShowLogoutModal(false)}
+        onConfirm={handleLogout}
+        isLoading={isLoggingOut}
+      />
     </header>
   )
 }

@@ -17,9 +17,24 @@ export const metadata: Metadata = {
   title: "GatiMitra - Merchant Portal",
   description: "Manage your orders and merchant operations",
   icons: {
-    icon: "/logo.png",
-    apple: "/logo.png",
+    icon: [
+      { url: "/favicon.png", sizes: "any" },
+      { url: "/logo.png", sizes: "32x32", type: "image/png" },
+    ],
+    apple: [
+      { url: "/logo.png" },
+      { url: "/logo.png", sizes: "180x180", type: "image/png" },
+    ],
+    shortcut: "/favicon.png",
   },
+  manifest: "/manifest.json",
+};
+
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  themeColor: "#ffffff",
 };
 
 export default function RootLayout({
@@ -29,6 +44,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <link rel="icon" href="/favicon.png" type="image/png" />
+        <link rel="icon" href="/favicon.ico" sizes="any" />
+        <link rel="apple-touch-icon" href="/logo.png" />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-white`}
         style={{ background: '#fff', minHeight: '100vh', width: '100vw', overflow: 'auto' }}

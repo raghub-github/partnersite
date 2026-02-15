@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Store, Loader2, User, Building2, ChevronRight, LogOut } from "lucide-react";
 import Link from "next/link";
+import LogoutConfirmModal from "@/components/LogoutConfirmModal";
 
 type StoreItem = {
   store_id: string;
@@ -34,6 +35,8 @@ export default function PostLoginPage() {
   const [status, setStatus] = useState<"loading" | "home" | "error">("loading");
   const [errorMessage, setErrorMessage] = useState("");
   const [data, setData] = useState<ResolveData | null>(null);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -126,8 +129,16 @@ export default function PostLoginPage() {
   const { parentName, ownerName, ownerEmail, parentMerchantId, stores = [], onboardingProgress } = data;
 
   const handleSignOut = async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
-    window.location.href = "/auth/login";
+    setIsLoggingOut(true);
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+      window.location.href = "/auth/login";
+    } catch (error) {
+      console.error("Logout error:", error);
+    } finally {
+      setIsLoggingOut(false);
+      setShowLogoutModal(false);
+    }
   };
 
   return (
@@ -140,7 +151,7 @@ export default function PostLoginPage() {
         </div>
         <button
           type="button"
-          onClick={handleSignOut}
+          onClick={() => setShowLogoutModal(true)}
           className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs sm:text-sm font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 shrink-0"
         >
           <LogOut className="h-4 w-4" />
@@ -358,6 +369,14 @@ export default function PostLoginPage() {
           </div>
         </div>
       </main>
+
+      {/* Logout Confirmation Modal */}
+      <LogoutConfirmModal
+        isOpen={showLogoutModal}
+        onClose={() => setShowLogoutModal(false)}
+        onConfirm={handleSignOut}
+        isLoading={isLoggingOut}
+      />
     </div>
   );
 }

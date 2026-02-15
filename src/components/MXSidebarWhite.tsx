@@ -18,6 +18,7 @@ import {
   LogOut,
   Store
 } from 'lucide-react'
+import LogoutConfirmModal from './LogoutConfirmModal'
 
 interface SidebarItem {
   id: string
@@ -224,50 +225,6 @@ export const MXSidebarWhite: React.FC<MXSidebarWhiteProps> = ({
 
   return (
     <>
-      {/* Logout Confirmation Modal */}
-      {showLogoutModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[9999]">
-          <div className="bg-white rounded-xl shadow-2xl max-w-sm mx-4 overflow-hidden">
-            {/* Modal Header */}
-            <div className="bg-gradient-to-r from-orange-500 to-orange-600 p-6">
-              <h2 className="text-xl font-bold text-white">Sign Out</h2>
-            </div>
-
-            {/* Modal Body */}
-            <div className="p-6">
-              <p className="text-gray-700 text-sm leading-relaxed">
-                You are being securely logged out from this page. After logging out, you won't be able to access this page.
-              </p>
-            </div>
-
-            {/* Modal Footer */}
-            <div className="bg-gray-50 px-6 py-4 flex gap-3 border-t border-gray-200">
-              <button
-                onClick={() => setShowLogoutModal(false)}
-                disabled={isLoggingOut}
-                className="flex-1 px-4 py-2.5 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleLogout}
-                disabled={isLoggingOut}
-                className="flex-1 px-4 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {isLoggingOut ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    Logging out...
-                  </>
-                ) : (
-                  'Sign Out'
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Mobile Toggle Button */}
       <button
         onClick={() => setIsMobileOpen(!isMobileOpen)}
@@ -294,6 +251,14 @@ export const MXSidebarWhite: React.FC<MXSidebarWhiteProps> = ({
           </aside>
         </>
       )}
+
+      {/* Logout Confirmation Modal */}
+      <LogoutConfirmModal
+        isOpen={showLogoutModal}
+        onClose={() => setShowLogoutModal(false)}
+        onConfirm={handleLogout}
+        isLoading={isLoggingOut}
+      />
     </>
   )
 }

@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -18,6 +18,7 @@ import {
   Menu,
   X
 } from 'lucide-react'
+import LogoutConfirmModal from './LogoutConfirmModal'
 
 interface SidebarItem {
   id: string
@@ -38,8 +39,11 @@ export const MXSidebar: React.FC<MXSidebarProps> = ({
   restaurantId 
 }) => {
   const pathname = usePathname()
+  const router = useRouter()
   const [isMobileOpen, setIsMobileOpen] = useState(false)
   const [expandedMenus, setExpandedMenus] = useState<string[]>(['dashboard'])
+  const [showLogoutModal, setShowLogoutModal] = useState(false)
+  const [isLoggingOut, setIsLoggingOut] = useState(false)
 
   const navigationItems: SidebarItem[] = [
     {
@@ -118,6 +122,19 @@ export const MXSidebar: React.FC<MXSidebarProps> = ({
         ? prev.filter((id) => id !== menuId)
         : [...prev, menuId]
     )
+  }
+
+  const handleLogout = async () => {
+    setIsLoggingOut(true)
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' })
+      router.push('/auth/login')
+    } catch (error) {
+      console.error('Logout error:', error)
+    } finally {
+      setIsLoggingOut(false)
+      setShowLogoutModal(false)
+    }
   }
 
   const isActive = (href: string) => pathname === href || (pathname?.startsWith(href + '?') ?? false)
@@ -220,7 +237,7 @@ export const MXSidebar: React.FC<MXSidebarProps> = ({
       {/* Footer */}
       <div className="p-3 border-t border-slate-700">
         <button
-          onClick={() => setIsMobileOpen(false)}
+          onClick={() => setShowLogoutModal(true)}
           className="w-full flex items-center gap-3 px-4 py-3 text-gray-300 hover:text-red-400 rounded-lg transition-colors hover:bg-slate-800/50 text-base font-semibold"
         >
           <LogOut size={18} />
@@ -257,6 +274,14 @@ export const MXSidebar: React.FC<MXSidebarProps> = ({
           </aside>
         </>
       )}
+
+      {/* Logout Confirmation Modal */}
+      <LogoutConfirmModal
+        isOpen={showLogoutModal}
+        onClose={() => setShowLogoutModal(false)}
+        onConfirm={handleLogout}
+        isLoading={isLoggingOut}
+      />
     </>
   )
 }
