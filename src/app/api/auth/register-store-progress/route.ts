@@ -497,7 +497,34 @@ export async function PUT(req: NextRequest) {
         other_document_type: docs.other_document_type || null,
         other_expiry_date: parseDate(docs.other_document_expiry_date),
       };
-      await db.from("merchant_store_documents").upsert([docRow], { onConflict: "store_id" });
+      try {
+        await db.from("merchant_store_documents").upsert([docRow], { 
+          onConflict: "store_id",
+          ignoreDuplicates: false 
+        });
+      } catch (docError: any) {
+        // If upsert fails, try update/insert approach
+        console.warn("[register-store-progress] documents upsert failed, trying update:", docError);
+        
+        const { data: existingDoc } = await db
+          .from("merchant_store_documents")
+          .select("id")
+          .eq("store_id", stepStore.storeDbId)
+          .single();
+        
+        if (existingDoc) {
+          // Update existing record
+          await db
+            .from("merchant_store_documents")
+            .update(docRow)
+            .eq("store_id", stepStore.storeDbId);
+        } else {
+          // Insert new record
+          await db
+            .from("merchant_store_documents")
+            .insert([docRow]);
+        }
+      }
 
       const bank = docs.bank;
       const payoutMethod = bank?.payout_method === "upi" ? "upi" : "bank";
@@ -514,6 +541,9 @@ export async function PUT(req: NextRequest) {
         bank.upi_qr_screenshot_url;
       if (hasBankDetails && payoutMethod === "bank") {
         try {
+          // First delete existing bank accounts for this store to avoid duplicates
+          await db.from("merchant_store_bank_accounts").delete().eq("store_id", stepStore.storeDbId);
+          
           await db.from("merchant_store_bank_accounts").insert({
             store_id: stepStore.storeDbId,
             payout_method: "bank",
@@ -535,6 +565,9 @@ export async function PUT(req: NextRequest) {
         }
       } else if (hasUpiDetails) {
         try {
+          // First delete existing bank accounts for this store to avoid duplicates
+          await db.from("merchant_store_bank_accounts").delete().eq("store_id", stepStore.storeDbId);
+          
           await db.from("merchant_store_bank_accounts").insert({
             store_id: stepStore.storeDbId,
             payout_method: "upi",
@@ -707,7 +740,34 @@ export async function PUT(req: NextRequest) {
         is_24_hours: is24Hours,
         closed_days: closedDays,
       };
-      await db.from("merchant_store_operating_hours").upsert([operatingHoursRow], { onConflict: "store_id" });
+      try {
+        await db.from("merchant_store_operating_hours").upsert([operatingHoursRow], { 
+          onConflict: "store_id",
+          ignoreDuplicates: false 
+        });
+      } catch (hoursError: any) {
+        // If upsert fails due to constraint name mismatch, try update/insert approach
+        console.warn("[register-store-progress] operating hours upsert failed, trying update:", hoursError);
+        
+        const { data: existingHours } = await db
+          .from("merchant_store_operating_hours")
+          .select("id")
+          .eq("store_id", stepStore.storeDbId)
+          .single();
+        
+        if (existingHours) {
+          // Update existing record
+          await db
+            .from("merchant_store_operating_hours")
+            .update(operatingHoursRow)
+            .eq("store_id", stepStore.storeDbId);
+        } else {
+          // Insert new record
+          await db
+            .from("merchant_store_operating_hours")
+            .insert([operatingHoursRow]);
+        }
+      }
     }
 
     const payload = {
