@@ -60,8 +60,10 @@ export async function POST(request: NextRequest) {
 
     await s3Client.send(uploadCommand);
 
-    // -------- Public URL --------
+    // -------- Response URL / key --------
     const publicUrl = `${process.env.R2_PUBLIC_BASE_URL}/${fullPath}`;
+    // For ticket attachments, return key so Supabase can store key and proxy can serve (no auth/expiry issues).
+    const isTicketAttachment = typeof parent === "string" && parent.startsWith("tickets/");
 
     // -------- Update Supabase (Optional) --------
     if (menu_item_id) {
@@ -88,8 +90,9 @@ export async function POST(request: NextRequest) {
     // -------- Success --------
     return NextResponse.json({
       success: true,
-      url: publicUrl,
+      url: isTicketAttachment ? fullPath : publicUrl,
       path: fullPath,
+      ...(isTicketAttachment ? { key: fullPath } : {}),
     });
 
   } catch (err: any) {

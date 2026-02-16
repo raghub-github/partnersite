@@ -91,6 +91,8 @@ interface CombinedComponentProps {
   onStoreSetupComplete?: (storeSetup: StoreSetupData) => void;
   /** Called instantly when store hours toggles/slots change to persist to DB. */
   onStoreHoursSave?: (hours: StoreSetupData['store_hours']) => void | Promise<void>;
+  /** Called instantly when Store Features toggles (pure veg, online payment, cash) change to persist to DB. */
+  onStoreFeaturesSave?: (patch: { is_pure_veg?: boolean; accepts_online_payment?: boolean; accepts_cash?: boolean }) => void | Promise<void>;
   onBack: () => void;
   actionLoading?: boolean;
   businessType?: string;
@@ -124,6 +126,8 @@ const defaultStoreSetupData: StoreSetupData = {
   },
 };
 
+const CUISINE_SELECTION_STORAGE_KEY = 'registerStoreCuisineSelection';
+
 const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
   initialDocuments,
   initialStoreSetup,
@@ -131,6 +135,7 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
   onDocumentSave,
   onStoreSetupComplete,
   onStoreHoursSave,
+  onStoreFeaturesSave,
   onBack,
   actionLoading = false,
   businessType = 'RESTAURANT',
@@ -166,6 +171,7 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
     }
     return false;
   });
+  const [documentSaving, setDocumentSaving] = useState(false);
 
   const documentFormatValidators = {
     pan: (v: string) => /^[A-Z]{5}[0-9]{4}[A-Z]$/.test((v || '').replace(/\s/g, '')) ? '' : 'Invalid PAN. Format: 5 letters, 4 digits, 1 letter (e.g. ABCDE1234F)',
@@ -295,10 +301,22 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
       const logoUrl = typeof initialStoreSetup.logo_preview === 'string' ? initialStoreSetup.logo_preview : (typeof (initialStoreSetup as any).logo_url === 'string' ? (initialStoreSetup as any).logo_url : '');
       const bannerUrl = typeof initialStoreSetup.banner_preview === 'string' ? initialStoreSetup.banner_preview : (typeof (initialStoreSetup as any).banner_url === 'string' ? (initialStoreSetup as any).banner_url : '');
       const galleryUrls = Array.isArray(initialStoreSetup.gallery_previews) ? initialStoreSetup.gallery_previews : (Array.isArray((initialStoreSetup as any).gallery_image_urls) ? (initialStoreSetup as any).gallery_image_urls : []);
+      let cuisineTypes = Array.isArray(initialStoreSetup.cuisine_types) ? initialStoreSetup.cuisine_types : undefined;
+      let foodCategories = Array.isArray(initialStoreSetup.food_categories) ? initialStoreSetup.food_categories : undefined;
+      if ((!cuisineTypes || cuisineTypes.length === 0) && typeof window !== 'undefined') {
+        try {
+          const raw = localStorage.getItem(CUISINE_SELECTION_STORAGE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw) as { cuisine_types?: string[]; food_categories?: string[] };
+            if (Array.isArray(parsed.cuisine_types)) cuisineTypes = parsed.cuisine_types;
+            if (Array.isArray(parsed.food_categories)) foodCategories = parsed.food_categories;
+          }
+        } catch (_) { /* ignore */ }
+      }
       setStoreSetup((prev) => ({
         ...prev,
-        cuisine_types: Array.isArray(initialStoreSetup.cuisine_types) ? initialStoreSetup.cuisine_types : prev.cuisine_types,
-        food_categories: Array.isArray(initialStoreSetup.food_categories) ? initialStoreSetup.food_categories : prev.food_categories,
+        cuisine_types: cuisineTypes ?? prev.cuisine_types,
+        food_categories: foodCategories ?? prev.food_categories,
         avg_preparation_time_minutes: typeof initialStoreSetup.avg_preparation_time_minutes === 'number' ? initialStoreSetup.avg_preparation_time_minutes : prev.avg_preparation_time_minutes,
         min_order_amount: typeof initialStoreSetup.min_order_amount === 'number' ? initialStoreSetup.min_order_amount : prev.min_order_amount,
         delivery_radius_km: typeof initialStoreSetup.delivery_radius_km === 'number' && !isNaN(initialStoreSetup.delivery_radius_km) ? initialStoreSetup.delivery_radius_km : prev.delivery_radius_km,
@@ -328,6 +346,18 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
       }));
     }
   }, [initialStoreSetup]);
+
+  // Persist cuisine selection to localStorage when chips change (so refresh keeps selection until form is saved).
+  useEffect(() => {
+    if (currentStep !== 'store-setup') return;
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(CUISINE_SELECTION_STORAGE_KEY, JSON.stringify({
+        cuisine_types: storeSetup.cuisine_types || [],
+        food_categories: storeSetup.food_categories || [],
+      }));
+    } catch (_) { /* ignore */ }
+  }, [currentStep, storeSetup.cuisine_types, storeSetup.food_categories]);
 
   // Sync presetToggles with actual store_hours data
   useEffect(() => {
@@ -566,52 +596,54 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
       return;
     }
 
-    // Persist current document data to DB on every "Save & Continue" (signed URL, name, id number).
-    if (onDocumentSave) {
-      try {
+    setDocumentSaving(true);
+    try {
+      // Persist current document data to DB on every "Save & Continue" (signed URL, name, id number).
+      if (onDocumentSave) {
         await onDocumentSave(documents);
-      } catch (e) {
-        console.error('Document save failed:', e);
-        return;
       }
-    }
 
-    if (activeSection === 'pan') {
-      setActiveSection('aadhar');
-    } else if (activeSection === 'aadhar') {
-      setActiveSection('optional');
-    } else if (activeSection === 'optional') {
-      setActiveSection('bank');
-    } else if (activeSection === 'bank') {
-      if (showOtherDocs) setActiveSection('other');
-      else {
-        if (onDocumentComplete) onDocumentComplete(documents);
-      }
-    } else if (activeSection === 'other') {
-      let shouldProceed = true;
-      if (isPharmaBusiness()) {
-        if (!documents.drug_license_number || !hasDocFileOrUrl('drug_license_image') || !documents.drug_license_expiry_date ||
-            !documents.pharmacist_registration_number || !hasDocFileOrUrl('pharmacist_certificate') ||
-            !hasDocFileOrUrl('pharmacy_council_registration') || !documents.pharmacist_expiry_date) {
-          setValidationMessage('All pharma documents are required. Please complete all fields.');
-          setValidationType('error');
-          setShowValidationModal(true);
-          shouldProceed = false;
+      if (activeSection === 'pan') {
+        setActiveSection('aadhar');
+      } else if (activeSection === 'aadhar') {
+        setActiveSection('optional');
+      } else if (activeSection === 'optional') {
+        setActiveSection('bank');
+      } else if (activeSection === 'bank') {
+        if (showOtherDocs) setActiveSection('other');
+        else {
+          if (onDocumentComplete) onDocumentComplete(documents);
         }
-      } else if (isFoodBusiness()) {
-        if (!documents.fssai_number || !hasDocFileOrUrl('fssai_image') || !documents.fssai_expiry_date) {
-          setValidationMessage('FSSAI certificate is required for food businesses. Please complete this section.');
-          setValidationType('error');
-          setShowValidationModal(true);
-          shouldProceed = false;
+      } else if (activeSection === 'other') {
+        let shouldProceed = true;
+        if (isPharmaBusiness()) {
+          if (!documents.drug_license_number || !hasDocFileOrUrl('drug_license_image') || !documents.drug_license_expiry_date ||
+              !documents.pharmacist_registration_number || !hasDocFileOrUrl('pharmacist_certificate') ||
+              !hasDocFileOrUrl('pharmacy_council_registration') || !documents.pharmacist_expiry_date) {
+            setValidationMessage('All pharma documents are required. Please complete all fields.');
+            setValidationType('error');
+            setShowValidationModal(true);
+            shouldProceed = false;
+          }
+        } else if (isFoodBusiness()) {
+          if (!documents.fssai_number || !hasDocFileOrUrl('fssai_image') || !documents.fssai_expiry_date) {
+            setValidationMessage('FSSAI certificate is required for food businesses. Please complete this section.');
+            setValidationType('error');
+            setShowValidationModal(true);
+            shouldProceed = false;
+          }
+        }
+        if (shouldProceed) {
+          setShowValidationModal(false);
+          if (onDocumentComplete) {
+            onDocumentComplete(documents);
+          }
         }
       }
-      if (shouldProceed) {
-        setShowValidationModal(false);
-        if (onDocumentComplete) {
-          onDocumentComplete(documents);
-        }
-      }
+    } catch (e) {
+      console.error('Document save failed:', e);
+    } finally {
+      setDocumentSaving(false);
     }
   };
 
@@ -722,8 +754,8 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
       ...storeSetup.store_hours,
       [day]: {
         ...currentDay,
-        slot2_open: currentDay.slot2_open || '',
-        slot2_close: currentDay.slot2_close || '',
+        slot2_open: (currentDay.slot2_open && currentDay.slot2_close) ? currentDay.slot2_open : '18:00',
+        slot2_close: (currentDay.slot2_open && currentDay.slot2_close) ? currentDay.slot2_close : '22:00',
       }
     };
     setStoreSetup(prev => ({ ...prev, store_hours: newHours }));
@@ -1751,139 +1783,6 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
         )}
       </div>
 
-      {/* Other Documents (Optional) - Show for all business types */}
-      {(!isFoodBusiness() && !isPharmaBusiness()) && (
-        <div className="space-y-2">
-          <h4 className="text-sm font-medium text-gray-700 mb-1">Other Documents (Optional)</h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Document Type</label>
-              <input
-                type="text"
-                name="other_document_type"
-                value={documents.other_document_type}
-                onChange={handleDocumentInputChange}
-                placeholder="e.g. Rent Agreement, NOC"
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
-                maxLength={50}
-                autoComplete="off"
-              />
-              <p className="text-xs text-slate-500 mt-1">Type of document</p>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Document Number</label>
-              <input
-                type="text"
-                name="other_document_number"
-                value={documents.other_document_number}
-                onChange={handleDocumentInputChange}
-                placeholder="Document number"
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
-                maxLength={30}
-                autoComplete="off"
-              />
-              <p className="text-xs text-slate-500 mt-1">Identification number</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Document Name</label>
-              <input
-                type="text"
-                name="other_document_name"
-                value={documents.other_document_name}
-                onChange={handleDocumentInputChange}
-                placeholder="Document name"
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
-                maxLength={50}
-                autoComplete="off"
-              />
-              <p className="text-xs text-slate-500 mt-1">Name of the document</p>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Expiry Date (if applicable)</label>
-              <input
-                type="date"
-                name="other_document_expiry_date"
-                value={documents.other_document_expiry_date}
-                onChange={handleDocumentInputChange}
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
-              />
-              <p className="text-xs text-slate-500 mt-1">For documents with expiry</p>
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Document File</label>
-            <input
-              type="file"
-              ref={fileInputRefs.otherDoc}
-              onChange={(e) => handleFileChange(e, 'other_document_file')}
-              accept=".jpg,.jpeg,.png,.pdf"
-              className="hidden"
-            />
-            {!hasDocFileOrUrl('other_document_file') ? (
-              <button
-                type="button"
-                onClick={() => triggerFileInputWithReplaceCheck('other_document_file', fileInputRefs.otherDoc)}
-                className="w-full rounded-xl border-2 border-dashed border-slate-300 bg-slate-50/50 p-4 text-center hover:border-indigo-400 hover:bg-indigo-50/50 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-              >
-                <svg className="w-8 h-8 text-slate-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
-                <p className="text-sm font-medium text-slate-600">Upload Document File</p>
-                <p className="text-xs text-slate-500 mt-0.5">JPG, PNG or PDF · Max 5MB (optional)</p>
-              </button>
-            ) : (
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-emerald-600">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-slate-800 truncate">
-                        {documents.other_document_file ? documents.other_document_file.name : 'Uploaded'}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {documents.other_document_file
-                          ? `${((documents.other_document_file.size / 1024 / 1024).toFixed(2))} MB`
-                          : documents.other_document_file_url ? (
-                            <a href={documents.other_document_file_url} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">
-                              View file
-                            </a>
-                          ) : null}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => triggerFileInputWithReplaceCheck('other_document_file', fileInputRefs.otherDoc)}
-                      className="rounded-lg border border-indigo-200 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-50"
-                    >
-                      Change
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeFile('other_document_file')}
-                      className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-200 hover:text-slate-700"
-                      title="Remove"
-                    >
-                      <span className="sr-only">Remove</span>
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-      
       <div className="rounded-xl bg-indigo-50/80 border border-indigo-100 p-4">
         <div className="flex items-start gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-600">
@@ -2150,7 +2049,7 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                     activeSection === section ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
                   }`}
                 >
-                  {section === 'pan' ? 'PAN' : section === 'aadhar' ? 'Aadhar' : section === 'optional' ? 'Business Docs' : section === 'bank' ? 'Bank' : 'Other Docs'}
+                  {section === 'pan' ? 'PAN' : section === 'aadhar' ? 'Aadhar' : section === 'optional' ? 'GST' : section === 'bank' ? 'Bank' : 'Other Docs'}
                 </button>
               ))}
             </div>
@@ -2166,7 +2065,7 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                 <button
                   type="button"
                   onClick={goToPrevSection}
-                  disabled={actionLoading}
+                  disabled={actionLoading || documentSaving}
                   className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs sm:text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
                 >
                   {actionLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
@@ -2175,17 +2074,17 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                 <button
                   type="button"
                   onClick={handleDocumentSaveAndContinue}
-                  disabled={actionLoading}
+                  disabled={!validateDocumentSection() || actionLoading || documentSaving}
                   className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs sm:text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
                 >
-                  {actionLoading ? (
+                  {actionLoading || documentSaving ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
                   )}
-                  {actionLoading ? 'Saving...' : (activeSection === 'other' || (activeSection === 'bank' && !showOtherDocs) ? 'Complete Documents' : 'Save & Continue')}
+                  {actionLoading || documentSaving ? 'Saving...' : (activeSection === 'other' || (activeSection === 'bank' && !showOtherDocs) ? 'Complete Documents' : 'Save & Continue')}
                 </button>
               </div>
             </div>
@@ -2226,7 +2125,11 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                       type="button"
                       role="switch"
                       aria-checked={storeSetup.is_pure_veg}
-                      onClick={() => setStoreSetup(prev => ({ ...prev, is_pure_veg: !prev.is_pure_veg }))}
+                      onClick={() => {
+                        const next = !storeSetup.is_pure_veg;
+                        setStoreSetup(prev => ({ ...prev, is_pure_veg: next }));
+                        onStoreFeaturesSave?.({ is_pure_veg: next, accepts_online_payment: storeSetup.accepts_online_payment, accepts_cash: storeSetup.accepts_cash });
+                      }}
                       className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 ${storeSetup.is_pure_veg ? 'bg-indigo-600' : 'bg-slate-200'}`}
                     >
                       <span className={`pointer-events-none inline-block h-5 w-5 shrink-0 transform rounded-full bg-white shadow ring-0 transition ${storeSetup.is_pure_veg ? 'translate-x-5' : 'translate-x-0.5'}`} />
@@ -2241,7 +2144,11 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                       type="button"
                       role="switch"
                       aria-checked={storeSetup.accepts_online_payment}
-                      onClick={() => setStoreSetup(prev => ({ ...prev, accepts_online_payment: !prev.accepts_online_payment }))}
+                      onClick={() => {
+                        const next = !storeSetup.accepts_online_payment;
+                        setStoreSetup(prev => ({ ...prev, accepts_online_payment: next }));
+                        onStoreFeaturesSave?.({ is_pure_veg: storeSetup.is_pure_veg, accepts_online_payment: next, accepts_cash: storeSetup.accepts_cash });
+                      }}
                       className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 ${storeSetup.accepts_online_payment ? 'bg-indigo-600' : 'bg-slate-200'}`}
                     >
                       <span className={`pointer-events-none inline-block h-5 w-5 shrink-0 transform rounded-full bg-white shadow ring-0 transition ${storeSetup.accepts_online_payment ? 'translate-x-5' : 'translate-x-0.5'}`} />
@@ -2256,7 +2163,11 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                       type="button"
                       role="switch"
                       aria-checked={storeSetup.accepts_cash}
-                      onClick={() => setStoreSetup(prev => ({ ...prev, accepts_cash: !prev.accepts_cash }))}
+                      onClick={() => {
+                        const next = !storeSetup.accepts_cash;
+                        setStoreSetup(prev => ({ ...prev, accepts_cash: next }));
+                        onStoreFeaturesSave?.({ is_pure_veg: storeSetup.is_pure_veg, accepts_online_payment: storeSetup.accepts_online_payment, accepts_cash: next });
+                      }}
                       className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1 ${storeSetup.accepts_cash ? 'bg-indigo-600' : 'bg-slate-200'}`}
                     >
                       <span className={`pointer-events-none inline-block h-5 w-5 shrink-0 transform rounded-full bg-white shadow ring-0 transition ${storeSetup.accepts_cash ? 'translate-x-5' : 'translate-x-0.5'}`} />

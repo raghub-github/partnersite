@@ -1295,7 +1295,7 @@ const StoreRegistrationForm = () => {
               nextStep: isComplete ? currentStep + 1 : currentStep,
               markStepComplete: isComplete,
               formDataPatch: stepPatch,
-              storePublicId: currentStoreId || draftStorePublicId || undefined,
+              storePublicId: currentStoreId || draftStorePublicId || (typeof searchParams?.get === 'function' ? searchParams.get('store_id') ?? undefined : undefined) || undefined,
               registrationStatus: 'IN_PROGRESS',
             }),
           });
@@ -1346,7 +1346,7 @@ const StoreRegistrationForm = () => {
         return { success: true }; // Optimistic return
       }
     },
-    [currentStoreId, draftStorePublicId, draftStoreDbId, getStepPatch, refreshAuthIfNeeded, handleAuthError]
+    [currentStoreId, draftStorePublicId, draftStoreDbId, getStepPatch, refreshAuthIfNeeded, handleAuthError, searchParams]
   );
 
   // Wrapper for steps 5–9 that saves with explicit nextStep (e.g. when going back or to agreement/signature).
@@ -1654,19 +1654,35 @@ const StoreRegistrationForm = () => {
     }
   };
 
-  /** Save store hours instantly to DB when toggles/slots change (without moving to step 6). */
+  /** Save store hours instantly to DB when toggles/slots change. Persists so refresh keeps toggles/slots. */
   const saveStoreHoursProgress = useCallback(
     async (hours: StoreSetupData['store_hours']) => {
       setStoreSetup(prev => ({ ...prev, store_hours: hours }));
-      // Save in background without blocking UI
       try {
         const currentStep5 = sanitizeForProgress(storeSetup);
         const step5Patch = { step5: { ...currentStep5, store_hours: hours } };
         saveStepData(5, false, step5Patch, false).catch(err => {
-          console.error('Background store hours save failed:', err);
+          console.error('Store hours save failed:', err);
         });
       } catch (err: any) {
-        console.error('Failed to build store hours patch:', err);
+        console.error('Store hours save failed:', err);
+      }
+    },
+    [storeSetup, saveStepData]
+  );
+
+  /** Save Store Features (pure veg, online payment, cash) instantly to DB when any toggle changes. */
+  const saveStoreFeaturesProgress = useCallback(
+    (patch: { is_pure_veg?: boolean; accepts_online_payment?: boolean; accepts_cash?: boolean }) => {
+      setStoreSetup(prev => ({ ...prev, ...patch }));
+      try {
+        const currentStep5 = sanitizeForProgress(storeSetup);
+        const step5Patch = { step5: { ...currentStep5, ...patch } };
+        saveStepData(5, false, step5Patch, false).catch(err => {
+          console.error('Store features save failed:', err);
+        });
+      } catch (err: any) {
+        console.error('Store features save failed:', err);
       }
     },
     [storeSetup, saveStepData]
@@ -1674,23 +1690,23 @@ const StoreRegistrationForm = () => {
 
   const handleStoreSetupComplete = async (setup: StoreSetupData) => {
     setStoreSetup(setup);
-    
-    // Check if there are files to upload
-    const hasFilesToUpload = 
+
+    const hasFilesToUpload =
       (typeof File !== 'undefined' && setup.logo instanceof File) ||
       (typeof File !== 'undefined' && setup.banner instanceof File) ||
       (Array.isArray(setup.gallery_images) && setup.gallery_images.some(img => typeof File !== 'undefined' && img instanceof File));
-    
+
+    let step5Patch: Record<string, unknown>;
     if (hasFilesToUpload) {
       setUploadLoading(true);
       try {
         const folderBase = (parentInfo?.parent_merchant_id || searchParams?.get('parent_id') || 'merchant') as string;
-        const step5Patch: any = { ...sanitizeForProgress(setup) };
+        step5Patch = { ...sanitizeForProgress(setup) } as Record<string, unknown>;
         if (typeof File !== 'undefined' && setup.logo instanceof File) {
-          step5Patch.logo_url = await uploadToR2(setup.logo, `${folderBase}/onboarding/store-media`, `logo_${Date.now()}`);
+          (step5Patch as any).logo_url = await uploadToR2(setup.logo, `${folderBase}/onboarding/store-media`, `logo_${Date.now()}`);
         }
         if (typeof File !== 'undefined' && setup.banner instanceof File) {
-          step5Patch.banner_url = await uploadToR2(setup.banner, `${folderBase}/onboarding/store-media`, `banner_${Date.now()}`);
+          (step5Patch as any).banner_url = await uploadToR2(setup.banner, `${folderBase}/onboarding/store-media`, `banner_${Date.now()}`);
         }
         const galleryUrls: string[] = [];
         for (let i = 0; i < (setup.gallery_images || []).length; i++) {
@@ -1701,26 +1717,30 @@ const StoreRegistrationForm = () => {
           }
         }
         if (galleryUrls.length > 0) {
-          step5Patch.gallery_image_urls = galleryUrls;
+          (step5Patch as any).gallery_image_urls = galleryUrls;
         }
-        // Navigate immediately after uploads, save in background
-        setStep(6);
-        saveStepData(5, true, { step5: step5Patch }, false).catch(err => {
-          console.error('Background store setup save failed:', err);
-        });
       } catch (err: any) {
+        setUploadLoading(false);
         alert(err?.message || 'Failed to upload store media. Please try again.');
-        return; // Don't navigate if upload fails
+        return;
       } finally {
         setUploadLoading(false);
       }
     } else {
-      // No files to upload - navigate immediately, save in background
+      step5Patch = sanitizeForProgress(setup) as Record<string, unknown>;
+    }
+
+    try {
+      const result = await saveStepData(5, true, { step5: step5Patch }, true);
+      if (!result.success) {
+        alert(result.error || 'Failed to save Store Configuration. Please try again.');
+        return;
+      }
       setStep(6);
-      const step5Patch = { step5: sanitizeForProgress(setup) };
-      saveStepData(5, true, step5Patch, false).catch(err => {
-        console.error('Background store setup save failed:', err);
-      });
+      if (typeof window !== 'undefined') window.localStorage.removeItem('registerStoreCuisineSelection');
+    } catch (err: any) {
+      console.error('Store setup save failed:', err);
+      alert(err?.message || 'Failed to save Store Configuration. Please try again.');
     }
   };
 
@@ -2986,7 +3006,7 @@ const StoreRegistrationForm = () => {
         {step === 4 && (
           <div className="w-full h-full">
             <CombinedDocumentStoreSetup
-              key={`step-4-docs-${documents.pan_number || 'new'}-${(documents as any).pan_image_url ? 'has-img' : 'no-img'}`}
+              key={`step-4-docs-${selectedStorePublicId || draftStorePublicId || 'new'}`}
               initialDocuments={documents}
               onDocumentComplete={(docs) => void handleDocumentUploadComplete(docs as unknown as DocumentData)}
               onDocumentSave={(docs) => saveDocumentProgress(docs as unknown as DocumentData)}
@@ -3006,6 +3026,7 @@ const StoreRegistrationForm = () => {
               initialStoreSetup={storeSetup}
               onStoreSetupComplete={handleStoreSetupComplete}
               onStoreHoursSave={(hours) => saveStoreHoursProgress(hours)}
+              onStoreFeaturesSave={saveStoreFeaturesProgress}
               onBack={async () => {
                 // Navigate immediately
                 setStep(4);

@@ -1,9 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import { ChevronLeft, Check, Info, Loader2, CheckCircle, Handshake, Eye } from "lucide-react";
-import { Dialog } from "@headlessui/react";
-import { useRouter } from "next/navigation";
+import { ChevronLeft, Check, Info, Loader2, CheckCircle, Handshake } from "lucide-react";
 
 export interface OnboardingPlan {
   id: string;
@@ -72,9 +70,6 @@ export default function OnboardingPlansPage({
   const [paymentError, setPaymentError] = useState("");
   const [paymentStatusLoading, setPaymentStatusLoading] = useState(true);
   const [alreadyPaid, setAlreadyPaid] = useState(false);
-  const [showPaymentSuccessModal, setShowPaymentSuccessModal] = useState(false);
-  const router = useRouter();
-
   const plans = DEFAULT_PLANS;
   const canContinue = !!selectedPlanId;
 
@@ -93,16 +88,16 @@ export default function OnboardingPlansPage({
           : null;
         const storeId = storePublicId || step1?.store_public_id || step1?.__storePublicId || step1?.__draftStorePublicId || null;
         
-        // Check payment by store_id if available, otherwise by parent_id
+        // Payment status is checked by store_id only (merchant_store_id in DB). No store_id → not paid.
         const url = storeId
           ? `/api/onboarding/payment-status?merchantParentId=${encodeURIComponent(parentInfo!.id!)}&merchantStoreId=${encodeURIComponent(storeId)}`
           : `/api/onboarding/payment-status?merchantParentId=${encodeURIComponent(parentInfo!.id!)}`;
-        
+
         const res = await fetch(url);
         const data = await res.json();
         if (cancelled) return;
         if (data.success && data.alreadyPaid) {
-          console.log('[plans] Payment already completed for store:', storeId || 'parent', parentInfo.id);
+          console.log('[plans] Payment already completed for store:', storeId, parentInfo.id);
           setAlreadyPaid(true);
         } else {
           console.log('[plans] Payment not completed or check failed:', data);
@@ -194,9 +189,8 @@ export default function OnboardingPlansPage({
             });
             const verifyData = await verifyRes.json();
             if (verifyData.success) {
-              // Show success popup instead of redirecting to agreement
               setAlreadyPaid(true);
-              setShowPaymentSuccessModal(true);
+              onContinue();
             } else {
               setPaymentError(verifyData.error || "Payment verification failed.");
             }
@@ -398,56 +392,6 @@ export default function OnboardingPlansPage({
           )}
         </div>
       </div>
-
-      {/* Payment Success Modal */}
-      {showPaymentSuccessModal && (
-        <Dialog open={showPaymentSuccessModal} onClose={() => {}} className="relative z-50">
-          <div className="fixed inset-0 bg-black/30 backdrop-blur-sm" aria-hidden="true" />
-          <div className="fixed inset-0 flex items-center justify-center p-4">
-            <Dialog.Panel className="mx-auto max-w-md w-full rounded-2xl bg-white/95 backdrop-blur-md p-6 sm:p-8 shadow-2xl border border-gray-200">
-              <div className="text-center">
-                {/* Success Icon */}
-                <div className="flex justify-center mb-4">
-                  <div className="w-16 h-16 sm:w-20 sm:h-20 bg-emerald-100 rounded-full flex items-center justify-center">
-                    <CheckCircle className="w-8 h-8 sm:w-10 sm:h-10 text-emerald-600" />
-                  </div>
-                </div>
-                
-                {/* Success Message */}
-                <Dialog.Title className="text-xl sm:text-2xl font-bold text-slate-800 mb-2">
-                  Payment completed successfully
-                </Dialog.Title>
-                <p className="text-sm sm:text-base text-slate-600 mb-6">
-                  View your store.
-                </p>
-                
-                {/* View Your Store Button */}
-                <button
-                  onClick={() => {
-                    setShowPaymentSuccessModal(false);
-                    // Redirect to Merchant Portal (dashboard)
-                    const storeId = typeof window !== "undefined" 
-                      ? new URLSearchParams(window.location.search).get("store_id") 
-                      : step1?.store_public_id || step1?.__storePublicId || step1?.__draftStorePublicId || null;
-                    if (storeId) {
-                      if (typeof window !== "undefined") {
-                        localStorage.setItem("selectedStoreId", storeId);
-                      }
-                      router.push("/mx/dashboard");
-                    } else {
-                      router.push("/auth/post-login");
-                    }
-                  }}
-                  className="w-full px-6 py-3 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2"
-                >
-                  <Eye className="w-5 h-5 shrink-0" />
-                  View Your Store
-                </button>
-              </div>
-            </Dialog.Panel>
-          </div>
-        </Dialog>
-      )}
     </div>
   );
 }

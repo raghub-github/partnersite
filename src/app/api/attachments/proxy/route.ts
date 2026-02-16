@@ -1,8 +1,10 @@
 /**
- * GET /api/attachments/proxy?url=<encoded-url>
+ * GET /api/attachments/proxy?url=<encoded-url>  OR  ?key=<encoded-r2-key>
  *
- * Proxies R2 object by URL so private bucket attachments can be displayed.
- * Only URLs under R2_PUBLIC_BASE_URL are allowed.
+ * Proxies R2 object so private bucket attachments can be displayed.
+ * - ?key=: R2 object key (e.g. tickets/attachments/123/file.jpeg). Preferred for new uploads.
+ * - ?url=: Full R2 URL; key is extracted from pathname. Keeps existing stored URLs working.
+ * Each request uses server credentials (no signed URL expiry); effectively "auto-renew" on every view.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -19,38 +21,57 @@ function getR2Client(): S3Client {
   });
 }
 
+/** Extract R2 key from a full URL (pathname without leading slash). */
+function keyFromUrl(decodedUrl: string): string | null {
+  try {
+    if (decodedUrl.startsWith("http://") || decodedUrl.startsWith("https://")) {
+      const u = new URL(decodedUrl);
+      const k = u.pathname.replace(/^\/+/, "");
+      return k || null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/** Allow only our R2-related URLs for security. */
+function isAllowedR2Url(decodedUrl: string): boolean {
+  const base = process.env.R2_PUBLIC_BASE_URL?.replace(/\/$/, "") ?? "";
+  if (base && (decodedUrl.startsWith(base + "/") || decodedUrl === base)) return true;
+  if (/\.r2\.cloudflarestorage\.com/i.test(decodedUrl)) return true;
+  if (/\.r2\.dev/i.test(decodedUrl)) return true;
+  return false;
+}
+
 export async function GET(request: NextRequest) {
   try {
+    const keyParam = request.nextUrl.searchParams.get("key");
     const urlParam = request.nextUrl.searchParams.get("url");
-    if (!urlParam?.trim()) {
-      return NextResponse.json({ error: "Missing url parameter" }, { status: 400 });
+
+    let key: string | null = null;
+
+    if (keyParam?.trim()) {
+      try {
+        key = decodeURIComponent(keyParam.trim());
+      } catch {
+        return NextResponse.json({ error: "Invalid key parameter" }, { status: 400 });
+      }
+    } else if (urlParam?.trim()) {
+      let decodedUrl: string;
+      try {
+        decodedUrl = decodeURIComponent(urlParam.trim());
+      } catch {
+        return NextResponse.json({ error: "Invalid url parameter" }, { status: 400 });
+      }
+      if (!isAllowedR2Url(decodedUrl)) {
+        return NextResponse.json({ error: "URL not allowed" }, { status: 403 });
+      }
+      key = keyFromUrl(decodedUrl);
     }
 
-    let decodedUrl: string;
-    try {
-      decodedUrl = decodeURIComponent(urlParam.trim());
-    } catch {
-      return NextResponse.json({ error: "Invalid url parameter" }, { status: 400 });
-    }
-
-    const baseUrl = process.env.R2_PUBLIC_BASE_URL?.replace(/\/$/, "") ?? "";
-    if (!baseUrl) {
-      return NextResponse.json(
-        { error: "R2 not configured" },
-        { status: 500 }
-      );
-    }
-
-    if (!decodedUrl.startsWith(baseUrl + "/") && decodedUrl !== baseUrl) {
-      return NextResponse.json(
-        { error: "URL not allowed" },
-        { status: 403 }
-      );
-    }
-
-    const key = decodedUrl.slice(baseUrl.length).replace(/^\//, "");
-    if (!key) {
-      return NextResponse.json({ error: "Invalid key" }, { status: 400 });
+    if (!key?.trim()) {
+      return NextResponse.json({ error: "Missing key or url parameter" }, { status: 400 });
     }
 
     const bucket = process.env.R2_BUCKET_NAME;

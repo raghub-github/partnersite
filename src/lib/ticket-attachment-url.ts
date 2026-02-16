@@ -1,20 +1,22 @@
 /**
- * Use proxy URL for ticket attachment images when the bucket is private (R2 returns Authorization).
- * Set NEXT_PUBLIC_R2_PUBLIC_BASE_URL in .env to the same value as R2_PUBLIC_BASE_URL so the
- * client can detect our R2 URLs and use the proxy.
+ * Ticket attachments are stored in Supabase as either:
+ * - R2 key (e.g. "tickets/attachments/123/file.jpeg") – preferred; no expiry.
+ * - Full R2 URL (legacy) – proxy extracts key from pathname.
+ * Always use this helper for img src or link href so images load via proxy (server-side auth, no signed-URL expiry).
  */
-const R2_BASE = typeof window !== "undefined" ? (process.env.NEXT_PUBLIC_R2_PUBLIC_BASE_URL ?? "").replace(/\/$/, "") : "";
 
 /**
- * Returns a URL that will load the attachment (proxy URL for our R2, otherwise the raw URL).
- * Use this for img src or link href when displaying ticket attachments.
+ * Returns a URL that will load the attachment via our proxy (so private R2 works and there is no expiry).
+ * Use for img src or link href when displaying ticket attachments.
  */
-export function getTicketAttachmentViewUrl(rawUrl: string | null | undefined): string {
-  if (!rawUrl || typeof rawUrl !== "string") return "";
-  const url = rawUrl.trim();
-  if (!url) return "";
-  if (R2_BASE && (url.startsWith(R2_BASE + "/") || url === R2_BASE)) {
-    return `/api/attachments/proxy?url=${encodeURIComponent(url)}`;
+export function getTicketAttachmentViewUrl(rawUrlOrKey: string | null | undefined): string {
+  if (!rawUrlOrKey || typeof rawUrlOrKey !== "string") return "";
+  const s = rawUrlOrKey.trim();
+  if (!s) return "";
+  // Stored as R2 key (no scheme) → use proxy by key
+  if (!s.startsWith("http://") && !s.startsWith("https://")) {
+    return `/api/attachments/proxy?key=${encodeURIComponent(s)}`;
   }
-  return url;
+  // Stored as full URL (legacy) → use proxy by url so key is extracted server-side
+  return `/api/attachments/proxy?url=${encodeURIComponent(s)}`;
 }

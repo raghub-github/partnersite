@@ -201,7 +201,7 @@ function OrdersPageContent() {
     if (!orderIdFromUrl) return;
     const id = parseInt(orderIdFromUrl, 10);
     if (isNaN(id)) return;
-    const order = orders.find((o) => o.order_id === String(id) || o.id === id);
+    const order = orders.find((o) => o.order_id === id || o.id === id);
     if (order) {
       setSelectedOrder(order);
       setRightPanelOpen(true);

@@ -22,6 +22,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { SkeletonReviewRow } from '@/components/PageSkeleton';
+import { getTicketAttachmentViewUrl } from '@/lib/ticket-attachment-url';
 
 const dummyReviews = [
   {
@@ -447,7 +448,7 @@ const UserInsightsContent = () => {
                               {selectedTicket.attachments.map((url: string, idx: number) => (
                                 <a 
                                   key={idx}
-                                  href={url}
+                                  href={getTicketAttachmentViewUrl(url)}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="flex items-center gap-1 px-1.5 py-0.5 bg-orange-50 border border-orange-200 rounded text-xs text-orange-700 hover:bg-orange-100"
@@ -505,7 +506,7 @@ const UserInsightsContent = () => {
                                 {msg.attachments.map((url: string, idx: number) => (
                                   <a 
                                     key={idx}
-                                    href={url}
+                                    href={getTicketAttachmentViewUrl(url)}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-xs hover:opacity-80 ${
