@@ -23,7 +23,7 @@ The favicon now appears on:
 - ✅ All pages under `/` (root)
 - ✅ All auth pages (`/auth/*`)
 - ✅ All merchant dashboard pages (`/mx/*`)
-- ✅ All admin pages (`/admin/*`)
+- ✅ All merchant pages (`/mx/*`)
 - ✅ All API routes (browser tab)
 - ✅ Browser bookmarks
 - ✅ Mobile home screen (when saved)

@@ -1,13 +1,14 @@
 'use client'
 
 import { useEffect, useCallback } from 'react'
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@/lib/supabase/client'
 import { Order, OrderStatus } from '@/lib/types'
 import { useOrderStore } from '@/lib/store'
 import { useNotifications } from './useNotifications'
 
 export function useRealtimeOrders(merchantId: string) {
   const { addOrder, updateOrder, setOrders } = useOrderStore()
+  const supabase = createClient()
   const { notify } = useNotifications()
 
   useEffect(() => {

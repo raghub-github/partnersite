@@ -59,9 +59,14 @@ export default function MerchantHelpTicket({ pageContext, className = "", hideTr
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  if (!session?.isAuthenticated) {
+  // When modal is open (e.g. from sidebar Help), always render so the modal can show.
+  // When closed and not authenticated, render nothing (no trigger when hideTrigger).
+  if (!session?.isAuthenticated && !open) {
     return null;
   }
+
+  // On store-onboarding / register user is already in authenticated flow (reached page after login). Show form; API will validate on submit.
+  const showTicketForm = session?.isAuthenticated || pageContext === "store-onboarding" || pageContext === "register";
 
   const allowedTitles = TITLES_BY_CONTEXT[pageContext] || TITLES_BY_CONTEXT.auth;
 
@@ -163,15 +168,23 @@ export default function MerchantHelpTicket({ pageContext, className = "", hideTr
       )}
 
       {open && (
-        <div className="fixed inset-0 z-[2200] flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[2200] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="help-ticket-title">
           <div className="absolute inset-0 z-[2200] bg-black/50" onClick={() => setOpen(false)} aria-hidden="true" />
           <div className="relative z-[2201] w-full max-w-md rounded-2xl bg-white shadow-xl border border-slate-200 p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-slate-900">Raise a ticket</h3>
-              <button type="button" onClick={() => setOpen(false)} className="p-1 rounded-lg text-slate-500 hover:bg-slate-100">
+              <h3 id="help-ticket-title" className="text-lg font-bold text-slate-900">Need Help?</h3>
+              <button type="button" onClick={() => setOpen(false)} className="p-1 rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Close">
                 <X className="h-5 w-5" />
               </button>
             </div>
+            {!showTicketForm ? (
+              <>
+                <p className="text-slate-600 mb-4">Please sign in to raise a support ticket.</p>
+                <button type="button" onClick={() => setOpen(false)} className="w-full py-2.5 rounded-xl border border-slate-300 text-slate-700 font-medium hover:bg-slate-50">
+                  Close
+                </button>
+              </>
+            ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">What do you need help with? *</label>
@@ -270,6 +283,7 @@ export default function MerchantHelpTicket({ pageContext, className = "", hideTr
                 </button>
               </div>
             </form>
+            )}
           </div>
         </div>
       )}

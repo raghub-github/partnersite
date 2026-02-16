@@ -8,6 +8,7 @@ import { fetchRestaurantById as fetchStoreById, fetchRestaurantByName as fetchSt
 import { MerchantStore } from '@/lib/merchantStore'
 import { DEMO_RESTAURANT_ID as DEMO_STORE_ID } from '@/lib/constants'
 import { Clock, Phone, Save, AlertCircle, CheckCircle2, X, Zap, Shield, BarChart3, Bell, Crown, Star, Check, MapPin, Settings, Calendar, Copy, Power, Plus, Trash2, ChevronDown, ChevronUp, Gift, Target, Globe, Users, Package, CreditCard, Sparkles } from 'lucide-react'
+import { PageSkeletonGeneric } from '@/components/PageSkeleton'
 import { Toaster, toast } from 'sonner'
 
 export const dynamic = 'force-dynamic'
@@ -64,7 +65,7 @@ function StoreSettingsContent() {
 
   // Form state
   const [isStoreOpen, setIsStoreOpen] = useState(true)
-  const [tempOffDuration, setTempOffDuration] = useState<number | null>(null)
+  const [manualCloseUntil, setManualCloseUntil] = useState<string | null>(null)
   const [showTempOffModal, setShowTempOffModal] = useState(false)
   const [tempOffDurationInput, setTempOffDurationInput] = useState('30')
   const [mxDeliveryEnabled, setMxDeliveryEnabled] = useState(false)
@@ -270,7 +271,6 @@ function StoreSettingsContent() {
         }
         if (storeData) {
           setStore(storeData as MerchantStore)
-          setIsStoreOpen(true)
           setPhone(storeData.am_mobile || '')
           setStoreName(storeData.store_name || '')
           setStoreAddress(storeData.city || '')
@@ -287,27 +287,84 @@ function StoreSettingsContent() {
     loadStore()
   }, [storeId])
 
-  const handleStoreToggle = () => {
+  // Load store operations (open/closed, manual_close_until)
+  const fetchStoreOperations = async () => {
+    if (!storeId) return
+    try {
+      const res = await fetch(`/api/store-operations?store_id=${encodeURIComponent(storeId)}`)
+      const data = await res.json()
+      if (res.ok) {
+        setIsStoreOpen(data.operational_status === 'OPEN')
+        setManualCloseUntil(data.manual_close_until || null)
+      }
+    } catch {
+      // fallback from store if loaded
+      if (store) {
+        setIsStoreOpen((store as MerchantStore).operational_status === 'OPEN' || !!(store as MerchantStore).is_accepting_orders)
+      }
+    }
+  }
+  useEffect(() => {
+    if (storeId) fetchStoreOperations()
+  }, [storeId])
+
+  useEffect(() => {
+    if (!storeId || isStoreOpen || !manualCloseUntil) return
+    const t = setInterval(() => fetchStoreOperations(), 30000)
+    return () => clearInterval(t)
+  }, [storeId, isStoreOpen, manualCloseUntil])
+
+  const handleStoreToggle = async () => {
     if (isStoreOpen) {
       setShowTempOffModal(true)
     } else {
-      setIsStoreOpen(true)
-      setTempOffDuration(null)
-      toast.success('🟢 Store is now OPEN')
+      try {
+        const res = await fetch('/api/store-operations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ store_id: storeId, action: 'manual_open' }),
+        })
+        const data = await res.json()
+        if (res.ok && data.success) {
+          setIsStoreOpen(true)
+          setManualCloseUntil(null)
+          setStore((prev) => prev ? { ...prev, operational_status: 'OPEN', is_accepting_orders: true } : prev)
+          toast.success('🟢 Store is now OPEN')
+        } else {
+          toast.error(data.error || 'Failed to open store')
+        }
+      } catch {
+        toast.error('Failed to open store')
+      }
     }
   }
 
-  const handleTempOff = () => {
-    const duration = parseInt(tempOffDurationInput)
+  const handleTempOff = async () => {
+    const duration = parseInt(tempOffDurationInput, 10)
     if (duration <= 0) {
-      toast.error('⚠️ Please enter a valid duration')
+      toast.error('⚠️ Please enter a valid duration (1–1440 minutes)')
       return
     }
-    setIsStoreOpen(false)
-    setTempOffDuration(duration)
-    toast.success(`⏱️ Store closed temporarily for ${duration} minutes`)
-    setShowTempOffModal(false)
-    setTempOffDurationInput('30')
+    try {
+      const res = await fetch('/api/store-operations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ store_id: storeId, action: 'manual_close', duration_minutes: duration }),
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        setIsStoreOpen(false)
+        setManualCloseUntil(data.manual_close_until || null)
+        setStore((prev) => prev ? { ...prev, operational_status: 'CLOSED', is_accepting_orders: false } : prev)
+        toast.success(`⏱️ Store closed for ${duration} minutes. Will reopen at ${data.reopens_at ? new Date(data.reopens_at).toLocaleTimeString() : 'scheduled time'}.`)
+        setShowTempOffModal(false)
+        setTempOffDurationInput('30')
+      } else {
+        toast.error(data.error || 'Failed to close store')
+      }
+    } catch {
+      toast.error('Failed to close store')
+    }
   }
 
   const handleMXDeliveryToggle = () => {
@@ -809,27 +866,7 @@ function StoreSettingsContent() {
   if (isLoading) {
     return (
       <MXLayoutWhite restaurantName={store?.store_name} restaurantId={storeId || ''}>
-        <div className="min-h-screen bg-gray-50 px-4 sm:px-6 lg:px-8 py-8">
-          <div className="max-w-7xl mx-auto">
-            {/* Header Skeleton */}
-            <div className="space-y-1 mb-6">
-              <div className="h-10 bg-gray-200 rounded w-1/3 animate-pulse"></div>
-              <div className="h-4 bg-gray-100 rounded w-1/2 animate-pulse"></div>
-            </div>
-            {/* Tabs Skeleton */}
-            <div className="flex border-b border-gray-200 mb-8 gap-4">
-              {[1,2,3].map((i) => (
-                <div key={i} className="h-10 w-32 bg-gray-200 rounded-t animate-pulse"></div>
-              ))}
-            </div>
-            {/* Content Skeleton */}
-            <div className="space-y-6">
-              <div className="h-24 bg-gray-100 rounded-lg animate-pulse"></div>
-              <div className="h-40 bg-gray-100 rounded-lg animate-pulse"></div>
-              <div className="h-16 bg-gray-100 rounded-lg animate-pulse"></div>
-            </div>
-          </div>
-        </div>
+        <PageSkeletonGeneric />
       </MXLayoutWhite>
     )
   }
@@ -917,8 +954,10 @@ function StoreSettingsContent() {
                               {isStoreOpen ? 'STORE OPEN' : 'STORE CLOSED'}
                             </span>
                           </div>
-                          {tempOffDuration && (
-                            <p className="text-xs text-gray-500">Temporarily closed for {tempOffDuration} more minutes</p>
+                          {manualCloseUntil && !isStoreOpen && (
+                            <p className="text-xs text-gray-500">
+                              Reopens at {new Date(manualCloseUntil).toLocaleTimeString()} {new Date(manualCloseUntil) > new Date() ? '(auto if within hours)' : ''}
+                            </p>
                           )}
                         </div>
                       </div>

@@ -7,8 +7,9 @@ import dynamic from 'next/dynamic';
 import axios from 'axios';
 import { Loader2, Menu, X, HelpCircle } from 'lucide-react';
 import MerchantHelpTicket from '@/components/MerchantHelpTicket';
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@/lib/supabase/client';
 import { useSearchParams } from 'next/navigation';
+import { handleAuthError, isAuthError, refreshAuthIfNeeded } from '@/lib/auth/client-auth-handler';
 import CombinedDocumentStoreSetup from './doc';
 import PreviewPage from './preview';
 import OnboardingPlansPage from './plans';
@@ -100,12 +101,24 @@ interface StoreSetupData {
 
 type MenuUploadMode = 'IMAGE' | 'CSV';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabase = createClient();
 
 const StoreRegistrationForm = () => {
-  const [step, setStep] = useState(1);
+  // Step state: always start at 1; DB is source of truth after progress is hydrated (no localStorage init).
+  const [step, setStepState] = useState(1);
+  const stepRestoredRef = useRef(false); // Track if step has been restored from DB
+  const setStep = useCallback((newStep: number | ((prev: number) => number)) => {
+    setStepState((prev) => {
+      const next = typeof newStep === 'function' ? newStep(prev) : newStep;
+      const clamped = Math.min(Math.max(next, 1), 9);
+      // Only save to localStorage if step was manually changed (not during hydration)
+      // This prevents localStorage from overriding DB step on refresh
+      if (typeof window !== 'undefined' && stepRestoredRef.current) {
+        localStorage.setItem('registerStoreCurrentStep', String(clamped));
+      }
+      return clamped;
+    });
+  }, []);
   const [isClient, setIsClient] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
@@ -114,6 +127,7 @@ const StoreRegistrationForm = () => {
   const mainScrollRef = useRef<HTMLDivElement>(null);
   const [generatedStoreId, setGeneratedStoreId] = useState<string>('');
   const [parentInfo, setParentInfo] = useState<{ id: number | null; name: string | null; parent_merchant_id: string | null } | null>(null);
+  const [currentStoreId, setCurrentStoreId] = useState<string>(''); // Store ID from database after step 1
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -124,6 +138,9 @@ const StoreRegistrationForm = () => {
   const [mapProvider, setMapProvider] = useState<MapProvider>('mapbox');
   const [progressHydrated, setProgressHydrated] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [uploadLoading, setUploadLoading] = useState(false); // Separate loading for file uploads only
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const mapRef = useRef<any>(null);
   const searchRef = useRef<HTMLDivElement>(null);
@@ -189,8 +206,8 @@ const StoreRegistrationForm = () => {
     min_order_amount: 0,
     delivery_radius_km: 5,
     is_pure_veg: false,
-    accepts_online_payment: true,
-    accepts_cash: true,
+    accepts_online_payment: false,
+    accepts_cash: false,
     store_hours: {
       monday: { closed: false, slot1_open: "09:00", slot1_close: "22:00", slot2_open: "", slot2_close: "" },
       tuesday: { closed: false, slot1_open: "09:00", slot1_close: "22:00", slot2_open: "", slot2_close: "" },
@@ -206,7 +223,10 @@ const StoreRegistrationForm = () => {
   const [menuSpreadsheetFile, setMenuSpreadsheetFile] = useState<File | null>(null);
   const [menuUploadedImageUrls, setMenuUploadedImageUrls] = useState<string[]>([]);
   const [menuUploadedSpreadsheetUrl, setMenuUploadedSpreadsheetUrl] = useState<string | null>(null);
+  const [menuUploadedSpreadsheetFileName, setMenuUploadedSpreadsheetFileName] = useState<string | null>(null);
+  const [menuUploadedImageNames, setMenuUploadedImageNames] = useState<string[]>([]);
   const [menuUploadError, setMenuUploadError] = useState('');
+  const [confirmModal, setConfirmModal] = useState<{ title: string; message: string; variant?: 'warning' | 'error' | 'info'; confirmLabel?: string; onConfirm: () => void; onCancel?: () => void } | null>(null);
   const [isImageDragActive, setIsImageDragActive] = useState(false);
   const [isCsvDragActive, setIsCsvDragActive] = useState(false);
   const imageUploadInputRef = useRef<HTMLInputElement>(null);
@@ -232,6 +252,113 @@ const StoreRegistrationForm = () => {
     }
     return normalized as StoreSetupData["store_hours"];
   };
+
+  // Hydrate form data from progress (database is source of truth; no localStorage).
+  const hydrateFormFromProgress = useCallback((progress: any) => {
+    if (!progress) return;
+
+    const saved = progress.form_data || {};
+    
+    // Store information from database
+    if (saved.step_store?.storeDbId) setDraftStoreDbId(saved.step_store.storeDbId);
+    if (saved.step_store?.storePublicId) {
+      setDraftStorePublicId(saved.step_store.storePublicId);
+      setCurrentStoreId(saved.step_store.storePublicId);
+    }
+
+    // Step 1 data
+    if (saved.step1) {
+      setFormData((prev) => ({ ...prev, ...saved.step1 }));
+      if (saved.step1.store_phones && Array.isArray(saved.step1.store_phones)) {
+        setStorePhonesInput(saved.step1.store_phones.join(', '));
+      }
+    }
+
+    // Step 2 data
+    if (saved.step2) {
+      setFormData((prev) => ({ ...prev, ...saved.step2 }));
+    }
+
+    // Step 3 data
+    if (saved.step3) {
+      if (saved.step3.menuUploadMode === 'CSV') setMenuUploadMode('CSV');
+      if (saved.step3.menuUploadMode === 'IMAGE') setMenuUploadMode('IMAGE');
+      if (Array.isArray(saved.step3.menuImageUrls)) setMenuUploadedImageUrls(saved.step3.menuImageUrls);
+      if (Array.isArray(saved.step3.menuImageNames)) setMenuUploadedImageNames(saved.step3.menuImageNames);
+      if (saved.step3.menuSpreadsheetUrl) setMenuUploadedSpreadsheetUrl(saved.step3.menuSpreadsheetUrl);
+      if (saved.step3.menuSpreadsheetName) setMenuUploadedSpreadsheetFileName(saved.step3.menuSpreadsheetName);
+    }
+
+    // Step 4 data
+    if (saved.step4) {
+      const s4 = saved.step4 as Record<string, unknown>;
+      setDocuments((prev) => ({
+        ...prev,
+        pan_number: saved.step4.pan_number ?? prev.pan_number,
+        pan_holder_name: saved.step4.pan_holder_name ?? prev.pan_holder_name,
+        aadhar_number: saved.step4.aadhar_number ?? prev.aadhar_number,
+        aadhar_holder_name: saved.step4.aadhar_holder_name ?? prev.aadhar_holder_name,
+        fssai_number: saved.step4.fssai_number ?? prev.fssai_number,
+        gst_number: saved.step4.gst_number ?? prev.gst_number,
+        drug_license_number: saved.step4.drug_license_number ?? prev.drug_license_number,
+        pharmacist_registration_number: saved.step4.pharmacist_registration_number ?? prev.pharmacist_registration_number,
+        expiry_date: saved.step4.expiry_date ?? prev.expiry_date,
+        fssai_expiry_date: saved.step4.fssai_expiry_date ?? prev.fssai_expiry_date,
+        drug_license_expiry_date: saved.step4.drug_license_expiry_date ?? prev.drug_license_expiry_date,
+        pharmacist_expiry_date: saved.step4.pharmacist_expiry_date ?? prev.pharmacist_expiry_date,
+        other_document_type: saved.step4.other_document_type ?? prev.other_document_type,
+        other_document_number: saved.step4.other_document_number ?? prev.other_document_number,
+        other_document_name: saved.step4.other_document_name ?? prev.other_document_name,
+        other_document_expiry_date: saved.step4.other_document_expiry_date ?? prev.other_document_expiry_date,
+        pan_image_url: typeof s4.pan_image_url === 'string' ? s4.pan_image_url : (prev as any).pan_image_url,
+        aadhar_front_url: typeof s4.aadhar_front_url === 'string' ? s4.aadhar_front_url : (prev as any).aadhar_front_url,
+        aadhar_back_url: typeof s4.aadhar_back_url === 'string' ? s4.aadhar_back_url : (prev as any).aadhar_back_url,
+        fssai_image_url: typeof s4.fssai_image_url === 'string' ? s4.fssai_image_url : (prev as any).fssai_image_url,
+        gst_image_url: typeof s4.gst_image_url === 'string' ? s4.gst_image_url : (prev as any).gst_image_url,
+        drug_license_image_url: typeof s4.drug_license_image_url === 'string' ? s4.drug_license_image_url : (prev as any).drug_license_image_url,
+        pharmacist_certificate_url: typeof s4.pharmacist_certificate_url === 'string' ? s4.pharmacist_certificate_url : (prev as any).pharmacist_certificate_url,
+        pharmacy_council_registration_url: typeof s4.pharmacy_council_registration_url === 'string' ? s4.pharmacy_council_registration_url : (prev as any).pharmacy_council_registration_url,
+        other_document_file_url: typeof s4.other_document_file_url === 'string' ? s4.other_document_file_url : (prev as any).other_document_file_url,
+        bank: saved.step4.bank && typeof saved.step4.bank === 'object'
+          ? {
+              ...(prev.bank || {}),
+              ...saved.step4.bank,
+              bank_proof_file_url: (saved.step4.bank as any).bank_proof_file_url ?? (prev.bank as any)?.bank_proof_file_url,
+              upi_qr_screenshot_url: (saved.step4.bank as any).upi_qr_screenshot_url ?? (prev.bank as any)?.upi_qr_screenshot_url,
+            }
+          : prev.bank,
+      }));
+    }
+
+    // Step 5 data
+    if (saved.step5) {
+      setStoreSetup((prev) => ({
+        ...prev,
+        cuisine_types: Array.isArray(saved.step5.cuisine_types) ? saved.step5.cuisine_types : prev.cuisine_types,
+        food_categories: Array.isArray(saved.step5.food_categories) ? saved.step5.food_categories : prev.food_categories,
+        avg_preparation_time_minutes: typeof saved.step5.avg_preparation_time_minutes === 'number'
+          ? saved.step5.avg_preparation_time_minutes : prev.avg_preparation_time_minutes,
+        min_order_amount: typeof saved.step5.min_order_amount === 'number' ? saved.step5.min_order_amount : prev.min_order_amount,
+        delivery_radius_km: typeof saved.step5.delivery_radius_km === 'number' ? saved.step5.delivery_radius_km : prev.delivery_radius_km,
+        is_pure_veg: typeof saved.step5.is_pure_veg === 'boolean' ? saved.step5.is_pure_veg : prev.is_pure_veg,
+        accepts_online_payment: typeof saved.step5.accepts_online_payment === 'boolean'
+          ? saved.step5.accepts_online_payment : prev.accepts_online_payment,
+        accepts_cash: typeof saved.step5.accepts_cash === 'boolean' ? saved.step5.accepts_cash : prev.accepts_cash,
+        store_hours: normalizeStoreHours(saved.step5.store_hours, prev.store_hours),
+        logo_preview: typeof saved.step5.logo_url === 'string' ? saved.step5.logo_url : prev.logo_preview,
+        banner_preview: typeof saved.step5.banner_url === 'string' ? saved.step5.banner_url : prev.banner_preview,
+        gallery_previews: Array.isArray(saved.step5.gallery_image_urls) ? saved.step5.gallery_image_urls : prev.gallery_previews,
+      }));
+    }
+
+    // Step 7 data
+    if (saved.step7?.selectedPlanId) {
+      setSelectedPlanId(saved.step7.selectedPlanId);
+    }
+
+    // Step restoration is now handled in hydrateProgress BEFORE calling this function
+    // This prevents race conditions and ensures step is restored correctly
+  }, [normalizeStoreHours]);
 
   useEffect(() => {
     setIsClient(true);
@@ -278,114 +405,52 @@ const StoreRegistrationForm = () => {
   useEffect(() => {
     const hydrateProgress = async () => {
       try {
-        if (forceNewOnboarding) {
+        // Always fetch progress from database so that after refresh we show saved data (DB is source of truth).
+        const storeId = selectedStorePublicId || (typeof window !== 'undefined' ? localStorage.getItem('registerStoreCurrentStepStoreId') : null) || '';
+        const url = storeId ? `/api/auth/register-store-progress?storePublicId=${encodeURIComponent(storeId)}` : '/api/auth/register-store-progress';
+        const res = await fetch(url);
+        const payload = await res.json();
+        
+        if (!res.ok) {
+          if (payload.code === 'SESSION_INVALID' || res.status === 401) {
+            console.log('User not authenticated, redirecting to login');
+            if (typeof window !== 'undefined') {
+              window.location.href = '/auth/login?redirect=' + encodeURIComponent(window.location.pathname + window.location.search);
+            }
+            return;
+          }
+          console.error('Failed to load progress:', payload.error);
+          // Mark as restored even on error to prevent localStorage issues
+          stepRestoredRef.current = true;
           setProgressHydrated(true);
           return;
         }
 
-        // Always fetch latest progress by parent so we never miss saved data (e.g. after step 1 only, form_data has no step_store yet)
-        const res = await fetch('/api/auth/register-store-progress');
-        const payload = await res.json();
         const progress = res.ok && payload?.success ? payload?.progress : null;
 
         if (progress) {
-          const saved = progress.form_data || {};
-          if (saved.step_store?.storeDbId) setDraftStoreDbId(saved.step_store.storeDbId);
-          if (saved.step_store?.storePublicId) setDraftStorePublicId(saved.step_store.storePublicId);
-
-          if (saved.step1) {
-            setFormData((prev) => ({ ...prev, ...saved.step1 }));
-            if (saved.step1.store_phones && Array.isArray(saved.step1.store_phones)) {
-              setStorePhonesInput(saved.step1.store_phones.join(', '));
-            }
-          }
-          if (saved.step2) {
-            setFormData((prev) => ({ ...prev, ...saved.step2 }));
-          }
-          if (saved.step3) {
-            if (saved.step3.menuUploadMode === 'CSV') setMenuUploadMode('CSV');
-            if (saved.step3.menuUploadMode === 'IMAGE') setMenuUploadMode('IMAGE');
-            if (Array.isArray(saved.step3.menuImageUrls)) setMenuUploadedImageUrls(saved.step3.menuImageUrls);
-            if (saved.step3.menuSpreadsheetUrl) setMenuUploadedSpreadsheetUrl(saved.step3.menuSpreadsheetUrl);
-          }
-          if (saved.step4) {
-            const s4 = saved.step4 as Record<string, unknown>;
-            setDocuments((prev) => ({
-              ...prev,
-              pan_number: saved.step4.pan_number ?? prev.pan_number,
-              pan_holder_name: saved.step4.pan_holder_name ?? prev.pan_holder_name,
-              aadhar_number: saved.step4.aadhar_number ?? prev.aadhar_number,
-              aadhar_holder_name: saved.step4.aadhar_holder_name ?? prev.aadhar_holder_name,
-              fssai_number: saved.step4.fssai_number ?? prev.fssai_number,
-              gst_number: saved.step4.gst_number ?? prev.gst_number,
-              drug_license_number: saved.step4.drug_license_number ?? prev.drug_license_number,
-              pharmacist_registration_number:
-                saved.step4.pharmacist_registration_number ?? prev.pharmacist_registration_number,
-              expiry_date: saved.step4.expiry_date ?? prev.expiry_date,
-              fssai_expiry_date: saved.step4.fssai_expiry_date ?? prev.fssai_expiry_date,
-              drug_license_expiry_date: saved.step4.drug_license_expiry_date ?? prev.drug_license_expiry_date,
-              pharmacist_expiry_date: saved.step4.pharmacist_expiry_date ?? prev.pharmacist_expiry_date,
-              other_document_type: saved.step4.other_document_type ?? prev.other_document_type,
-              other_document_number: saved.step4.other_document_number ?? prev.other_document_number,
-              other_document_name: saved.step4.other_document_name ?? prev.other_document_name,
-              other_document_expiry_date: saved.step4.other_document_expiry_date ?? prev.other_document_expiry_date,
-              pan_image_url: typeof s4.pan_image_url === 'string' ? s4.pan_image_url : (prev as any).pan_image_url,
-              aadhar_front_url: typeof s4.aadhar_front_url === 'string' ? s4.aadhar_front_url : (prev as any).aadhar_front_url,
-              aadhar_back_url: typeof s4.aadhar_back_url === 'string' ? s4.aadhar_back_url : (prev as any).aadhar_back_url,
-              fssai_image_url: typeof s4.fssai_image_url === 'string' ? s4.fssai_image_url : (prev as any).fssai_image_url,
-              gst_image_url: typeof s4.gst_image_url === 'string' ? s4.gst_image_url : (prev as any).gst_image_url,
-              drug_license_image_url: typeof s4.drug_license_image_url === 'string' ? s4.drug_license_image_url : (prev as any).drug_license_image_url,
-              pharmacist_certificate_url: typeof s4.pharmacist_certificate_url === 'string' ? s4.pharmacist_certificate_url : (prev as any).pharmacist_certificate_url,
-              pharmacy_council_registration_url: typeof s4.pharmacy_council_registration_url === 'string' ? s4.pharmacy_council_registration_url : (prev as any).pharmacy_council_registration_url,
-              other_document_file_url: typeof s4.other_document_file_url === 'string' ? s4.other_document_file_url : (prev as any).other_document_file_url,
-              bank:
-                saved.step4.bank && typeof saved.step4.bank === 'object'
-                  ? {
-                      ...(prev.bank || {}),
-                      ...saved.step4.bank,
-                      bank_proof_file_url: (saved.step4.bank as any).bank_proof_file_url ?? (prev.bank as any)?.bank_proof_file_url,
-                      upi_qr_screenshot_url: (saved.step4.bank as any).upi_qr_screenshot_url ?? (prev.bank as any)?.upi_qr_screenshot_url,
-                    }
-                  : prev.bank,
-            }));
-          }
-          if (saved.step5) {
-            setStoreSetup((prev) => ({
-              ...prev,
-              cuisine_types: Array.isArray(saved.step5.cuisine_types) ? saved.step5.cuisine_types : prev.cuisine_types,
-              food_categories: Array.isArray(saved.step5.food_categories) ? saved.step5.food_categories : prev.food_categories,
-              avg_preparation_time_minutes:
-                typeof saved.step5.avg_preparation_time_minutes === 'number'
-                  ? saved.step5.avg_preparation_time_minutes
-                  : prev.avg_preparation_time_minutes,
-              min_order_amount:
-                typeof saved.step5.min_order_amount === 'number' ? saved.step5.min_order_amount : prev.min_order_amount,
-              delivery_radius_km:
-                typeof saved.step5.delivery_radius_km === 'number' ? saved.step5.delivery_radius_km : prev.delivery_radius_km,
-              is_pure_veg: typeof saved.step5.is_pure_veg === 'boolean' ? saved.step5.is_pure_veg : prev.is_pure_veg,
-              accepts_online_payment:
-                typeof saved.step5.accepts_online_payment === 'boolean'
-                  ? saved.step5.accepts_online_payment
-                  : prev.accepts_online_payment,
-              accepts_cash: typeof saved.step5.accepts_cash === 'boolean' ? saved.step5.accepts_cash : prev.accepts_cash,
-              store_hours: normalizeStoreHours(saved.step5.store_hours, prev.store_hours),
-              logo_preview: typeof saved.step5.logo_url === 'string' ? saved.step5.logo_url : prev.logo_preview,
-              banner_preview: typeof saved.step5.banner_url === 'string' ? saved.step5.banner_url : prev.banner_preview,
-              gallery_previews: Array.isArray(saved.step5.gallery_image_urls) ? saved.step5.gallery_image_urls : prev.gallery_previews,
-            }));
-          }
-
-          if (saved.step7?.selectedPlanId) {
-            setSelectedPlanId(saved.step7.selectedPlanId);
-          }
+          // IMPORTANT: Restore step FIRST before hydrating form data to prevent race conditions
           if (Number.isFinite(Number(progress.current_step))) {
             const restoredStep = Math.min(Math.max(Number(progress.current_step), 1), 9);
+            console.log('Restoring step from DB:', restoredStep, 'current_step:', progress.current_step);
             setStep(restoredStep);
+            stepRestoredRef.current = true; // Mark restored BEFORE hydration
           }
+          
+          hydrateFormFromProgress(progress);
+          const storePublicId = (progress.form_data as any)?.step_store?.storePublicId;
+          if (storePublicId && typeof window !== 'undefined') {
+            localStorage.setItem('registerStoreCurrentStepStoreId', storePublicId);
+          }
+          setProgressHydrated(true);
           return;
         }
+        
+        // If no progress found, mark as restored anyway to allow localStorage updates
+        stepRestoredRef.current = true;
 
         if (selectedStorePublicId) {
+          // Load all store data from database
           const { data: existingStore } = await supabase
             .from('merchant_stores')
             .select(`
@@ -405,7 +470,18 @@ const StoreRegistrationForm = () => {
               latitude,
               longitude,
               landmark,
-              current_onboarding_step
+              current_onboarding_step,
+              cuisine_types,
+              food_categories,
+              avg_preparation_time_minutes,
+              min_order_amount,
+              delivery_radius_km,
+              is_pure_veg,
+              accepts_online_payment,
+              accepts_cash,
+              logo_url,
+              banner_url,
+              gallery_images
             `)
             .eq('store_id', selectedStorePublicId)
             .maybeSingle();
@@ -413,6 +489,8 @@ const StoreRegistrationForm = () => {
           if (existingStore) {
             setDraftStoreDbId(existingStore.id);
             setDraftStorePublicId(existingStore.store_id);
+            
+            // Load Step 1 & 2 data
             setFormData((prev) => ({
               ...prev,
               store_name: existingStore.store_name ?? prev.store_name,
@@ -430,25 +508,168 @@ const StoreRegistrationForm = () => {
               longitude: typeof existingStore.longitude === 'number' ? existingStore.longitude : prev.longitude,
               landmark: existingStore.landmark ?? prev.landmark,
             }));
+            
             if (Array.isArray(existingStore.store_phones)) {
               setStorePhonesInput(existingStore.store_phones.join(', '));
             }
             if (existingStore.full_address) {
               setSearchQuery(existingStore.full_address);
             }
+            
+            // Load Step 5 data (store setup)
+            setStoreSetup((prev) => ({
+              ...prev,
+              cuisine_types: Array.isArray(existingStore.cuisine_types) ? existingStore.cuisine_types : prev.cuisine_types,
+              food_categories: Array.isArray(existingStore.food_categories) ? existingStore.food_categories : prev.food_categories,
+              avg_preparation_time_minutes: typeof existingStore.avg_preparation_time_minutes === 'number'
+                ? existingStore.avg_preparation_time_minutes : prev.avg_preparation_time_minutes,
+              min_order_amount: typeof existingStore.min_order_amount === 'number' ? existingStore.min_order_amount : prev.min_order_amount,
+              delivery_radius_km: typeof existingStore.delivery_radius_km === 'number' ? existingStore.delivery_radius_km : prev.delivery_radius_km,
+              is_pure_veg: typeof existingStore.is_pure_veg === 'boolean' ? existingStore.is_pure_veg : prev.is_pure_veg,
+              accepts_online_payment: typeof existingStore.accepts_online_payment === 'boolean'
+                ? existingStore.accepts_online_payment : prev.accepts_online_payment,
+              accepts_cash: typeof existingStore.accepts_cash === 'boolean' ? existingStore.accepts_cash : prev.accepts_cash,
+              logo_preview: existingStore.logo_url ?? prev.logo_preview,
+              banner_preview: existingStore.banner_url ?? prev.banner_preview,
+              gallery_previews: Array.isArray(existingStore.gallery_images) ? existingStore.gallery_images : prev.gallery_previews,
+            }));
+            
+            // Load Step 4 data (documents)
+            const { data: storeDocuments } = await supabase
+              .from('merchant_store_documents')
+              .select('*')
+              .eq('store_id', existingStore.id)
+              .maybeSingle();
+            
+            if (storeDocuments) {
+              setDocuments((prev) => ({
+                ...prev,
+                pan_number: storeDocuments.pan_document_number ?? prev.pan_number,
+                pan_holder_name: storeDocuments.pan_holder_name ?? prev.pan_holder_name,
+                aadhar_number: storeDocuments.aadhaar_document_number ?? prev.aadhar_number,
+                aadhar_holder_name: storeDocuments.aadhaar_holder_name ?? prev.aadhar_holder_name,
+                fssai_number: storeDocuments.fssai_document_number ?? prev.fssai_number,
+                gst_number: storeDocuments.gst_document_number ?? prev.gst_number,
+                drug_license_number: storeDocuments.drug_license_document_number ?? prev.drug_license_number,
+                pharmacist_registration_number: storeDocuments.pharmacist_certificate_document_number ?? prev.pharmacist_registration_number,
+                fssai_expiry_date: storeDocuments.fssai_expiry_date ?? prev.fssai_expiry_date,
+                drug_license_expiry_date: storeDocuments.drug_license_expiry_date ?? prev.drug_license_expiry_date,
+                pharmacist_expiry_date: storeDocuments.pharmacist_certificate_expiry_date ?? prev.pharmacist_expiry_date,
+                other_document_type: storeDocuments.other_document_type ?? prev.other_document_type,
+                other_document_number: storeDocuments.other_document_number ?? prev.other_document_number,
+                other_document_name: storeDocuments.other_document_name ?? prev.other_document_name,
+                other_document_expiry_date: storeDocuments.other_expiry_date ?? prev.other_document_expiry_date,
+                pan_image_url: storeDocuments.pan_document_url ?? (prev as any).pan_image_url,
+                aadhar_front_url: storeDocuments.aadhaar_document_url ?? (prev as any).aadhar_front_url,
+                aadhar_back_url: (storeDocuments.aadhaar_document_metadata as any)?.back_url ?? (prev as any).aadhar_back_url,
+                fssai_image_url: storeDocuments.fssai_document_url ?? (prev as any).fssai_image_url,
+                gst_image_url: storeDocuments.gst_document_url ?? (prev as any).gst_image_url,
+                drug_license_image_url: storeDocuments.drug_license_document_url ?? (prev as any).drug_license_image_url,
+                pharmacist_certificate_url: storeDocuments.pharmacist_certificate_document_url ?? (prev as any).pharmacist_certificate_url,
+                pharmacy_council_registration_url: storeDocuments.pharmacy_council_registration_document_url ?? (prev as any).pharmacy_council_registration_url,
+                other_document_file_url: storeDocuments.other_document_url ?? (prev as any).other_document_file_url,
+              }));
+              
+              // Load bank account data
+              const { data: bankAccount } = await supabase
+                .from('merchant_store_bank_accounts')
+                .select('*')
+                .eq('store_id', existingStore.id)
+                .eq('is_active', true)
+                .maybeSingle();
+              
+              if (bankAccount) {
+                setDocuments((prev) => ({
+                  ...prev,
+                  bank: {
+                    payout_method: bankAccount.payout_method === 'upi' ? 'upi' : 'bank',
+                    account_holder_name: bankAccount.account_holder_name ?? '',
+                    account_number: bankAccount.account_number ?? '',
+                    ifsc_code: bankAccount.ifsc_code ?? '',
+                    bank_name: bankAccount.bank_name ?? '',
+                    branch_name: bankAccount.branch_name ?? '',
+                    account_type: bankAccount.account_type ?? '',
+                    upi_id: bankAccount.upi_id ?? '',
+                    bank_proof_type: bankAccount.bank_proof_type ?? undefined,
+                    bank_proof_file_url: bankAccount.bank_proof_file_url ?? undefined,
+                    upi_qr_screenshot_url: bankAccount.upi_qr_screenshot_url ?? undefined,
+                  },
+                }));
+              }
+            }
+            
+            // Load Step 5 operating hours
+            const { data: operatingHours } = await supabase
+              .from('merchant_store_operating_hours')
+              .select('*')
+              .eq('store_id', existingStore.id)
+              .maybeSingle();
+            
+            if (operatingHours) {
+              const convertTime = (time: string | null) => time || '';
+              const convertToSlot = (day: string) => ({
+                closed: !operatingHours[`${day}_open` as keyof typeof operatingHours],
+                slot1_open: convertTime(operatingHours[`${day}_slot1_start` as keyof typeof operatingHours] as string | null),
+                slot1_close: convertTime(operatingHours[`${day}_slot1_end` as keyof typeof operatingHours] as string | null),
+                slot2_open: convertTime(operatingHours[`${day}_slot2_start` as keyof typeof operatingHours] as string | null),
+                slot2_close: convertTime(operatingHours[`${day}_slot2_end` as keyof typeof operatingHours] as string | null),
+              });
+              
+              setStoreSetup((prev) => ({
+                ...prev,
+                store_hours: {
+                  monday: convertToSlot('monday'),
+                  tuesday: convertToSlot('tuesday'),
+                  wednesday: convertToSlot('wednesday'),
+                  thursday: convertToSlot('thursday'),
+                  friday: convertToSlot('friday'),
+                  saturday: convertToSlot('saturday'),
+                  sunday: convertToSlot('sunday'),
+                },
+              }));
+            }
+            
+            // Load Step 3 menu data
+            const { data: menuMedia } = await supabase
+              .from('merchant_store_media_files')
+              .select('public_url, r2_key, source_entity')
+              .eq('store_id', existingStore.id)
+              .eq('media_scope', 'MENU_REFERENCE')
+              .eq('is_active', true);
+            
+            if (menuMedia && menuMedia.length > 0) {
+              const menuImages = menuMedia.filter(m => m.source_entity === 'ONBOARDING_MENU_IMAGE').map(m => m.public_url).filter(Boolean);
+              const menuSheet = menuMedia.find(m => m.source_entity === 'ONBOARDING_MENU_SHEET')?.public_url;
+              
+              if (menuImages.length > 0) {
+                setMenuUploadedImageUrls(menuImages as string[]);
+                setMenuUploadMode('IMAGE');
+              }
+              if (menuSheet) {
+                setMenuUploadedSpreadsheetUrl(menuSheet);
+                setMenuUploadMode('CSV');
+              }
+            }
+            
             if (typeof existingStore.current_onboarding_step === 'number') {
               setStep(Math.min(Math.max(existingStore.current_onboarding_step, 1), 9));
+              stepRestoredRef.current = true;
             }
           }
         }
       } catch (err) {
         console.error('Failed to hydrate onboarding progress:', err);
       } finally {
+        // Mark as restored even if hydration failed, to prevent localStorage from overriding
+        if (!stepRestoredRef.current) {
+          stepRestoredRef.current = true;
+        }
         setProgressHydrated(true);
       }
     };
 
     hydrateProgress();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intended: run on mount and when store/forceNew change only
   }, [forceNewOnboarding, selectedStorePublicId]);
 
   useEffect(() => {
@@ -917,6 +1138,27 @@ const StoreRegistrationForm = () => {
     }
 
     if (validFiles.length > 0) {
+      const hasExisting = menuImageFiles.length > 0 || menuUploadedImageUrls.length > 0;
+      if (hasExisting) {
+        setConfirmModal({
+          title: 'Change uploaded files?',
+          message: 'You are about to replace the current menu upload. This action cannot be undone.',
+          variant: 'warning',
+          onConfirm: () => {
+            setMenuUploadError('');
+            setMenuImageFiles(validFiles);
+            setMenuUploadedImageUrls([]);
+            setMenuUploadedImageNames([]);
+            setMenuUploadMode('IMAGE');
+            setMenuSpreadsheetFile(null);
+            setMenuUploadedSpreadsheetUrl(null);
+            setMenuUploadedSpreadsheetFileName(null);
+            setConfirmModal(null);
+          },
+          onCancel: () => setConfirmModal(null),
+        });
+        return;
+      }
       setMenuImageFiles((prev) => [...prev, ...validFiles]);
       setMenuUploadedImageUrls([]);
       setMenuUploadMode('IMAGE');
@@ -933,17 +1175,34 @@ const StoreRegistrationForm = () => {
       setMenuUploadError('Only CSV, XLS, and XLSX files are allowed for spreadsheet upload.');
       return;
     }
+    const hasExisting = menuSpreadsheetFile || menuUploadedSpreadsheetUrl;
+    if (hasExisting) {
+      setConfirmModal({
+        title: 'Change uploaded file?',
+        message: 'You are about to replace the current file. This action cannot be undone.',
+        variant: 'warning',
+        onConfirm: () => {
+          setMenuUploadError('');
+          setMenuSpreadsheetFile(file);
+          setMenuUploadedSpreadsheetUrl(null);
+          setMenuUploadedSpreadsheetFileName(null);
+          setMenuUploadMode('CSV');
+          setMenuImageFiles([]);
+          setMenuUploadedImageUrls([]);
+          setMenuUploadedImageNames([]);
+          setConfirmModal(null);
+        },
+        onCancel: () => setConfirmModal(null),
+      });
+      return;
+    }
     setMenuUploadError('');
     setMenuSpreadsheetFile(file);
     setMenuUploadedSpreadsheetUrl(null);
     setMenuUploadMode('CSV');
     setMenuImageFiles([]);
     setMenuUploadedImageUrls([]);
-  };
-
-  const removeMenuImage = (index: number) => {
-    setMenuImageFiles((prev) => prev.filter((_, i) => i !== index));
-    setMenuUploadedImageUrls((prev) => prev.filter((_, i) => i !== index));
+    setMenuUploadedImageNames([]);
   };
 
   const uploadToR2 = async (file: File, folder: string, filename: string) => {
@@ -998,9 +1257,9 @@ const StoreRegistrationForm = () => {
       return {
         step3: {
           menuUploadMode,
-          menuImageNames: menuImageFiles.map((f) => f.name),
+          menuImageNames: menuImageFiles.length > 0 ? menuImageFiles.map((f) => f.name) : menuUploadedImageNames,
           menuImageUrls: menuUploadedImageUrls,
-          menuSpreadsheetName: menuSpreadsheetFile?.name || null,
+          menuSpreadsheetName: menuSpreadsheetFile?.name ?? menuUploadedSpreadsheetFileName ?? null,
           menuSpreadsheetUrl: menuUploadedSpreadsheetUrl,
         },
       };
@@ -1011,41 +1270,159 @@ const StoreRegistrationForm = () => {
     return {};
   };
 
+  // Save progress with proper UPSERT logic. Optional formDataPatchOverride used for step 3 so uploaded URLs are saved before state updates.
+  // Non-blocking by default: returns immediately, saves in background. Set blocking=true to wait for completion.
+  const saveStepData = useCallback(
+    async (currentStep: number, isComplete: boolean = false, formDataPatchOverride?: Record<string, unknown>, blocking: boolean = false): Promise<{ success: boolean; error?: string; progress?: any }> => {
+      const saveOperation = async () => {
+        try {
+          // Check authentication (non-blocking check)
+          const authOk = await refreshAuthIfNeeded();
+          if (!authOk) {
+            console.log('Authentication required, cannot save progress');
+            return { success: false, error: 'Authentication required' };
+          }
+
+          const stepPatch = formDataPatchOverride ?? getStepPatch(currentStep);
+          console.log('Saving step', currentStep, 'data:', stepPatch);
+
+          // Save to progress table first
+          const progressRes = await fetch('/api/auth/register-store-progress', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              currentStep: currentStep,
+              nextStep: isComplete ? currentStep + 1 : currentStep,
+              markStepComplete: isComplete,
+              formDataPatch: stepPatch,
+              storePublicId: currentStoreId || draftStorePublicId || undefined,
+              registrationStatus: 'IN_PROGRESS',
+            }),
+          });
+
+          const progressPayload = await progressRes.json();
+          
+          if (!progressRes.ok) {
+            if (progressPayload.code === 'SESSION_INVALID' || progressRes.status === 401) {
+              console.log('User not authenticated, redirecting to login');
+              if (typeof window !== 'undefined') {
+                window.location.href = '/auth/login?redirect=' + encodeURIComponent(window.location.pathname + window.location.search);
+              }
+              return { success: false, error: 'Authentication required' };
+            }
+            throw new Error(progressPayload.error || 'Failed to save progress');
+          }
+
+          // Update store ID from database response
+          const stepStore = progressPayload?.progress?.form_data?.step_store;
+          if (stepStore?.storePublicId && stepStore.storePublicId !== currentStoreId) {
+            setCurrentStoreId(stepStore.storePublicId);
+            setDraftStorePublicId(stepStore.storePublicId);
+          }
+          if (stepStore?.storeDbId && stepStore.storeDbId !== draftStoreDbId) {
+            setDraftStoreDbId(stepStore.storeDbId);
+          }
+
+          console.log('Progress saved successfully for step:', currentStep);
+          return { success: true, progress: progressPayload?.progress };
+        } catch (err) {
+          console.error('Failed to save step data:', err);
+          if (isAuthError(err)) {
+            await handleAuthError(err, 'save-progress');
+          }
+          return { success: false, error: err instanceof Error ? err.message : 'Unknown error' };
+        }
+      };
+
+      // Queue saves to prevent race conditions
+      const queued = saveQueueRef.current.then(() => saveOperation());
+      saveQueueRef.current = queued.then(() => {});
+      
+      if (blocking) {
+        return await queued;
+      } else {
+        // Non-blocking: fire and forget, but queue to prevent race conditions
+        saveQueueRef.current.catch(() => {}); // Suppress unhandled rejection warnings
+        return { success: true }; // Optimistic return
+      }
+    },
+    [currentStoreId, draftStorePublicId, draftStoreDbId, getStepPatch, refreshAuthIfNeeded, handleAuthError]
+  );
+
+  // Wrapper for steps 5–9 that saves with explicit nextStep (e.g. when going back or to agreement/signature).
   const saveProgress = useCallback(
-    async (params: { currentStep: number; nextStep?: number; markStepComplete?: boolean; formDataPatch?: any }) => {
+    async (opts: { currentStep: number; nextStep: number; markStepComplete: boolean; formDataPatch: Record<string, unknown> }) => {
+      const authOk = await refreshAuthIfNeeded();
+      if (!authOk) return { success: false, error: 'Authentication required' };
       try {
         const res = await fetch('/api/auth/register-store-progress', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            currentStep: params.currentStep,
-            nextStep: params.nextStep,
-            markStepComplete: !!params.markStepComplete,
-            formDataPatch: params.formDataPatch || getStepPatch(params.currentStep),
-            storePublicId: selectedStorePublicId || draftStorePublicId || undefined,
+            currentStep: opts.currentStep,
+            nextStep: opts.nextStep,
+            markStepComplete: opts.markStepComplete,
+            formDataPatch: opts.formDataPatch,
+            storePublicId: currentStoreId || draftStorePublicId || undefined,
             registrationStatus: 'IN_PROGRESS',
           }),
         });
-        const payload = await res.json();
+        
+        // Handle network errors
+        if (!res.ok) {
+          let errorMessage = 'Failed to save progress';
+          try {
+            const errorPayload = await res.json();
+            if (errorPayload.code === 'SESSION_INVALID' || res.status === 401) {
+              if (typeof window !== 'undefined') {
+                window.location.href = '/auth/login?redirect=' + encodeURIComponent(window.location.pathname + window.location.search);
+              }
+              return { success: false, error: 'Authentication required' };
+            }
+            errorMessage = errorPayload.error || errorPayload.message || `HTTP ${res.status}: ${res.statusText}`;
+          } catch (parseError) {
+            // If JSON parsing fails, use status text
+            errorMessage = `HTTP ${res.status}: ${res.statusText || 'Unknown error'}`;
+          }
+          // Don't throw for non-critical errors - just log and return
+          console.warn('Progress save failed (non-critical):', errorMessage);
+          return { success: false, error: errorMessage };
+        }
+        
+        // Parse successful response
+        let payload;
+        try {
+          payload = await res.json();
+        } catch (parseError) {
+          console.warn('Failed to parse progress response (non-critical):', parseError);
+          return { success: false, error: 'Invalid response format' };
+        }
+        
         const stepStore = payload?.progress?.form_data?.step_store;
-        if (stepStore?.storeDbId) setDraftStoreDbId(stepStore.storeDbId);
-        if (stepStore?.storePublicId) setDraftStorePublicId(stepStore.storePublicId);
+        if (stepStore?.storePublicId && stepStore.storePublicId !== currentStoreId) {
+          setCurrentStoreId(stepStore.storePublicId);
+          setDraftStorePublicId(stepStore.storePublicId);
+        }
+        if (stepStore?.storeDbId && stepStore.storeDbId !== draftStoreDbId) {
+          setDraftStoreDbId(stepStore.storeDbId);
+        }
+        return { success: true, progress: payload?.progress };
       } catch (err) {
-        console.error('Failed to save onboarding progress:', err);
+        // Handle network errors, timeouts, etc.
+        const errorMessage = err instanceof Error ? err.message : 'Network error';
+        console.warn('Progress save error (non-critical):', errorMessage);
+        
+        // Only handle auth errors, don't throw for others
+        if (isAuthError(err)) {
+          await handleAuthError(err, 'save-progress');
+          return { success: false, error: 'Authentication required' };
+        }
+        
+        // Return error but don't break the flow
+        return { success: false, error: errorMessage };
       }
     },
-    [
-      formData,
-      menuUploadMode,
-      menuImageFiles,
-      menuSpreadsheetFile,
-      menuUploadedImageUrls,
-      menuUploadedSpreadsheetUrl,
-      documents,
-      storeSetup,
-      selectedStorePublicId,
-      draftStorePublicId,
-    ]
+    [currentStoreId, draftStorePublicId, draftStoreDbId]
   );
 
   const validateStep = (stepNumber: number): boolean => {
@@ -1074,59 +1451,96 @@ const StoreRegistrationForm = () => {
 
   const nextStep = async () => {
     if (validateStep(step)) {
-      setActionLoading(true);
-      try {
-        let stepPatch = getStepPatch(step);
-        if (step === 3) {
-          try {
-            const folderBase = (parentInfo?.parent_merchant_id || searchParams?.get('parent_id') || 'merchant') as string;
-            if (menuUploadMode === 'IMAGE' && menuImageFiles.length > 0) {
-              const uploaded = await Promise.all(
-                menuImageFiles.map((file, idx) =>
-                  uploadToR2(file, `${folderBase}/onboarding/menu/images`, `menu_image_${Date.now()}_${idx + 1}`)
-                )
-              );
-              setMenuUploadedImageUrls(uploaded);
-              stepPatch = {
-                step3: {
-                  menuUploadMode,
-                  menuImageNames: menuImageFiles.map((f) => f.name),
-                  menuImageUrls: uploaded,
-                  menuSpreadsheetName: null,
-                  menuSpreadsheetUrl: null,
-                },
-              };
-            } else if (menuUploadMode === 'CSV' && menuSpreadsheetFile) {
-              const uploadedSheetUrl = await uploadToR2(
-                menuSpreadsheetFile,
-                `${folderBase}/onboarding/menu/csv`,
-                `menu_sheet_${Date.now()}`
-              );
-              setMenuUploadedSpreadsheetUrl(uploadedSheetUrl);
-              stepPatch = {
-                step3: {
-                  menuUploadMode,
-                  menuImageNames: [],
-                  menuImageUrls: [],
-                  menuSpreadsheetName: menuSpreadsheetFile.name,
-                  menuSpreadsheetUrl: uploadedSheetUrl,
-                },
-              };
-            }
-          } catch (uploadErr: any) {
-            alert(uploadErr?.message || 'Failed to upload menu file(s). Please try again.');
-            return;
+      // Handle file uploads for step 3 (blocking - must wait for uploads)
+      if (step === 3) {
+        setUploadLoading(true);
+        try {
+          let step3Patch: { step3?: { menuUploadMode: MenuUploadMode; menuImageNames: string[]; menuImageUrls: string[]; menuSpreadsheetName: string | null; menuSpreadsheetUrl: string | null } } | undefined;
+          const folderBase = (parentInfo?.parent_merchant_id || searchParams?.get('parent_id') || 'merchant') as string;
+          
+          if (menuUploadMode === 'IMAGE' && menuImageFiles.length > 0) {
+            const uploaded = await Promise.all(
+              menuImageFiles.map((file, idx) =>
+                uploadToR2(file, `${folderBase}/onboarding/menu/images`, `menu_image_${Date.now()}_${idx + 1}`)
+              )
+            );
+            setMenuUploadedImageUrls(uploaded);
+            setMenuUploadedImageNames(menuImageFiles.map((f) => f.name));
+            step3Patch = {
+              step3: {
+                menuUploadMode: 'IMAGE',
+                menuImageNames: menuImageFiles.map((f) => f.name),
+                menuImageUrls: uploaded,
+                menuSpreadsheetName: null,
+                menuSpreadsheetUrl: null,
+              },
+            };
+          } else if (menuUploadMode === 'CSV' && menuSpreadsheetFile) {
+            const uploadedSheetUrl = await uploadToR2(
+              menuSpreadsheetFile,
+              `${folderBase}/onboarding/menu/csv`,
+              `menu_sheet_${Date.now()}`
+            );
+            setMenuUploadedSpreadsheetUrl(uploadedSheetUrl);
+            setMenuUploadedSpreadsheetFileName(menuSpreadsheetFile.name || null);
+            step3Patch = {
+              step3: {
+                menuUploadMode: 'CSV',
+                menuImageNames: [],
+                menuImageUrls: [],
+                menuSpreadsheetName: menuSpreadsheetFile.name || null,
+                menuSpreadsheetUrl: uploadedSheetUrl,
+              },
+            };
+          } else if (menuUploadMode === 'CSV' && menuUploadedSpreadsheetUrl) {
+            step3Patch = {
+              step3: {
+                menuUploadMode: 'CSV',
+                menuImageNames: [],
+                menuImageUrls: [],
+                menuSpreadsheetName: menuUploadedSpreadsheetFileName ?? null,
+                menuSpreadsheetUrl: menuUploadedSpreadsheetUrl,
+              },
+            };
+          } else if (menuUploadMode === 'IMAGE' && menuUploadedImageUrls.length > 0) {
+            step3Patch = {
+              step3: {
+                menuUploadMode: 'IMAGE',
+                menuImageNames: menuUploadedImageNames,
+                menuImageUrls: menuUploadedImageUrls,
+                menuSpreadsheetName: null,
+                menuSpreadsheetUrl: null,
+              },
+            };
           }
+
+          // Navigate immediately after uploads complete
+          setStep(prev => prev + 1);
+          
+          // Save in background (non-blocking)
+          saveStepData(step, true, step3Patch, false).catch(err => {
+            console.error('Background save failed:', err);
+            // Optionally show a non-intrusive notification
+          });
+        } catch (uploadErr: any) {
+          alert(uploadErr?.message || 'Failed to upload menu file(s). Please try again.');
+        } finally {
+          setUploadLoading(false);
         }
-        await saveProgress({
-          currentStep: step,
-          nextStep: step + 1,
-          markStepComplete: true,
-          formDataPatch: stepPatch,
-        });
+      } else {
+        // For all other steps: navigate immediately, save in background
         setStep(prev => prev + 1);
-      } finally {
-        setActionLoading(false);
+        
+        // Debounce rapid navigation
+        if (debounceTimerRef.current) {
+          clearTimeout(debounceTimerRef.current);
+        }
+        
+        debounceTimerRef.current = setTimeout(() => {
+          saveStepData(step, true, undefined, false).catch(err => {
+            console.error('Background save failed:', err);
+          });
+        }, 100); // 100ms debounce
       }
     } else {
       if (step === 1 && formData.store_type === 'OTHERS' && !formData.custom_store_type.trim()) {
@@ -1141,25 +1555,25 @@ const StoreRegistrationForm = () => {
     }
   };
 
-  const prevStep = async () => {
-    setActionLoading(true);
-    try {
-      await saveProgress({
-        currentStep: step,
-        nextStep: Math.max(step - 1, 1),
-        markStepComplete: false,
-        formDataPatch: getStepPatch(step),
-      });
-      setStep(prev => prev - 1);
-    } finally {
-      setActionLoading(false);
+  const prevStep = () => {
+    // Navigate immediately, save in background
+    setStep(prev => prev - 1);
+    
+    // Debounce rapid navigation
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
     }
+    
+    debounceTimerRef.current = setTimeout(() => {
+      saveStepData(step, false, undefined, false).catch(err => {
+        console.error('Background save failed:', err);
+      });
+    }, 100); // 100ms debounce
   };
 
-  const handleDocumentUploadComplete = async (docs: DocumentData) => {
-    setDocuments(docs);
-    setActionLoading(true);
-    try {
+  /** Build step4 patch from current documents: upload files to R2 and include all names/numbers/URLs. */
+  const buildDocumentStep4Patch = useCallback(
+    async (docs: DocumentData): Promise<Record<string, unknown>> => {
       const folderBase = (parentInfo?.parent_merchant_id || searchParams?.get('parent_id') || 'merchant') as string;
       const docsPatch: any = { ...sanitizeForProgress(docs) };
       const uploadableDocKeys = [
@@ -1199,73 +1613,132 @@ const StoreRegistrationForm = () => {
           docsPatch.bank.upi_qr_screenshot_url = bank.upi_qr_screenshot_url;
         }
       }
-      await saveProgress({
-        currentStep: 4,
-        nextStep: 5,
-        markStepComplete: true,
-        formDataPatch: { step4: docsPatch },
-      });
+      return docsPatch;
+    },
+    [parentInfo?.parent_merchant_id, searchParams]
+  );
+
+  /** Save current document data to DB on every "Save & Continue" (without moving to step 5). Keeps name, id number, signed URLs in DB. */
+  const saveDocumentProgress = useCallback(
+    async (docs: DocumentData) => {
+      setDocuments(docs);
+      // Save in background without blocking UI
+      try {
+        const docsPatch = await buildDocumentStep4Patch(docs);
+        saveStepData(4, false, { step4: docsPatch }, false).catch(err => {
+          console.error('Background document save failed:', err);
+          // Optionally show non-intrusive notification
+        });
+      } catch (err: any) {
+        console.error('Failed to build document patch:', err);
+      }
+    },
+    [buildDocumentStep4Patch, saveStepData]
+  );
+
+  const handleDocumentUploadComplete = async (docs: DocumentData) => {
+    setDocuments(docs);
+    setUploadLoading(true);
+    try {
+      const docsPatch = await buildDocumentStep4Patch(docs);
+      // Navigate immediately, save in background
       setStep(5);
+      saveStepData(4, true, { step4: docsPatch }, false).catch(err => {
+        console.error('Background document save failed:', err);
+        // Optionally show non-intrusive notification
+      });
     } catch (err: any) {
       alert(err?.message || 'Failed to upload document files. Please try again.');
     } finally {
-      setActionLoading(false);
+      setUploadLoading(false);
     }
   };
+
+  /** Save store hours instantly to DB when toggles/slots change (without moving to step 6). */
+  const saveStoreHoursProgress = useCallback(
+    async (hours: StoreSetupData['store_hours']) => {
+      setStoreSetup(prev => ({ ...prev, store_hours: hours }));
+      // Save in background without blocking UI
+      try {
+        const currentStep5 = sanitizeForProgress(storeSetup);
+        const step5Patch = { step5: { ...currentStep5, store_hours: hours } };
+        saveStepData(5, false, step5Patch, false).catch(err => {
+          console.error('Background store hours save failed:', err);
+        });
+      } catch (err: any) {
+        console.error('Failed to build store hours patch:', err);
+      }
+    },
+    [storeSetup, saveStepData]
+  );
 
   const handleStoreSetupComplete = async (setup: StoreSetupData) => {
     setStoreSetup(setup);
-    setActionLoading(true);
-    try {
-      const folderBase = (parentInfo?.parent_merchant_id || searchParams?.get('parent_id') || 'merchant') as string;
-      const step5Patch: any = { ...sanitizeForProgress(setup) };
-      if (typeof File !== 'undefined' && setup.logo instanceof File) {
-        step5Patch.logo_url = await uploadToR2(setup.logo, `${folderBase}/onboarding/store-media`, `logo_${Date.now()}`);
-      }
-      if (typeof File !== 'undefined' && setup.banner instanceof File) {
-        step5Patch.banner_url = await uploadToR2(setup.banner, `${folderBase}/onboarding/store-media`, `banner_${Date.now()}`);
-      }
-      const galleryUrls: string[] = [];
-      for (let i = 0; i < (setup.gallery_images || []).length; i++) {
-        const file = setup.gallery_images[i];
-        if (typeof File !== 'undefined' && file instanceof File) {
-          const url = await uploadToR2(file, `${folderBase}/onboarding/store-media/gallery`, `gallery_${Date.now()}_${i + 1}`);
-          galleryUrls.push(url);
+    
+    // Check if there are files to upload
+    const hasFilesToUpload = 
+      (typeof File !== 'undefined' && setup.logo instanceof File) ||
+      (typeof File !== 'undefined' && setup.banner instanceof File) ||
+      (Array.isArray(setup.gallery_images) && setup.gallery_images.some(img => typeof File !== 'undefined' && img instanceof File));
+    
+    if (hasFilesToUpload) {
+      setUploadLoading(true);
+      try {
+        const folderBase = (parentInfo?.parent_merchant_id || searchParams?.get('parent_id') || 'merchant') as string;
+        const step5Patch: any = { ...sanitizeForProgress(setup) };
+        if (typeof File !== 'undefined' && setup.logo instanceof File) {
+          step5Patch.logo_url = await uploadToR2(setup.logo, `${folderBase}/onboarding/store-media`, `logo_${Date.now()}`);
         }
+        if (typeof File !== 'undefined' && setup.banner instanceof File) {
+          step5Patch.banner_url = await uploadToR2(setup.banner, `${folderBase}/onboarding/store-media`, `banner_${Date.now()}`);
+        }
+        const galleryUrls: string[] = [];
+        for (let i = 0; i < (setup.gallery_images || []).length; i++) {
+          const file = setup.gallery_images[i];
+          if (typeof File !== 'undefined' && file instanceof File) {
+            const url = await uploadToR2(file, `${folderBase}/onboarding/store-media/gallery`, `gallery_${Date.now()}_${i + 1}`);
+            galleryUrls.push(url);
+          }
+        }
+        if (galleryUrls.length > 0) {
+          step5Patch.gallery_image_urls = galleryUrls;
+        }
+        // Navigate immediately after uploads, save in background
+        setStep(6);
+        saveStepData(5, true, { step5: step5Patch }, false).catch(err => {
+          console.error('Background store setup save failed:', err);
+        });
+      } catch (err: any) {
+        alert(err?.message || 'Failed to upload store media. Please try again.');
+        return; // Don't navigate if upload fails
+      } finally {
+        setUploadLoading(false);
       }
-      if (galleryUrls.length > 0) {
-        step5Patch.gallery_image_urls = galleryUrls;
-      }
-      await saveProgress({
-        currentStep: 5,
-        nextStep: 6,
-        markStepComplete: true,
-        formDataPatch: { step5: step5Patch },
-      });
+    } else {
+      // No files to upload - navigate immediately, save in background
       setStep(6);
-    } catch (err: any) {
-      alert(err?.message || 'Failed to upload store media. Please try again.');
-    } finally {
-      setActionLoading(false);
+      const step5Patch = { step5: sanitizeForProgress(setup) };
+      saveStepData(5, true, step5Patch, false).catch(err => {
+        console.error('Background store setup save failed:', err);
+      });
     }
   };
 
-  const handleRegistrationSuccess = (storeId: string) => {
+  const handleRegistrationSuccess = async (storeId: string) => {
     setGeneratedStoreId(storeId);
     setShowSuccess(true);
-    fetch('/api/auth/register-store-progress', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        currentStep: 9,
-        nextStep: 9,
-        markStepComplete: true,
-        formDataPatch: { final: { submitted: true, storeId } },
-        registrationStatus: 'COMPLETED',
-      }),
-    }).catch((err) => {
-      console.error('Failed to finalize onboarding progress:', err);
-    });
+    // Update progress in background without blocking UI
+    try {
+      await saveProgress({ 
+        currentStep: 9, 
+        nextStep: 9, 
+        markStepComplete: true, 
+        formDataPatch: { final: { submitted: true, storeId } } 
+      });
+    } catch (err) {
+      console.error('Background progress update failed (non-critical):', err);
+      // Don't show error to user as registration is already successful
+    }
   };
 
   const handleRegisterNewStore = () => {
@@ -1325,8 +1798,8 @@ const StoreRegistrationForm = () => {
       min_order_amount: 0,
       delivery_radius_km: 5,
       is_pure_veg: false,
-      accepts_online_payment: true,
-      accepts_cash: true,
+      accepts_online_payment: false,
+      accepts_cash: false,
       store_hours: {
         monday: { closed: false, slot1_open: "09:00", slot1_close: "22:00", slot2_open: "", slot2_close: "" },
         tuesday: { closed: false, slot1_open: "09:00", slot1_close: "22:00", slot2_open: "", slot2_close: "" },
@@ -1459,7 +1932,7 @@ const StoreRegistrationForm = () => {
               {/* Additional Info */}
               <div className="mt-6 sm:mt-8 pt-4 sm:pt-6 border-t border-slate-200 text-center">
                 <p className="text-xs sm:text-sm text-slate-500">
-                  Need help? Contact support at <span className="text-indigo-600">support@store.com</span>
+                  Need help? Contact support at <a href="mailto:partnerhelp@gatimitra.in" className="text-indigo-600 hover:underline">partnerhelp@gatimitra.in</a>
                 </p>
               </div>
             </div>
@@ -1488,10 +1961,13 @@ const StoreRegistrationForm = () => {
                   </div>
                 )}
               </div>
-              {/* Mobile only: PID below logo */}
+              {/* Mobile only: PID and Store ID below logo */}
               {parentInfo && (
-                <div className="sm:hidden text-[11px] text-slate-600 truncate mt-0.5">
-                  PID: {parentInfo.parent_merchant_id}
+                <div className="sm:hidden text-[11px] text-slate-600 truncate mt-0.5 space-y-0.5">
+                  <div>PID: {parentInfo.parent_merchant_id}</div>
+                  {(currentStoreId || draftStorePublicId) && (
+                    <div className="font-mono font-semibold text-indigo-700">Store ID: {currentStoreId || draftStorePublicId}</div>
+                  )}
                 </div>
               )}
             </div>
@@ -1584,8 +2060,23 @@ const StoreRegistrationForm = () => {
                 <span className="text-slate-500 ml-1">(PID: {parentInfo.parent_merchant_id})</span>
               </p>
             )}
+            {(currentStoreId || draftStorePublicId) && (
+              <p className="text-xs text-slate-600 truncate mt-1.5 pt-1.5 border-t border-slate-100">
+                <span className="font-medium text-slate-500">Store ID</span>
+                <span className="ml-1 font-mono font-semibold text-indigo-700">{currentStoreId || draftStorePublicId}</span>
+              </p>
+            )}
           </div>
-          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-2 sm:px-3 space-y-0.5 sm:space-y-1 hide-scrollbar">
+          {/* Store ID above steps (visible when sidebar shows labels, i.e. sm+) */}
+          {(currentStoreId || draftStorePublicId) && (
+            <div className="flex-none px-2 sm:px-3 pb-1.5 sm:pb-2 lg:hidden">
+              <p className="text-[11px] sm:text-xs text-slate-600 truncate">
+                <span className="font-medium text-slate-500">Store ID</span>
+                <span className="ml-1 font-mono font-semibold text-indigo-700">{currentStoreId || draftStorePublicId}</span>
+              </p>
+            </div>
+          )}
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-2 sm:px-3 space-y-0.5 hide-scrollbar">
             {stepLabels.map((label, idx) => {
               const stepNum = idx + 1;
               const isCurrent = stepNum === step;
@@ -1600,9 +2091,12 @@ const StoreRegistrationForm = () => {
                   onClick={() => {
                     if (canGoTo && stepNum !== step) {
                       setStep(stepNum);
+                      if (typeof window !== 'undefined') {
+                        localStorage.setItem('registerStoreCurrentStep', String(stepNum));
+                      }
                     }
                   }}
-                  className={`w-full flex items-center gap-2 py-1.5 sm:py-2 px-2 rounded-lg text-left transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-inset disabled:opacity-60 disabled:cursor-not-allowed disabled:pointer-events-none ${
+                  className={`w-full flex items-center gap-2 py-1 sm:py-1.5 px-2 rounded-lg text-left transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-inset disabled:opacity-60 disabled:cursor-not-allowed disabled:pointer-events-none ${
                     isCurrent ? 'bg-indigo-50 border border-indigo-200' : canGoTo ? 'hover:bg-slate-50 cursor-pointer' : ''
                   }`}
                   aria-current={isCurrent ? 'step' : undefined}
@@ -1669,6 +2163,51 @@ const StoreRegistrationForm = () => {
         </div>
       )}
 
+      {/* Centralized confirmation / warning modal (GatiMitra style, centered) */}
+      {confirmModal && (
+        <div className="fixed inset-0 z-[2210] flex items-center justify-center p-4 bg-black/50" aria-modal="true" role="dialog">
+          <div className={`relative z-[2211] w-full max-w-md rounded-xl bg-white shadow-xl border p-6 text-center ${
+            confirmModal.variant === 'error' ? 'border-red-200' : confirmModal.variant === 'warning' ? 'border-amber-200' : 'border-slate-200'
+          }`}>
+            {(confirmModal.variant === 'warning' || confirmModal.variant === 'error') && (
+              <div className="flex justify-center mb-4">
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
+                  confirmModal.variant === 'error' ? 'bg-red-100' : 'bg-amber-100'
+                }`}>
+                  <span className={`text-2xl font-bold ${
+                    confirmModal.variant === 'error' ? 'text-red-600' : 'text-amber-600'
+                  }`}>!</span>
+                </div>
+              </div>
+            )}
+            <h3 className={`text-lg font-bold mb-2 ${
+              confirmModal.variant === 'error' ? 'text-red-800' : confirmModal.variant === 'warning' ? 'text-slate-800' : 'text-slate-800'
+            }`}>
+              {confirmModal.title}
+            </h3>
+            <p className="text-sm text-slate-600 mb-6">{confirmModal.message}</p>
+            <div className="flex gap-3 justify-center">
+              <button
+                type="button"
+                onClick={() => { confirmModal.onCancel?.(); setConfirmModal(null); }}
+                className="px-4 py-2.5 rounded-lg border-2 border-indigo-500 bg-white text-indigo-600 font-medium hover:bg-indigo-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => { confirmModal.onConfirm(); }}
+                className={`px-4 py-2.5 rounded-lg font-medium text-white ${
+                  confirmModal.variant === 'error' ? 'bg-red-600 hover:bg-red-700' : 'bg-indigo-600 hover:bg-indigo-700'
+                }`}
+              >
+                {confirmModal.confirmLabel ?? 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Raise a ticket form - same as header Help; opens from sidebar Help; uses same API/DB */}
       <MerchantHelpTicket
         pageContext="store-onboarding"
@@ -1685,16 +2224,17 @@ const StoreRegistrationForm = () => {
         {/* Step 1: Basic Store Information */}
         {step === 1 && (
           <div className="min-h-full flex items-start justify-center">
-            <div className="w-full max-w-2xl bg-white rounded-xl shadow-sm border border-slate-200">
-              <div className="p-4 sm:p-5">
-                <div className="flex items-center gap-2 mb-4">
-                  <div className="p-1.5 bg-indigo-50 rounded-lg">
-                    <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h1m0 0h-1m1 0v4m-5-9h10l1 7H4l1-7z" />
-                    </svg>
+            <div className="w-full max-w-2xl space-y-4">
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200">
+                <div className="p-4 sm:p-5">
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className="p-1.5 bg-indigo-50 rounded-lg">
+                      <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h1m0 0h-1m1 0v4m-5-9h10l1 7H4l1-7z" />
+                      </svg>
+                    </div>
+                    <h2 className="text-base font-bold text-slate-800">Basic Store Information</h2>
                   </div>
-                  <h2 className="text-base font-bold text-slate-800">Basic Store Information</h2>
-                </div>
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
                     <div>
@@ -1845,6 +2385,7 @@ const StoreRegistrationForm = () => {
                 </div>
               </div>
             </div>
+            </div>
           </div>
         )}
 
@@ -1852,10 +2393,10 @@ const StoreRegistrationForm = () => {
         {step === 2 && (
           <div className="h-full flex flex-col xl:flex-row gap-4">
             {/* Left Side - Form */}
-            <div className="w-full xl:w-2/5 h-auto xl:h-full">
+            <div className="w-full xl:w-2/5 h-auto xl:h-full min-w-0">
               <div className="bg-white rounded-xl shadow-sm border border-slate-200 h-full overflow-hidden">
-                <div className="p-5 h-full overflow-y-auto hide-scrollbar">
-                  <div className="flex items-center gap-2 mb-5">
+                <div className="p-3 sm:p-5 h-full overflow-y-auto hide-scrollbar">
+                  <div className="flex items-center gap-2 mb-4 sm:mb-5">
                     <div className="p-2 bg-indigo-50 rounded-lg">
                       <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
@@ -1888,11 +2429,11 @@ const StoreRegistrationForm = () => {
                           </button>
                           <button
                             type="button"
-                            onClick={handleUseCurrentLocation}
-                            disabled={isFetchingCurrentLocation}
-                            className="px-3 py-2 text-sm border border-indigo-300 text-indigo-700 rounded-lg hover:bg-indigo-50 disabled:opacity-50 font-medium whitespace-nowrap"
+                            disabled
+                            title="Temporarily disabled"
+                            className="px-3 py-2 text-sm border border-slate-200 text-slate-400 rounded-lg bg-slate-50 cursor-not-allowed font-medium whitespace-nowrap"
                           >
-                            {isFetchingCurrentLocation ? 'Locating...' : 'Use current location'}
+                            Use current location
                           </button>
                         </div>
                         {locationNotice && (
@@ -1936,7 +2477,7 @@ const StoreRegistrationForm = () => {
                         required
                       />
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <label className="block text-sm font-medium text-slate-700 mb-2">
                           Flat / Unit No.
@@ -1977,7 +2518,7 @@ const StoreRegistrationForm = () => {
                         placeholder="Building, block, complex name"
                       />
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <label className="block text-sm font-medium text-slate-700 mb-2">
                           City *
@@ -2005,7 +2546,7 @@ const StoreRegistrationForm = () => {
                         />
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <label className="block text-sm font-medium text-slate-700 mb-2">
                           Postal Code *
@@ -2041,7 +2582,7 @@ const StoreRegistrationForm = () => {
                         </svg>
                         GPS Coordinates
                       </div>
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <div className="text-xs text-slate-600 mb-2">Latitude</div>
                           <input
@@ -2098,20 +2639,20 @@ const StoreRegistrationForm = () => {
                 </div>
               </div>
             </div>
-            {/* Right Side - Map */}
-            <div className="w-full xl:w-3/5 h-[360px] sm:h-[420px] xl:h-full">
+            {/* Right Side - Map (stacks below form on small/medium) */}
+            <div className="w-full xl:w-3/5 min-h-[280px] h-[280px] sm:h-[360px] xl:min-h-0 xl:h-full">
               <div className="bg-white rounded-xl shadow-sm border border-slate-200 h-full overflow-hidden">
-                <div className="p-5 h-full flex flex-col">
-                  <div className="flex items-center justify-between mb-4">
+                <div className="p-3 sm:p-5 h-full flex flex-col">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
                     <div className="flex items-center gap-2">
-                      <div className="p-2 bg-rose-50 rounded-lg">
+                      <div className="p-2 bg-rose-50 rounded-lg shrink-0">
                         <svg className="w-5 h-5 text-rose-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
                         </svg>
                       </div>
-                      <h3 className="font-bold text-slate-800">Location Map</h3>
+                      <h3 className="font-bold text-slate-800 text-sm sm:text-base">Location Map</h3>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <div className="inline-flex items-center rounded-lg border border-slate-200 bg-white p-1">
                         <button
                           type="button"
@@ -2160,14 +2701,14 @@ const StoreRegistrationForm = () => {
                       onMapClick={handleMapClick}
                     />
                   </div>
-                  <div className="mt-4 text-xs text-slate-600">
-                    <div className="flex items-center gap-3">
+                  <div className="mt-3 sm:mt-4 text-xs text-slate-600">
+                    <div className="flex flex-col xs:flex-row flex-wrap gap-1 sm:gap-3">
                       <div className="flex items-center gap-1">
-                        <div className="w-3 h-3 bg-rose-500 rounded-full"></div>
+                        <div className="w-3 h-3 bg-rose-500 rounded-full shrink-0"></div>
                         <span>Drag marker or click on map to set location</span>
                       </div>
                       <div className="flex items-center gap-1">
-                        <svg className="w-3 h-3 text-indigo-500" fill="currentColor" viewBox="0 0 20 20">
+                        <svg className="w-3 h-3 text-indigo-500 shrink-0" fill="currentColor" viewBox="0 0 20 20">
                           <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
                         </svg>
                         <span>Search for exact address</span>
@@ -2199,7 +2740,30 @@ const StoreRegistrationForm = () => {
                 <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
                   <button
                     type="button"
-                    onClick={() => setMenuUploadMode('IMAGE')}
+                    onClick={() => {
+                      const hasUploads = menuImageFiles.length > 0 || menuUploadedImageUrls.length > 0 || !!menuSpreadsheetFile || !!menuUploadedSpreadsheetUrl;
+                      if (menuUploadMode !== 'IMAGE' && hasUploads) {
+                        setConfirmModal({
+                          title: 'Are you sure?',
+                          message: 'This action will remove all of your uploaded files.',
+                          variant: 'warning',
+                          confirmLabel: 'Yes, discard',
+                          onConfirm: () => {
+                            setMenuUploadMode('IMAGE');
+                            setMenuImageFiles([]);
+                            setMenuUploadedImageUrls([]);
+                            setMenuUploadedImageNames([]);
+                            setMenuSpreadsheetFile(null);
+                            setMenuUploadedSpreadsheetUrl(null);
+                            setMenuUploadedSpreadsheetFileName(null);
+                            setConfirmModal(null);
+                          },
+                          onCancel: () => setConfirmModal(null),
+                        });
+                      } else {
+                        setMenuUploadMode('IMAGE');
+                      }
+                    }}
                     className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition ${
                       menuUploadMode === 'IMAGE' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-800'
                     }`}
@@ -2208,7 +2772,30 @@ const StoreRegistrationForm = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setMenuUploadMode('CSV')}
+                    onClick={() => {
+                      const hasUploads = menuImageFiles.length > 0 || menuUploadedImageUrls.length > 0 || !!menuSpreadsheetFile || !!menuUploadedSpreadsheetUrl;
+                      if (menuUploadMode !== 'CSV' && hasUploads) {
+                        setConfirmModal({
+                          title: 'Are you sure?',
+                          message: 'This action will remove all of your uploaded files.',
+                          variant: 'warning',
+                          confirmLabel: 'Yes, discard',
+                          onConfirm: () => {
+                            setMenuUploadMode('CSV');
+                            setMenuImageFiles([]);
+                            setMenuUploadedImageUrls([]);
+                            setMenuUploadedImageNames([]);
+                            setMenuSpreadsheetFile(null);
+                            setMenuUploadedSpreadsheetUrl(null);
+                            setMenuUploadedSpreadsheetFileName(null);
+                            setConfirmModal(null);
+                          },
+                          onCancel: () => setConfirmModal(null),
+                        });
+                      } else {
+                        setMenuUploadMode('CSV');
+                      }
+                    }}
                     className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition ${
                       menuUploadMode === 'CSV' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-800'
                     }`}
@@ -2310,7 +2897,18 @@ const StoreRegistrationForm = () => {
                         </div>
                         <button
                           type="button"
-                          onClick={() => removeMenuImage(idx)}
+                          onClick={() => {
+                            setConfirmModal({
+                              title: 'Remove uploaded file?',
+                              message: 'You are about to remove this file. This action cannot be undone.',
+                              variant: 'warning',
+                              onConfirm: () => {
+                                setMenuImageFiles((p) => p.filter((_, i) => i !== idx));
+                                setConfirmModal(null);
+                              },
+                              onCancel: () => setConfirmModal(null),
+                            });
+                          }}
                           className="text-xs text-rose-600 hover:text-rose-700"
                         >
                           Remove
@@ -2320,12 +2918,23 @@ const StoreRegistrationForm = () => {
                     {menuImageFiles.length === 0 && menuUploadedImageUrls.map((url, idx) => (
                       <div key={`${url}-${idx}`} className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 bg-white">
                         <div className="min-w-0">
-                          <p className="text-sm text-slate-700 truncate">Uploaded menu image {idx + 1}</p>
-                          <p className="text-xs text-emerald-600">Saved to R2</p>
+                          <p className="text-sm text-slate-700 truncate">{menuUploadedImageNames[idx] || `Image ${idx + 1}`}</p>
                         </div>
                         <button
                           type="button"
-                          onClick={() => removeMenuImage(idx)}
+                          onClick={() => {
+                            setConfirmModal({
+                              title: 'Remove uploaded file?',
+                              message: 'You are about to remove this file. This action cannot be undone.',
+                              variant: 'warning',
+                              onConfirm: () => {
+                                setMenuUploadedImageUrls((p) => p.filter((_, i) => i !== idx));
+                                setMenuUploadedImageNames((p) => p.filter((_, i) => i !== idx));
+                                setConfirmModal(null);
+                              },
+                              onCancel: () => setConfirmModal(null),
+                            });
+                          }}
                           className="text-xs text-rose-600 hover:text-rose-700"
                         >
                           Remove
@@ -2338,19 +2947,29 @@ const StoreRegistrationForm = () => {
                   <div className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 bg-white">
                     <div className="min-w-0">
                       <p className="text-sm text-slate-700 truncate">
-                        {menuSpreadsheetFile ? menuSpreadsheetFile.name : 'Uploaded spreadsheet'}
+                        {menuSpreadsheetFile?.name ?? menuUploadedSpreadsheetFileName ?? 'Spreadsheet file'}
                       </p>
-                      <p className="text-xs text-slate-500">
-                        {menuSpreadsheetFile
-                          ? `${(menuSpreadsheetFile.size / (1024 * 1024)).toFixed(2)} MB`
-                          : 'Saved to R2'}
-                      </p>
+                      {menuSpreadsheetFile && (
+                        <p className="text-xs text-slate-500">
+                          {(menuSpreadsheetFile.size / (1024 * 1024)).toFixed(2)} MB
+                        </p>
+                      )}
                     </div>
                     <button
                       type="button"
                       onClick={() => {
-                        setMenuSpreadsheetFile(null);
-                        setMenuUploadedSpreadsheetUrl(null);
+                        setConfirmModal({
+                          title: 'Remove uploaded file?',
+                          message: 'You are about to remove this file. This action cannot be undone.',
+                          variant: 'warning',
+                          onConfirm: () => {
+                            setMenuSpreadsheetFile(null);
+                            setMenuUploadedSpreadsheetUrl(null);
+                            setMenuUploadedSpreadsheetFileName(null);
+                            setConfirmModal(null);
+                          },
+                          onCancel: () => setConfirmModal(null),
+                        });
                       }}
                       className="text-xs text-rose-600 hover:text-rose-700"
                     >
@@ -2367,12 +2986,15 @@ const StoreRegistrationForm = () => {
         {step === 4 && (
           <div className="w-full h-full">
             <CombinedDocumentStoreSetup
+              key={`step-4-docs-${documents.pan_number || 'new'}-${(documents as any).pan_image_url ? 'has-img' : 'no-img'}`}
               initialDocuments={documents}
               onDocumentComplete={(docs) => void handleDocumentUploadComplete(docs as unknown as DocumentData)}
+              onDocumentSave={(docs) => saveDocumentProgress(docs as unknown as DocumentData)}
               onBack={prevStep}
               actionLoading={actionLoading}
               businessType={formData.store_type === 'OTHERS' ? formData.custom_store_type : formData.store_type}
               storeType={formData.store_type}
+              initialStep="documents"
             />
           </div>
         )}
@@ -2383,14 +3005,65 @@ const StoreRegistrationForm = () => {
             <CombinedDocumentStoreSetup
               initialStoreSetup={storeSetup}
               onStoreSetupComplete={handleStoreSetupComplete}
+              onStoreHoursSave={(hours) => saveStoreHoursProgress(hours)}
               onBack={async () => {
-                setActionLoading(true);
-                try {
-                  await saveProgress({ currentStep: 5, nextStep: 4, markStepComplete: false, formDataPatch: getStepPatch(5) });
-                  setStep(4);
-                } finally {
-                  setActionLoading(false);
-                }
+                // Navigate immediately
+                setStep(4);
+                
+                // Re-hydrate documents from database in background
+                const storeId = selectedStorePublicId || (typeof window !== 'undefined' ? localStorage.getItem('registerStoreCurrentStepStoreId') : null) || '';
+                const url = storeId ? `/api/auth/register-store-progress?storePublicId=${encodeURIComponent(storeId)}` : '/api/auth/register-store-progress';
+                
+                // Save and hydrate in background
+                Promise.all([
+                  saveProgress({ currentStep: 5, nextStep: 4, markStepComplete: false, formDataPatch: getStepPatch(5) }),
+                  fetch(url).then(res => res.json())
+                ]).then(([saveResult, payload]) => {
+                  if (payload?.success && payload?.progress) {
+                    const saved = payload.progress.form_data || {};
+                    if (saved.step4) {
+                      const s4 = saved.step4 as Record<string, unknown>;
+                      setDocuments((prev) => ({
+                        ...prev,
+                        pan_number: saved.step4.pan_number ?? prev.pan_number,
+                        pan_holder_name: saved.step4.pan_holder_name ?? prev.pan_holder_name,
+                        aadhar_number: saved.step4.aadhar_number ?? prev.aadhar_number,
+                        aadhar_holder_name: saved.step4.aadhar_holder_name ?? prev.aadhar_holder_name,
+                        fssai_number: saved.step4.fssai_number ?? prev.fssai_number,
+                        gst_number: saved.step4.gst_number ?? prev.gst_number,
+                        drug_license_number: saved.step4.drug_license_number ?? prev.drug_license_number,
+                        pharmacist_registration_number: saved.step4.pharmacist_registration_number ?? prev.pharmacist_registration_number,
+                        expiry_date: saved.step4.expiry_date ?? prev.expiry_date,
+                        fssai_expiry_date: saved.step4.fssai_expiry_date ?? prev.fssai_expiry_date,
+                        drug_license_expiry_date: saved.step4.drug_license_expiry_date ?? prev.drug_license_expiry_date,
+                        pharmacist_expiry_date: saved.step4.pharmacist_expiry_date ?? prev.pharmacist_expiry_date,
+                        other_document_type: saved.step4.other_document_type ?? prev.other_document_type,
+                        other_document_number: saved.step4.other_document_number ?? prev.other_document_number,
+                        other_document_name: saved.step4.other_document_name ?? prev.other_document_name,
+                        other_document_expiry_date: saved.step4.other_document_expiry_date ?? prev.other_document_expiry_date,
+                        pan_image_url: typeof s4.pan_image_url === 'string' ? s4.pan_image_url : (prev as any).pan_image_url,
+                        aadhar_front_url: typeof s4.aadhar_front_url === 'string' ? s4.aadhar_front_url : (prev as any).aadhar_front_url,
+                        aadhar_back_url: typeof s4.aadhar_back_url === 'string' ? s4.aadhar_back_url : (prev as any).aadhar_back_url,
+                        fssai_image_url: typeof s4.fssai_image_url === 'string' ? s4.fssai_image_url : (prev as any).fssai_image_url,
+                        gst_image_url: typeof s4.gst_image_url === 'string' ? s4.gst_image_url : (prev as any).gst_image_url,
+                        drug_license_image_url: typeof s4.drug_license_image_url === 'string' ? s4.drug_license_image_url : (prev as any).drug_license_image_url,
+                        pharmacist_certificate_url: typeof s4.pharmacist_certificate_url === 'string' ? s4.pharmacist_certificate_url : (prev as any).pharmacist_certificate_url,
+                        pharmacy_council_registration_url: typeof s4.pharmacy_council_registration_url === 'string' ? s4.pharmacy_council_registration_url : (prev as any).pharmacy_council_registration_url,
+                        other_document_file_url: typeof s4.other_document_file_url === 'string' ? s4.other_document_file_url : (prev as any).other_document_file_url,
+                        bank: saved.step4.bank && typeof saved.step4.bank === 'object'
+                          ? {
+                              ...(prev.bank || {}),
+                              ...saved.step4.bank,
+                              bank_proof_file_url: (saved.step4.bank as any).bank_proof_file_url ?? (prev.bank as any)?.bank_proof_file_url,
+                              upi_qr_screenshot_url: (saved.step4.bank as any).upi_qr_screenshot_url ?? (prev.bank as any)?.upi_qr_screenshot_url,
+                            }
+                          : prev.bank,
+                      }));
+                    }
+                  }
+                }).catch(err => {
+                  console.error('Background save/hydrate failed:', err);
+                });
               }}
               actionLoading={actionLoading}
               businessType={formData.store_type === 'OTHERS' ? formData.custom_store_type : formData.store_type}
@@ -2421,14 +3094,11 @@ const StoreRegistrationForm = () => {
               }}
               parentInfo={parentInfo}
               onBack={() => setStep(5)}
-              onContinueToPlans={async () => {
-                setActionLoading(true);
-                try {
-                  await saveProgress({ currentStep: 6, nextStep: 7, markStepComplete: true, formDataPatch: getStepPatch(6) });
-                  setStep(7);
-                } finally {
-                  setActionLoading(false);
-                }
+              onContinueToPlans={() => {
+                setStep(7);
+                saveProgress({ currentStep: 6, nextStep: 7, markStepComplete: true, formDataPatch: getStepPatch(6) }).catch(err => {
+                  console.error('Background save failed:', err);
+                });
               }}
               actionLoading={actionLoading}
             />
@@ -2442,23 +3112,18 @@ const StoreRegistrationForm = () => {
               selectedPlanId={selectedPlanId}
               onSelectPlan={setSelectedPlanId}
               parentInfo={parentInfo}
-              onBack={async () => {
-                setActionLoading(true);
-                try {
-                  await saveProgress({ currentStep: 7, nextStep: 6, markStepComplete: false, formDataPatch: { step7: { selectedPlanId: selectedPlanId || 'FREE' } } });
-                  setStep(6);
-                } finally {
-                  setActionLoading(false);
-                }
+              step1={formData}
+              onBack={() => {
+                setStep(6);
+                saveProgress({ currentStep: 7, nextStep: 6, markStepComplete: false, formDataPatch: { step7: { selectedPlanId: selectedPlanId || 'FREE' } } }).catch(err => {
+                  console.error('Background save failed:', err);
+                });
               }}
-              onContinue={async () => {
-                setActionLoading(true);
-                try {
-                  await saveProgress({ currentStep: 7, nextStep: 8, markStepComplete: true, formDataPatch: { step7: { selectedPlanId: selectedPlanId || 'FREE' } } });
-                  setStep(8);
-                } finally {
-                  setActionLoading(false);
-                }
+              onContinue={() => {
+                setStep(8);
+                saveProgress({ currentStep: 7, nextStep: 8, markStepComplete: true, formDataPatch: { step7: { selectedPlanId: selectedPlanId || 'FREE' } } }).catch(err => {
+                  console.error('Background save failed:', err);
+                });
               }}
               actionLoading={actionLoading}
             />
@@ -2475,24 +3140,18 @@ const StoreRegistrationForm = () => {
               parentInfo={parentInfo}
               termsContent={agreementTemplate?.content_markdown || MERCHANT_PARTNERSHIP_TERMS}
               logoUrl={typeof process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL === "string" ? process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL : undefined}
-              onBack={async () => {
-                setActionLoading(true);
-                try {
-                  await saveProgress({ currentStep: 8, nextStep: 7, markStepComplete: false, formDataPatch: {} });
-                  setStep(7);
-                } finally {
-                  setActionLoading(false);
-                }
+              onBack={() => {
+                setStep(7);
+                saveProgress({ currentStep: 8, nextStep: 7, markStepComplete: false, formDataPatch: {} }).catch(err => {
+                  console.error('Background save failed:', err);
+                });
               }}
-              onContinue={async (text) => {
+              onContinue={(text) => {
                 setContractTextForSignature(text);
-                setActionLoading(true);
-                try {
-                  await saveProgress({ currentStep: 8, nextStep: 9, markStepComplete: true, formDataPatch: {} });
-                  setStep(9);
-                } finally {
-                  setActionLoading(false);
-                }
+                setStep(9);
+                saveProgress({ currentStep: 8, nextStep: 9, markStepComplete: true, formDataPatch: {} }).catch(err => {
+                  console.error('Background save failed:', err);
+                });
               }}
               actionLoading={actionLoading}
             />
@@ -2507,6 +3166,7 @@ const StoreRegistrationForm = () => {
                 ...formData,
                 __draftStoreDbId: draftStoreDbId ?? undefined,
                 __draftStorePublicId: draftStorePublicId ?? undefined,
+                store_public_id: currentStoreId || draftStorePublicId, // Pass the Store ID for final submission
               }}
               step2={formData}
               documents={documents}
@@ -2522,14 +3182,11 @@ const StoreRegistrationForm = () => {
               agreementTemplate={agreementTemplate}
               defaultAgreementText={agreementTemplate?.content_markdown || MERCHANT_PARTNERSHIP_TERMS}
               contractTextForPdf={contractTextForSignature}
-              onBack={async () => {
-                setActionLoading(true);
-                try {
-                  await saveProgress({ currentStep: 9, nextStep: 8, markStepComplete: false, formDataPatch: {} });
-                  setStep(8);
-                } finally {
-                  setActionLoading(false);
-                }
+              onBack={() => {
+                setStep(8);
+                saveProgress({ currentStep: 9, nextStep: 8, markStepComplete: false, formDataPatch: {} }).catch(err => {
+                  console.error('Background save failed:', err);
+                });
               }}
               actionLoading={actionLoading}
               onSuccess={handleRegistrationSuccess}
@@ -2553,27 +3210,27 @@ const StoreRegistrationForm = () => {
                 <button
                   type="button"
                   onClick={prevStep}
-                  disabled={actionLoading}
+                  disabled={uploadLoading}
                   className="px-4 py-2.5 text-sm border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium shadow-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
                 >
-                  {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  {uploadLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                   ← Previous
                 </button>
               )}
               <button
                 type="button"
                 onClick={nextStep}
-                disabled={actionLoading}
+                disabled={uploadLoading}
                 className="px-5 py-2.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
               >
-                {actionLoading ? (
+                {uploadLoading ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (step === 2 || step === 3) ? (
+                ) : (
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
                   </svg>
-                ) : null}
-                {actionLoading ? (step === 2 || step === 3 ? 'Saving...' : 'Loading...') : (step === 2 || step === 3 ? 'Save & Continue' : 'Continue')}
+                )}
+                {uploadLoading ? 'Uploading...' : 'Save & Continue'}
               </button>
             </div>
           </div>

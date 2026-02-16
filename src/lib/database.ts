@@ -123,15 +123,22 @@ export const deleteMenuCategory = async (categoryId: number) => {
 
 export const fetchStoreById = async (storeId: string): Promise<MerchantStore | null> => {
   try {
+    if (!storeId || String(storeId).trim() === '') {
+      return null;
+    }
     const { data, error } = await supabase
-       .from('merchant_stores')
+      .from('merchant_stores')
       .select('*')
-      .eq('store_id', storeId)
-      .single();
-    if (error) throw error;
-    return data as MerchantStore;
-  } catch (error) {
-    console.error('Error fetching store:', error);
+      .eq('store_id', String(storeId).trim())
+      .maybeSingle();
+    if (error) {
+      console.error('Error fetching store:', error.message ?? error, error.code ?? '', error.details ?? '');
+      return null;
+    }
+    return data as MerchantStore | null;
+  } catch (error: unknown) {
+    const err = error as { message?: string; code?: string };
+    console.error('Error fetching store:', err?.message ?? err?.code ?? error);
     return null;
   }
 }
@@ -240,15 +247,35 @@ export const fetchStoreOperatingHours = async (storeId: string) => {
       .from('merchant_stores')
       .select('id')
       .eq('store_id', storeId)
-      .single();
-    if (storeError || !storeData) throw storeError || new Error('Store not found');
+      .maybeSingle();
+    
+    if (storeError) {
+      console.error('Error fetching store:', storeError);
+      return [];
+    }
+    
+    if (!storeData || !storeData.id) {
+      // Store not found, return empty array (not an error)
+      return [];
+    }
+    
     const storeBigIntId = storeData.id;
     const { data, error } = await supabase
       .from('merchant_store_operating_hours')
       .select('*')
       .eq('store_id', storeBigIntId)
-      .single();
-    if (error || !data) throw error || new Error('Operating hours not found');
+      .maybeSingle();
+    
+    if (error) {
+      console.error('Error fetching operating hours:', error);
+      return [];
+    }
+    
+    // If no operating hours found, return empty array (not an error - store might not have set hours yet)
+    if (!data) {
+      return [];
+    }
+    
     // Transform to array of days
     const days = [
       { key: 'monday', label: 'Monday' },
@@ -259,14 +286,15 @@ export const fetchStoreOperatingHours = async (storeId: string) => {
       { key: 'saturday', label: 'Saturday' },
       { key: 'sunday', label: 'Sunday' }
     ];
+    
     return days.map(day => ({
       day_label: day.label,
-      open: data[`${day.key}_open`],
-      slot1_start: data[`${day.key}_slot1_start`],
-      slot1_end: data[`${day.key}_slot1_end`],
-      slot2_start: data[`${day.key}_slot2_start`],
-      slot2_end: data[`${day.key}_slot2_end`],
-      total_duration_minutes: data[`${day.key}_total_duration_minutes`],
+      open: data[`${day.key}_open`] ?? false,
+      slot1_start: data[`${day.key}_slot1_start`] ?? null,
+      slot1_end: data[`${day.key}_slot1_end`] ?? null,
+      slot2_start: data[`${day.key}_slot2_start`] ?? null,
+      slot2_end: data[`${day.key}_slot2_end`] ?? null,
+      total_duration_minutes: data[`${day.key}_total_duration_minutes`] ?? 0,
     }));
   } catch (error) {
     console.error('Error fetching operating hours:', error);
@@ -1241,9 +1269,45 @@ export const fetchStoreDocuments = async (storeId: number) => {
     .order('created_at', { ascending: false });
   if (error) {
     console.error('Error fetching store documents:', error);
+    return null;
+  }
+  return data?.[0] || null; // Return single document record
+};
+
+// Fetch bank accounts for a store
+export const fetchStoreBankAccounts = async (storeId: number) => {
+  try {
+    console.log('Fetching bank accounts for store_id (internal id):', storeId);
+    if (!storeId || isNaN(storeId)) {
+      console.error('Invalid store_id:', storeId);
+      return [];
+    }
+    
+    // First try with is_active filter
+    let query = supabase
+      .from('merchant_store_bank_accounts')
+      .select('*')
+      .eq('store_id', storeId)
+      .order('is_primary', { ascending: false })
+      .order('created_at', { ascending: false });
+    
+    const { data, error } = await query;
+    
+    if (error) {
+      console.error('Error fetching bank accounts:', error);
+      console.error('Error details:', JSON.stringify(error, null, 2));
+      return [];
+    }
+    
+    // Filter active accounts in memory (more reliable)
+    const activeAccounts = (data || []).filter(acc => acc.is_active !== false);
+    
+    console.log(`Bank accounts fetched: ${data?.length || 0} total, ${activeAccounts.length} active`, activeAccounts);
+    return activeAccounts.length > 0 ? activeAccounts : (data || []);
+  } catch (err) {
+    console.error('Exception fetching bank accounts:', err);
     return [];
   }
-  return data || [];
 };
 
 export const fetchStoreCounts = async (fromDate?: string, toDate?: string) => {

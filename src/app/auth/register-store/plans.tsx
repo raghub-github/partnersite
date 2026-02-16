@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import { ChevronLeft, Check, Info, Loader2, CheckCircle } from "lucide-react";
+import { ChevronLeft, Check, Info, Loader2, CheckCircle, Handshake, Eye } from "lucide-react";
+import { Dialog } from "@headlessui/react";
+import { useRouter } from "next/navigation";
 
 export interface OnboardingPlan {
   id: string;
@@ -24,7 +26,7 @@ const DEFAULT_PLANS: OnboardingPlan[] = [
     baseServiceFee: "0%",
     highlighted: true,
     features: [
-      `One-time onboarding fee ₹${PROMO_PRICE_TODAY}/- today (standard ₹${STANDARD_ONBOARDING_AMOUNT} — updatable by admin)`,
+      `One-time onboarding fee ₹${PROMO_PRICE_TODAY}/- today (standard ₹${STANDARD_ONBOARDING_AMOUNT} — updated by GatiMitra Team)`,
       "Base service fee 0% for initial period",
       "Real-time on-call support",
       "Weekly or daily payouts",
@@ -37,6 +39,7 @@ interface OnboardingPlansPageProps {
   selectedPlanId: string | null;
   onSelectPlan: (planId: string) => void;
   parentInfo: { id: number | null; name: string | null; parent_merchant_id: string | null } | null;
+  step1?: any; // Store data from step 1 to get store_id
   onBack: () => void;
   onContinue: () => void;
   actionLoading?: boolean;
@@ -60,6 +63,7 @@ export default function OnboardingPlansPage({
   selectedPlanId,
   onSelectPlan,
   parentInfo,
+  step1,
   onBack,
   onContinue,
   actionLoading = false,
@@ -68,11 +72,13 @@ export default function OnboardingPlansPage({
   const [paymentError, setPaymentError] = useState("");
   const [paymentStatusLoading, setPaymentStatusLoading] = useState(true);
   const [alreadyPaid, setAlreadyPaid] = useState(false);
+  const [showPaymentSuccessModal, setShowPaymentSuccessModal] = useState(false);
+  const router = useRouter();
 
   const plans = DEFAULT_PLANS;
   const canContinue = !!selectedPlanId;
 
-  // Check if this parent has already completed onboarding payment (e.g. after logout or navigating back)
+  // Check if this store has already completed onboarding payment (e.g. after logout or navigating back)
   useEffect(() => {
     if (!parentInfo?.id) {
       setPaymentStatusLoading(false);
@@ -81,15 +87,29 @@ export default function OnboardingPlansPage({
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(
-          `/api/onboarding/payment-status?merchantParentId=${encodeURIComponent(parentInfo!.id!)}`
-        );
+        // Get store_id from step1 or URL
+        const storePublicId = typeof window !== "undefined" 
+          ? new URLSearchParams(window.location.search).get("store_id") 
+          : null;
+        const storeId = storePublicId || step1?.store_public_id || step1?.__storePublicId || step1?.__draftStorePublicId || null;
+        
+        // Check payment by store_id if available, otherwise by parent_id
+        const url = storeId
+          ? `/api/onboarding/payment-status?merchantParentId=${encodeURIComponent(parentInfo!.id!)}&merchantStoreId=${encodeURIComponent(storeId)}`
+          : `/api/onboarding/payment-status?merchantParentId=${encodeURIComponent(parentInfo!.id!)}`;
+        
+        const res = await fetch(url);
         const data = await res.json();
         if (cancelled) return;
         if (data.success && data.alreadyPaid) {
+          console.log('[plans] Payment already completed for store:', storeId || 'parent', parentInfo.id);
           setAlreadyPaid(true);
+        } else {
+          console.log('[plans] Payment not completed or check failed:', data);
+          setAlreadyPaid(false);
         }
-      } catch {
+      } catch (err) {
+        console.error('[plans] Payment status check error:', err);
         if (!cancelled) setAlreadyPaid(false);
       } finally {
         if (!cancelled) setPaymentStatusLoading(false);
@@ -98,7 +118,7 @@ export default function OnboardingPlansPage({
     return () => {
       cancelled = true;
     };
-  }, [parentInfo?.id]);
+  }, [parentInfo?.id, step1]);
 
   const loadRazorpayScript = useCallback(() => {
     return new Promise<void>((resolve) => {
@@ -123,11 +143,18 @@ export default function OnboardingPlansPage({
     setPaying(true);
     setPaymentError("");
     try {
+      // Get store_id from URL or step1 data
+      const storePublicId = typeof window !== "undefined" 
+        ? new URLSearchParams(window.location.search).get("store_id") 
+        : null;
+      const storeId = storePublicId || step1?.store_public_id || step1?.__storePublicId || step1?.__draftStorePublicId || null;
+      
       const orderRes = await fetch("/api/onboarding/create-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           merchantParentId: parentInfo.id,
+          merchantStoreId: storeId, // Pass store_id to payment API
           planId: selectedPlanId,
           planName: plans.find((p) => p.id === selectedPlanId)?.name,
           amountPaise: PROMO_PRICE_TODAY * 100,
@@ -167,7 +194,9 @@ export default function OnboardingPlansPage({
             });
             const verifyData = await verifyRes.json();
             if (verifyData.success) {
-              onContinue();
+              // Show success popup instead of redirecting to agreement
+              setAlreadyPaid(true);
+              setShowPaymentSuccessModal(true);
             } else {
               setPaymentError(verifyData.error || "Payment verification failed.");
             }
@@ -187,7 +216,7 @@ export default function OnboardingPlansPage({
   return (
     <div className="min-h-full w-full bg-gradient-to-br from-slate-50 to-white">
       <div className="max-w-4xl mx-auto px-3 sm:px-6 py-6 sm:py-8 pb-32 sm:pb-36">
-        <div className="text-center mb-10">
+        <div className="text-center mb-6">
           <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-2">
             Your commission plan
           </h1>
@@ -196,7 +225,7 @@ export default function OnboardingPlansPage({
           </p>
         </div>
 
-        <div className="space-y-6 mb-10">
+        <div className="space-y-6 mb-6">
           {plans.map((plan) => {
             const isSelected = selectedPlanId === plan.id;
             return (
@@ -204,25 +233,25 @@ export default function OnboardingPlansPage({
                 key={plan.id}
                 type="button"
                 onClick={() => onSelectPlan(plan.id)}
-                className={`w-full text-left rounded-2xl border-2 p-6 transition-all ${
+                className={`w-full text-left rounded-2xl border-2 p-4 sm:p-5 transition-all ${
                   isSelected
                     ? "border-indigo-600 bg-indigo-50/50 shadow-md"
                     : "border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm"
                 }`}
               >
-                <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-2">
-                      <h2 className="text-xl font-bold text-slate-900">{plan.name}</h2>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <h2 className="text-lg sm:text-xl font-bold text-slate-900">{plan.name}</h2>
                       {plan.highlighted && (
                         <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
                           Recommended
                         </span>
                       )}
                     </div>
-                    <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm text-slate-700 mb-4">
+                    <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs sm:text-sm text-slate-700 mb-3">
                       <span className="flex items-center gap-1">
-                        <Info className="w-4 h-4 text-slate-400" />
+                        <Info className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-400" />
                         One-time onboarding fee <strong>₹{PROMO_PRICE_TODAY}/- today</strong>
                         {plan.onboardingFee !== PROMO_PRICE_TODAY && (
                           <span className="text-slate-500"> (standard ₹{plan.onboardingFee})</span>
@@ -230,22 +259,47 @@ export default function OnboardingPlansPage({
                       </span>
                       <span>Base service fee {plan.baseServiceFee}</span>
                     </div>
-                    <ul className="space-y-2">
+                    <ul className="space-y-1.5">
                       {plan.features.map((feature, idx) => (
-                        <li key={idx} className="flex items-start gap-2 text-sm text-slate-600">
-                          <Check className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                        <li key={idx} className="flex items-start gap-2 text-xs sm:text-sm text-slate-600">
+                          <Check className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-500 shrink-0 mt-0.5" />
                           {feature}
                         </li>
                       ))}
                     </ul>
+                    {/* Payment status on card */}
+                    {!paymentStatusLoading && alreadyPaid && (
+                      <div className="mt-3 pt-3 border-t border-emerald-200">
+                        <div className="flex items-start gap-2">
+                          <CheckCircle className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="text-xs sm:text-sm font-semibold text-emerald-900">Payment completed</p>
+                            <p className="text-[10px] sm:text-xs text-emerald-700 mt-0.5">
+                              Your onboarding payment has been recorded. Click Continue below to proceed to the agreement.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {/* Payment message on card */}
+                    {!paymentStatusLoading && !alreadyPaid && (
+                      <div className="mt-3 pt-3 border-t border-amber-200">
+                        <div className="flex items-start gap-2">
+                          <Info className="w-4 h-4 sm:w-5 sm:h-5 text-amber-600 shrink-0 mt-0.5" />
+                          <p className="text-[10px] sm:text-xs text-amber-800">
+                            Pay ₹{PROMO_PRICE_TODAY}/- today to proceed. Contract and agreement will be shown on the next step. You will need to read the full contract and sign digitally before submission.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center">
                     <div
-                      className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${
+                      className={`w-5 h-5 sm:w-6 sm:h-6 rounded-full border-2 flex items-center justify-center ${
                         isSelected ? "border-indigo-600 bg-indigo-600" : "border-slate-300"
                       }`}
                     >
-                      {isSelected && <Check className="w-4 h-4 text-white" />}
+                      {isSelected && <Check className="w-3 h-3 sm:w-4 sm:h-4 text-white" />}
                     </div>
                   </div>
                 </div>
@@ -260,28 +314,22 @@ export default function OnboardingPlansPage({
           </div>
         )}
 
-        {paymentStatusLoading ? (
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 mb-6 flex items-center gap-3 text-slate-600">
-            <Loader2 className="w-5 h-5 animate-spin shrink-0" />
-            <span>Checking payment status...</span>
-          </div>
-        ) : alreadyPaid ? (
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 mb-8 flex items-start gap-3">
-            <CheckCircle className="w-6 h-6 text-emerald-600 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold text-emerald-900">Payment already completed</p>
-              <p className="text-sm text-emerald-800 mt-1">
-                Your onboarding payment for this account has been recorded. Click Continue below to proceed to the agreement.
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-4 mb-8 text-sm text-amber-900">
-            <p>
-              Pay ₹{PROMO_PRICE_TODAY}/- today to proceed. Contract and agreement will be shown on the next step. You will need to read the full contract and sign digitally before submission.
-            </p>
+        {paymentStatusLoading && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 sm:p-4 mb-4 flex items-center gap-3 text-slate-600">
+            <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin shrink-0" />
+            <span className="text-xs sm:text-sm">Checking payment status...</span>
           </div>
         )}
+
+        {/* Commission Information Box */}
+        <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 sm:p-4 mb-6 flex items-start gap-2 sm:gap-3">
+          <Handshake className="w-4 h-4 sm:w-5 sm:h-5 text-indigo-600 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
+              Our commission structure is designed to be transparent and fair. All fees are clearly communicated upfront, and you'll receive detailed breakdowns in your monthly statements. For any questions about commission rates or charges, please contact our support team.
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Navigation - Bottom (padding so taskbar doesn't overlap) */}
@@ -294,12 +342,25 @@ export default function OnboardingPlansPage({
             className="flex items-center gap-2 px-3 sm:px-5 py-2.5 border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium disabled:opacity-60 disabled:cursor-not-allowed text-sm sm:text-base"
           >
             {actionLoading ? <Loader2 className="w-5 h-5 animate-spin shrink-0" /> : <ChevronLeft className="w-5 h-5 shrink-0" />}
-            Back
+            Previous
           </button>
-          {alreadyPaid ? (
+          {paymentStatusLoading ? (
             <button
               type="button"
-              onClick={onContinue}
+              disabled
+              className="px-6 sm:px-8 py-3 bg-indigo-600 text-white font-semibold rounded-xl opacity-50 cursor-not-allowed flex items-center gap-2"
+            >
+              <Loader2 className="w-5 h-5 animate-spin shrink-0" />
+              <span>Checking payment...</span>
+            </button>
+          ) : alreadyPaid ? (
+            <button
+              type="button"
+              onClick={() => {
+                // Ensure we proceed to agreement (step 8) when payment is completed
+                console.log('[plans] Continue clicked, alreadyPaid:', alreadyPaid);
+                onContinue();
+              }}
               disabled={actionLoading}
               className="px-6 sm:px-8 py-3 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
@@ -337,6 +398,56 @@ export default function OnboardingPlansPage({
           )}
         </div>
       </div>
+
+      {/* Payment Success Modal */}
+      {showPaymentSuccessModal && (
+        <Dialog open={showPaymentSuccessModal} onClose={() => {}} className="relative z-50">
+          <div className="fixed inset-0 bg-black/30 backdrop-blur-sm" aria-hidden="true" />
+          <div className="fixed inset-0 flex items-center justify-center p-4">
+            <Dialog.Panel className="mx-auto max-w-md w-full rounded-2xl bg-white/95 backdrop-blur-md p-6 sm:p-8 shadow-2xl border border-gray-200">
+              <div className="text-center">
+                {/* Success Icon */}
+                <div className="flex justify-center mb-4">
+                  <div className="w-16 h-16 sm:w-20 sm:h-20 bg-emerald-100 rounded-full flex items-center justify-center">
+                    <CheckCircle className="w-8 h-8 sm:w-10 sm:h-10 text-emerald-600" />
+                  </div>
+                </div>
+                
+                {/* Success Message */}
+                <Dialog.Title className="text-xl sm:text-2xl font-bold text-slate-800 mb-2">
+                  Payment completed successfully
+                </Dialog.Title>
+                <p className="text-sm sm:text-base text-slate-600 mb-6">
+                  View your store.
+                </p>
+                
+                {/* View Your Store Button */}
+                <button
+                  onClick={() => {
+                    setShowPaymentSuccessModal(false);
+                    // Redirect to Merchant Portal (dashboard)
+                    const storeId = typeof window !== "undefined" 
+                      ? new URLSearchParams(window.location.search).get("store_id") 
+                      : step1?.store_public_id || step1?.__storePublicId || step1?.__draftStorePublicId || null;
+                    if (storeId) {
+                      if (typeof window !== "undefined") {
+                        localStorage.setItem("selectedStoreId", storeId);
+                      }
+                      router.push("/mx/dashboard");
+                    } else {
+                      router.push("/auth/post-login");
+                    }
+                  }}
+                  className="w-full px-6 py-3 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 transition-all shadow-md hover:shadow-lg flex items-center justify-center gap-2"
+                >
+                  <Eye className="w-5 h-5 shrink-0" />
+                  View Your Store
+                </button>
+              </div>
+            </Dialog.Panel>
+          </div>
+        </Dialog>
+      )}
     </div>
   );
 }

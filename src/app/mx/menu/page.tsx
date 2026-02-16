@@ -106,6 +106,7 @@ import {
   updateMenuCategory, 
   deleteMenuCategory
 } from '@/lib/database'
+import { MenuItemsGridSkeleton } from '@/components/PageSkeleton'
 
 // --- Menu Category interface ---
 type MerchantStore = {
@@ -1805,23 +1806,7 @@ function MenuContent() {
       {/* Menu Items Grid */}
       <div className="px-6 py-4 relative">
         {isLoading ? (
-          <div className="w-full flex flex-col gap-8 animate-pulse">
-            <div className="w-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mt-2">
-              {[...Array(8)].map((_, i) => (
-                <div key={i} className="bg-white rounded-xl border border-gray-200 shadow-sm min-h-[160px]">
-                  <div className="flex p-3 h-full">
-                    <div className="w-16 h-16 flex-shrink-0 mr-3 bg-gray-200 rounded-lg" />
-                    <div className="flex-1 space-y-3 py-1">
-                      <div className="h-4 bg-gray-200 rounded w-3/4" />
-                      <div className="h-3 bg-gray-100 rounded w-1/2" />
-                      <div className="h-3 bg-gray-100 rounded w-1/3" />
-                      <div className="h-3 bg-gray-100 rounded w-1/4" />
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <MenuItemsGridSkeleton />
         ) : (searchedItems.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <Package size={48} className="text-gray-300 mb-4" />

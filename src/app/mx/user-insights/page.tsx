@@ -21,6 +21,7 @@ import {
   Clock,
   AlertCircle
 } from 'lucide-react';
+import { SkeletonReviewRow } from '@/components/PageSkeleton';
 
 const dummyReviews = [
   {
@@ -109,23 +110,6 @@ const dummyReviews = [
     orderCount: 18
   }
 ];
-
-const SkeletonRow = () => (
-  <div className="animate-pulse bg-white rounded-xl border border-gray-100 p-6 mb-4 shadow-sm">
-    <div className="flex items-start justify-between">
-      <div className="space-y-3 flex-1">
-        <div className="flex items-center gap-3">
-          <div className="h-6 bg-gray-200 rounded w-32"></div>
-          <div className="h-5 bg-gray-200 rounded w-24"></div>
-        </div>
-        <div className="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
-        <div className="h-3 bg-gray-200 rounded w-full mb-1"></div>
-        <div className="h-3 bg-gray-200 rounded w-2/3"></div>
-      </div>
-      <div className="h-8 bg-gray-200 rounded w-24 ml-4"></div>
-    </div>
-  </div>
-);
 
 const UserInsightsContent = () => {
   const searchParams = useSearchParams();
@@ -362,9 +346,9 @@ const UserInsightsContent = () => {
           showTicketDetail && selectedTicket ? (
             /* Ticket Detail Panel - Compact Chat */
             <>
-            <div className="flex flex-col h-[calc(100vh-120px)] bg-white rounded-lg border border-gray-200 overflow-hidden">
+            <div className="flex flex-col bg-white border border-gray-200 overflow-hidden rounded-lg md:max-w-6xl md:mx-auto h-[calc(100dvh-6rem)] sm:h-[calc(100vh-120px)] min-h-[300px]">
               {/* Chat Header - Fixed */}
-              <div className="flex-shrink-0 bg-white border-b border-gray-200 p-3">
+              <div className="flex-shrink-0 bg-white border-b border-gray-200 p-3 sm:p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 flex-1 min-w-0">
                     <button
@@ -401,7 +385,7 @@ const UserInsightsContent = () => {
                 </div>
                 
                 {/* Compact Ticket Info - Below Header */}
-                <div className="flex items-center gap-3 mt-2 pt-2 border-t border-gray-100 text-xs text-gray-600">
+                <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-2 pt-2 border-t border-gray-100 text-xs text-gray-600">
                   <span className="flex items-center gap-1">
                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
@@ -584,7 +568,7 @@ const UserInsightsContent = () => {
 
             {/* Chat Input - Fixed at Bottom of Screen */}
             {(selectedTicket.status === 'OPEN' || selectedTicket.status === 'IN_PROGRESS') && (
-              <div className="fixed bottom-0 bg-white border-t border-gray-200 p-4 left-0 right-0 md:left-64" style={{ zIndex: 1100 }}>
+              <div className="fixed bottom-0 bg-white border-t border-gray-200 p-3 sm:p-4 left-16 md:left-64 right-0" style={{ zIndex: 1100, paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}>
                 <div className="max-w-6xl mx-auto flex gap-3">
                   <textarea
                     value={ticketReply}
@@ -631,7 +615,7 @@ const UserInsightsContent = () => {
 
             {/* Closed/Resolved Message - Fixed at Bottom */}
             {(selectedTicket.status === 'CLOSED' || selectedTicket.status === 'RESOLVED') && !selectedTicket.resolution && (
-              <div className="fixed bottom-0 bg-gray-50 border-t border-gray-200 p-4 left-0 right-0 md:left-64" style={{ zIndex: 1100 }}>
+              <div className="fixed bottom-0 bg-gray-50 border-t border-gray-200 p-3 sm:p-4 left-16 md:left-64 right-0" style={{ zIndex: 1100, paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom, 0px))' }}>
                 <div className="max-w-6xl mx-auto text-center">
                   <p className="text-sm text-gray-600 flex items-center justify-center gap-2">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -860,7 +844,7 @@ const UserInsightsContent = () => {
         {/* Compact Reviews/Complaints List */}
         <div className="space-y-3">
           {loading ? (
-            Array.from({ length: 4 }).map((_, i) => <SkeletonRow key={i} />)
+            Array.from({ length: 4 }).map((_, i) => <SkeletonReviewRow key={i} />)
           ) : filteredReviews.length > 0 ? (
             filteredReviews.map((review) => (
               <div key={review.id} className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm hover:shadow-md transition-shadow">

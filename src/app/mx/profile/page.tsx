@@ -29,8 +29,10 @@ import {
   Map,
   Lock,
   Globe,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Menu
 } from "lucide-react";
+import { PageSkeletonProfile } from "@/components/PageSkeleton";
 
 export const dynamic = "force-dynamic";
 
@@ -67,10 +69,18 @@ function OperatingDaysCard({ storeId }: { storeId: string | null }) {
   useEffect(() => {
     if (!storeId) return;
     import("@/lib/database").then(mod => {
-      mod.fetchStoreOperatingHours(storeId).then((result) => {
-        setDays(result);
-        setTotalMinutes(result.reduce((sum: number, d: any) => sum + (d.total_duration_minutes || 0), 0));
-      });
+      mod.fetchStoreOperatingHours(storeId)
+        .then((result) => {
+          if (Array.isArray(result)) {
+            setDays(result);
+            setTotalMinutes(result.reduce((sum: number, d: any) => sum + (d.total_duration_minutes || 0), 0));
+          }
+        })
+        .catch((err) => {
+          console.error('Error loading operating hours:', err);
+          setDays([]);
+          setTotalMinutes(0);
+        });
     });
   }, [storeId]);
 
@@ -99,17 +109,19 @@ function OperatingDaysCard({ storeId }: { storeId: string | null }) {
   }
 
   return (
-    <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-      <div className="flex items-center justify-between mb-3">
+    <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+      <div className="flex items-center justify-between mb-2">
         <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
           <Clock size={16} className="text-blue-600" />
           Operating Days
         </h3>
-        <span className="text-xs font-semibold text-blue-700 bg-blue-100 px-2 py-1 rounded">
-          Total: {minutesToHours(totalMinutes)}
-        </span>
+        {totalMinutes > 0 && (
+          <span className="text-xs font-semibold text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
+            Total: {minutesToHours(totalMinutes)}
+          </span>
+        )}
       </div>
-      <div className="grid grid-cols-1 gap-2">
+      <div className="grid grid-cols-1 gap-1.5">
         {days.map((day: any) => (
           <div key={day.day_label} className="flex items-center justify-between text-xs py-1 px-2 rounded border border-gray-100 bg-white">
             <span className="font-medium w-16 text-gray-900">{abbreviateDayLabel(day.day_label)}</span>
@@ -154,6 +166,10 @@ export default function ProfilePage() {
     maxAttemptsPerDay: number;
   } | null>(null);
   const [bankVerifying, setBankVerifying] = useState(false);
+  const [operatingHours, setOperatingHours] = useState<any[]>([]);
+  const [storeDocuments, setStoreDocuments] = useState<any>(null);
+  const [bankAccounts, setBankAccounts] = useState<any[]>([]);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const bannerInputRef = useRef<HTMLInputElement>(null);
   const adsInputRef = useRef<HTMLInputElement>(null);
 
@@ -171,13 +187,63 @@ export default function ProfilePage() {
   useEffect(() => {
     if (!storeId) return;
     setLoading(true);
-    fetchStoreById(storeId)
-      .then((data) => {
-        const store = data as MerchantStore | null;
-        setStore(store);
-        setEditData(store);
+    Promise.all([
+      fetchStoreById(storeId),
+      import("@/lib/database").then(mod => mod.fetchStoreOperatingHours(storeId).catch(() => [])),
+      fetchStoreById(storeId).then(async (storeData) => {
+        console.log('Store data fetched:', storeData);
+        if (storeData?.id) {
+          console.log('Store internal ID:', storeData.id, 'Store ID (public):', storeData.store_id);
+          const mod = await import("@/lib/database");
+          try {
+            const [docs, banks] = await Promise.all([
+              mod.fetchStoreDocuments(storeData.id).catch((err) => {
+                console.error('Error fetching documents:', err);
+                return null;
+              }),
+              mod.fetchStoreBankAccounts(storeData.id).catch((err) => {
+                console.error('Error fetching bank accounts:', err);
+                return [];
+              })
+            ]);
+            console.log('Fetched results - Documents:', docs ? 'Found' : 'None', 'Bank Accounts:', banks?.length || 0);
+            return { docs, banks };
+          } catch (error) {
+            console.error('Error in fetch promise:', error);
+            return { docs: null, banks: [] };
+          }
+        } else {
+          console.warn('Store data missing id field:', storeData);
+        }
+        return { docs: null, banks: [] };
       })
-      .catch(() => toast.error("Failed to load profile"))
+    ])
+      .then(([storeData, hoursData, { docs, banks }]) => {
+        const store = storeData as MerchantStore | null;
+        if (store) {
+          setStore(store);
+          setEditData(store);
+        }
+        if (hoursData && Array.isArray(hoursData)) {
+          setOperatingHours(hoursData);
+        }
+        if (docs) {
+          setStoreDocuments(docs);
+        }
+        // Always set bank accounts array (even if empty) to ensure state is updated
+        const bankAccountsArray = Array.isArray(banks) ? banks : [];
+        console.log('Setting bank accounts in state:', bankAccountsArray.length, 'accounts');
+        if (bankAccountsArray.length > 0) {
+          console.log('Bank accounts data:', JSON.stringify(bankAccountsArray, null, 2));
+        } else {
+          console.log('No bank accounts found in database');
+        }
+        setBankAccounts(bankAccountsArray);
+      })
+      .catch((error) => {
+        console.error('Error loading profile:', error);
+        toast.error("Failed to load profile");
+      })
       .finally(() => setLoading(false));
   }, [storeId]);
 
@@ -198,6 +264,29 @@ export default function ProfilePage() {
       })
       .catch(() => {});
   }, [storeId]);
+
+  /* ===== REFRESH BANK ACCOUNTS WHEN STORE CHANGES ===== */
+  useEffect(() => {
+    if (!store?.id) {
+      console.log('Store ID not available for bank accounts refresh');
+      return;
+    }
+    console.log('Refreshing bank accounts for store ID:', store.id);
+    import("@/lib/database").then(async (mod) => {
+      try {
+        const banks = await mod.fetchStoreBankAccounts(store.id);
+        const bankAccountsArray = Array.isArray(banks) ? banks : [];
+        console.log('Refreshed bank accounts:', bankAccountsArray.length, 'accounts');
+        if (bankAccountsArray.length > 0) {
+          console.log('Updating bank accounts state with:', JSON.stringify(bankAccountsArray, null, 2));
+        }
+        setBankAccounts(bankAccountsArray);
+      } catch (error) {
+        console.error('Error refreshing bank accounts:', error);
+        setBankAccounts([]);
+      }
+    });
+  }, [store?.id]);
 
   /* ===== STORE NAME LOGIC ===== */
   const storeInitial = store?.store_name?.charAt(0).toUpperCase() || "R";
@@ -401,6 +490,19 @@ export default function ProfilePage() {
     }
   };
 
+  // Format operating hours from merchant_store_operating_hours table
+  const formatOperatingHours = () => {
+    if (!operatingHours || operatingHours.length === 0) return "— — —";
+    
+    // Find first open day
+    const openDay = operatingHours.find((d: any) => d.open && d.slot1_start && d.slot1_end);
+    if (!openDay) return "Closed";
+    
+    const start = formatTime(openDay.slot1_start);
+    const end = formatTime(openDay.slot1_end);
+    return `${start} - ${end}`;
+  };
+
   const formatDate = (dateString?: string) => {
     if (!dateString) return "—";
     return new Date(dateString).toLocaleDateString('en-IN', {
@@ -426,34 +528,14 @@ export default function ProfilePage() {
   if (loading) {
     return (
       <MXLayoutWhite restaurantName={editData?.store_name || ''} restaurantId={storeId || ''}>
-        <div className="min-h-screen bg-gray-50 hide-scrollbar">
-          <div className="bg-white border-b border-gray-200 p-6">
-            <div className="h-8 bg-gray-200 rounded w-1/4 animate-pulse"></div>
-          </div>
-          <div className="p-6">
-            <div className="bg-white rounded-lg border border-gray-200 overflow-hidden max-w-3xl mx-auto">
-              <div className="flex gap-6 p-6">
-                <div className="w-20 h-20 bg-gray-200 rounded-lg animate-pulse"></div>
-                <div className="flex-1 space-y-4">
-                  <div className="h-6 bg-gray-200 rounded w-1/2 animate-pulse"></div>
-                  <div className="h-4 bg-gray-100 rounded w-1/3 animate-pulse"></div>
-                </div>
-              </div>
-              <div className="p-6 space-y-3">
-                {[1,2,3,4,5,6].map(i => (
-                  <div key={i} className="h-4 bg-gray-100 rounded animate-pulse w-full"></div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
+        <PageSkeletonProfile />
       </MXLayoutWhite>
     );
   }
 
   if (!store || !editData) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="flex items-center justify-center h-full">
         <div className="text-red-500">Profile not found</div>
       </div>
     );
@@ -466,101 +548,130 @@ export default function ProfilePage() {
         restaurantName={store.store_name}
         restaurantId={store.store_id}
       >
-        <div className="bg-gray-50 hide-scrollbar overflow-y-auto" style={{ minHeight: 0, height: 'auto' }}>
-          {/* MAIN CONTENT CONTAINER - Prevents extra scroll beyond content */}
-          <div>
-            <div className="p-4">
-              <div className="max-w-7xl mx-auto">
-                {/* HEADER */}
-                <div className="mb-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h1 className="text-2xl font-bold text-gray-900">Merchant Profile</h1>
-                      <p className="text-sm text-gray-600 mt-0.5">Manage your restaurant details</p>
-                    </div>
+        <div className="bg-gray-50 flex-1 flex flex-col overflow-hidden">
+          {/* HEADER - Fixed and stable across screen sizes */}
+          <header className="sticky top-0 z-20 bg-white border-b border-gray-200 flex-shrink-0">
+            <div className="px-4 py-3 md:px-6 md:py-4">
+              <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <h1 className="text-lg md:text-2xl font-bold text-gray-900 truncate">Merchant Profile</h1>
+                  <p className="text-xs md:text-sm text-gray-600 mt-0.5">Manage your restaurant details</p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => setConfirmSave(true)}
+                    className="hidden md:inline-flex bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium text-sm"
+                  >
+                    Save Changes
+                  </button>
+                  <div className="md:hidden relative">
                     <button
-                      onClick={() => setConfirmSave(true)}
-                      className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium text-sm"
+                      onClick={() => setMobileMenuOpen((v) => !v)}
+                      className="p-2 rounded-lg hover:bg-gray-100 text-gray-600"
+                      aria-label="Menu"
                     >
-                      Save Changes
+                      <Menu size={22} />
                     </button>
+                    {mobileMenuOpen && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setMobileMenuOpen(false)} aria-hidden="true" />
+                        <div className="absolute right-0 top-full mt-1 py-1 bg-white rounded-lg shadow-lg border border-gray-200 z-50 min-w-[140px]">
+                          <button
+                            onClick={() => { setConfirmSave(true); setMobileMenuOpen(false); }}
+                            className="w-full text-left px-4 py-2.5 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded"
+                          >
+                            Save Changes
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
+              </div>
+            </div>
+          </header>
+          
+          {/* MAIN CONTENT CONTAINER - Scroll only as much as content needs */}
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden hide-scrollbar" style={{ scrollBehavior: 'smooth' }}>
+            <div className="p-4">
+              <div className="max-w-7xl mx-auto w-full">
 
                 {/* MAIN CARD */}
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 mb-6">
-                  {/* STORE HEADER */}
-                  <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-5 py-4 border-b border-gray-200">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="relative">
-                          <div className="w-12 h-12 bg-blue-600 text-white rounded-lg flex items-center justify-center text-lg font-bold">
+                <div className="bg-white rounded-xl shadow-sm border border-gray-200 mb-4">
+                  {/* STORE HEADER - Card layout on small screens, wide on desktop */}
+                  <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-3 border-b border-gray-200">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                      <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                        <div className="relative shrink-0">
+                          <div className="w-10 h-10 bg-blue-600 text-white rounded-lg flex items-center justify-center text-base font-bold">
                             {storeInitial}
                           </div>
                           {isVerified && (
-                            <div className="absolute -bottom-1 -right-1 bg-green-500 text-white p-1 rounded-full">
-                              <CheckCircle size={12} />
+                            <div className="absolute -bottom-0.5 -right-0.5 bg-green-500 text-white p-0.5 rounded-full">
+                              <CheckCircle size={10} />
                             </div>
                           )}
                         </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h2 className="text-lg font-bold text-gray-900">
-                              {store.store_name}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h2 className="text-base font-bold text-gray-900 truncate">
+                              {store?.store_name || '—'}
                             </h2>
-                            <span className="text-xs text-gray-600">
-                              • {formatArray(store.cuisine_types)}
-                            </span>
+                            {store?.cuisine_types && store.cuisine_types.length > 0 && (
+                              <span className="text-[10px] text-gray-600 shrink-0">
+                                • {formatArray(store.cuisine_types)}
+                              </span>
+                            )}
                           </div>
-                          <div className="flex items-center gap-3 text-sm text-gray-600 mt-1">
-                            <span className="flex items-center gap-1">
-                              <MapPin size={12} />
-                              {store.city}, {store.state}
+                          <div className="flex items-center gap-2.5 text-xs text-gray-600 mt-0.5">
+                            <span className="flex items-center gap-1 shrink-0">
+                              <MapPin size={10} />
+                              {store?.city || '—'}, {store?.state || '—'}
                             </span>
-                            <span className="flex items-center gap-1">
-                              <Clock size={12} />
-                              {formatTime(store.opening_time)} - {formatTime(store.closing_time)}
+                            <span className="flex items-center gap-1 shrink-0">
+                              <Clock size={10} />
+                              {formatOperatingHours()}
                             </span>
                           </div>
                         </div>
                       </div>
                       
-                      {/* QUICK STATS (with extra fields) */}
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <div className="text-center px-3 py-1.5 bg-white rounded-lg border border-gray-200 min-w-[90px]">
-                          <div className="text-sm font-bold text-gray-900">{store.min_order_amount || 0}</div>
-                          <div className="text-xs text-gray-500">Min Order</div>
+                      {/* QUICK STATS - Card layout on small screens */}
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:flex md:flex-wrap gap-2 shrink-0">
+                        <div className="text-center px-2 py-1 bg-white rounded-lg border border-gray-200 min-w-[70px]">
+                          <div className="text-xs font-bold text-gray-900">{store?.min_order_amount || 0}</div>
+                          <div className="text-[10px] text-gray-500">Min Order</div>
                         </div>
-                        <div className="text-center px-3 py-1.5 bg-white rounded-lg border border-gray-200 min-w-[90px]">
-                          <div className="text-sm font-bold text-gray-900">{(store.avg_preparation_time_minutes ?? store.avg_delivery_time_minutes) || 0}m</div>
-                          <div className="text-xs text-gray-500">Prep Time</div>
+                        <div className="text-center px-2 py-1 bg-white rounded-lg border border-gray-200 min-w-[70px]">
+                          <div className="text-xs font-bold text-gray-900">{(store?.avg_preparation_time_minutes ?? store?.avg_delivery_time_minutes) || 0}m</div>
+                          <div className="text-[10px] text-gray-500">Prep Time</div>
                         </div>
-                        <div className="text-center px-3 py-1.5 bg-white rounded-lg border border-gray-200 min-w-[90px]">
-                          <div className="text-sm font-bold text-gray-900">{store.delivery_radius_km ?? '—'}</div>
-                          <div className="text-xs text-gray-500">Delivery Radius</div>
+                        <div className="text-center px-2 py-1 bg-white rounded-lg border border-gray-200 min-w-[70px]">
+                          <div className="text-xs font-bold text-gray-900">{store?.delivery_radius_km ?? '—'}</div>
+                          <div className="text-[10px] text-gray-500">Delivery Radius</div>
                         </div>
-                        <div className="text-center px-3 py-1.5 bg-white rounded-lg border border-gray-200 min-w-[120px]">
-                          <div className="text-sm font-bold text-gray-900">{store.parent_merchant_id || '—'}</div>
-                          <div className="text-xs text-gray-500">Parent Merchant ID</div>
+                        <div className="text-center px-2 py-1 bg-white rounded-lg border border-gray-200 min-w-[100px]">
+                          <div className="text-xs font-bold text-gray-900 truncate">{store?.parent_merchant_id || '—'}</div>
+                          <div className="text-[10px] text-gray-500">Parent Merchant ID</div>
                         </div>
-                        <div className="text-center px-3 py-1.5 bg-white rounded-lg border border-gray-200 min-w-[90px]">
-                          <div className="text-sm font-bold text-gray-900">
-                            {store.approval_status === 'APPROVED' ? 'Verified' : 'Pending'}
+                        <div className="text-center px-2 py-1 bg-white rounded-lg border border-gray-200 min-w-[70px]">
+                          <div className="text-xs font-bold text-gray-900">
+                            {store?.approval_status === 'APPROVED' ? 'Verified' : 'Pending'}
                           </div>
-                          <div className="text-xs text-gray-500">Status</div>
+                          <div className="text-[10px] text-gray-500">Status</div>
                         </div>
                       </div>
                     </div>
                   </div>
 
-                  {/* CONTENT GRID */}
-                  <div className="p-5">
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                  {/* CONTENT GRID - Compact */}
+                  <div className="p-4">
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                       
                       {/* COLUMN 1: STORE DETAILS */}
-                      <div className="space-y-4">
+                      <div className="space-y-3">
                         <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
-                          <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center justify-between mb-1.5">
                             <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2 m-0">
                               <Building size={16} className="text-blue-600" />
                               Store Details
@@ -569,30 +680,35 @@ export default function ProfilePage() {
                               <span className="text-xs font-medium text-gray-700 mr-2">Pure Veg</span>
                               <input
                                 type="checkbox"
-                                checked={!!editData.is_pure_veg}
+                                checked={!!editData?.is_pure_veg}
                                 onChange={async (e) => {
-                                  if (!storeId) return;
+                                  if (!storeId || !editData) return;
                                   const newValue = e.target.checked;
+                                  const oldValue = editData.is_pure_veg;
+                                  // Optimistic update
                                   setEditData({ ...editData, is_pure_veg: newValue });
-                                  setStore({ ...store, is_pure_veg: newValue });
+                                  if (store) setStore({ ...store, is_pure_veg: newValue });
                                   try {
                                     await updateStoreInfo(storeId, { is_pure_veg: newValue });
                                     toast.success(`Store marked as ${newValue ? 'Pure Veg' : 'Not Pure Veg'}`);
-                                  } catch (err) {
-                                    toast.error('Failed to update Pure Veg status');
+                                  } catch (err: any) {
+                                    // Revert on error
+                                    setEditData({ ...editData, is_pure_veg: oldValue });
+                                    if (store) setStore({ ...store, is_pure_veg: oldValue });
+                                    toast.error(err?.message || 'Failed to update Pure Veg status');
                                   }
                                 }}
                                 className="sr-only peer"
                               />
                               <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:bg-green-500 transition-all relative">
-                                <div className={`absolute left-1 top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${editData.is_pure_veg ? 'translate-x-4' : ''}`}></div>
+                                <div className={`absolute left-1 top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${editData?.is_pure_veg ? 'translate-x-4' : ''}`}></div>
                               </div>
                             </label>
                           </div>
-                          <div className="space-y-2 text-sm">
+                          <div className="space-y-1.5 text-sm">
                             <CompactEditableRow
                               label="Store Name"
-                              value={editData.store_name}
+                              value={editData?.store_name || ''}
                               isEditing={editingField === 'store_name'}
                               onEdit={() => startEditing('store_name')}
                               onSave={stopEditing}
@@ -638,36 +754,36 @@ export default function ProfilePage() {
                           </div>
                         </div>
 
-                        <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                          <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                        <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                          <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
                             <MapPin size={16} className="text-blue-600" />
                             Location
                           </h3>
-                          <div className="space-y-3">
+                          <div className="space-y-2">
                             <CompactEditableRow
                               label="Full Address"
-                              value={editData.full_address}
+                              value={editData?.full_address || ''}
                               isEditing={editingField === 'full_address'}
                               onEdit={() => startEditing('full_address')}
                               onSave={stopEditing}
-                              onChange={(v) => setEditData({ ...editData, full_address: v })}
+                              onChange={(v) => editData && setEditData({ ...editData, full_address: v })}
                               multiline
                             />
                             <CompactEditableRow
                               label="City"
-                              value={editData.city}
+                              value={editData?.city || ''}
                               isEditing={editingField === 'city'}
                               onEdit={() => startEditing('city')}
                               onSave={stopEditing}
-                              onChange={(v) => setEditData({ ...editData, city: v })}
+                              onChange={(v) => editData && setEditData({ ...editData, city: v })}
                             />
                             <CompactEditableRow
                               label="State"
-                              value={editData.state}
+                              value={editData?.state || ''}
                               isEditing={editingField === 'state'}
                               onEdit={() => startEditing('state')}
                               onSave={stopEditing}
-                              onChange={(v) => setEditData({ ...editData, state: v })}
+                              onChange={(v) => editData && setEditData({ ...editData, state: v })}
                             />
                             <CompactEditableRow
                               label="Landmark"
@@ -708,289 +824,488 @@ export default function ProfilePage() {
                       </div>
 
                       {/* COLUMN 2: TIMINGS & OPERATIONS */}
-                      <div className="space-y-4">
+                      <div className="space-y-3">
                         <OperatingDaysCard storeId={storeId} />
 
-                        <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                          <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                            <User size={16} className="text-blue-600" />
-                            Area Manager
-                          </h3>
-                          <div className="space-y-3">
-                            <CompactEditableRow
-                              label="AM Name"
-                              value={editData.am_name}
-                              isEditing={editingField === 'am_name'}
-                              onEdit={() => startEditing('am_name')}
-                              onSave={stopEditing}
-                              onChange={(v) => setEditData({ ...editData, am_name: v })}
-                            />
-                            <CompactEditableRow
-                              label="AM Mobile"
-                              value={editData.am_mobile}
-                              isEditing={editingField === 'am_mobile'}
-                              onEdit={() => startEditing('am_mobile')}
-                              onSave={stopEditing}
-                              onChange={(v) => setEditData({ ...editData, am_mobile: v })}
-                            />
-                            <CompactEditableRow
-                              label="AM Email"
-                              value={editData.am_email}
-                              isEditing={editingField === 'am_email'}
-                              onEdit={() => startEditing('am_email')}
-                              onSave={stopEditing}
-                              onChange={(v) => setEditData({ ...editData, am_email: v })}
-                            />
+                        {/* Area Manager and Store Info side by side */}
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                          <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                            <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
+                              <User size={16} className="text-blue-600" />
+                              Area Manager
+                            </h3>
+                            <div className="space-y-2">
+                              <CompactEditableRow
+                                label="AM Name"
+                                value={editData?.am_name || ''}
+                                isEditing={editingField === 'am_name'}
+                                onEdit={() => startEditing('am_name')}
+                                onSave={stopEditing}
+                                onChange={(v) => editData && setEditData({ ...editData, am_name: v })}
+                              />
+                              <CompactEditableRow
+                                label="AM Mobile"
+                                value={editData?.am_mobile || ''}
+                                isEditing={editingField === 'am_mobile'}
+                                onEdit={() => startEditing('am_mobile')}
+                                onSave={stopEditing}
+                                onChange={(v) => editData && setEditData({ ...editData, am_mobile: v })}
+                              />
+                              <CompactEditableRow
+                                label="AM Email"
+                                value={editData?.am_email || ''}
+                                isEditing={editingField === 'am_email'}
+                                onEdit={() => startEditing('am_email')}
+                                onSave={stopEditing}
+                                onChange={(v) => editData && setEditData({ ...editData, am_email: v })}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                            <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
+                              <Activity size={16} className="text-blue-600" />
+                              Store Info
+                            </h3>
+                            <div className="grid grid-cols-1 gap-2 text-xs">
+                              <div className="flex items-center gap-2">
+                                <Hash size={12} className="text-gray-500" />
+                                <span className="text-gray-800">Store ID:</span>
+                                <span className="font-semibold text-gray-900">{store?.store_id || '—'}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Calendar size={12} className="text-gray-500" />
+                                <span className="text-gray-800">Created:</span>
+                                <span className="font-semibold text-gray-900">{store?.created_at ? formatDate(store.created_at) : '—'}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Activity size={12} className="text-gray-500" />
+                                <span className="text-gray-800">Status:</span>
+                                <span className={`font-semibold ${
+                                  store?.approval_status === 'APPROVED' ? 'text-green-600' :
+                                  store?.approval_status === 'REJECTED' ? 'text-red-600' :
+                                  'text-yellow-600'
+                                }`}>
+                                  {store?.approval_status || 'SUBMITTED'}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Activity size={12} className="text-gray-500" />
+                                <span className="text-gray-800">Active:</span>
+                                <label className="inline-flex items-center cursor-pointer ml-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!editData && editData.status === 'ACTIVE'}
+                                    onChange={async (e) => {
+                                      if (!editData || !store || !storeId) return;
+                                      const prevStatus = editData.status;
+                                      const prevOperational = editData.operational_status;
+                                      // Use correct enum value for status and operational_status
+                                      const newStatus = e.target.checked ? 'ACTIVE' : 'INACTIVE';
+                                      const newOperational = e.target.checked ? 'OPEN' : 'CLOSED';
+                                      // Optimistically update UI
+                                      setEditData({ ...editData, status: newStatus, operational_status: newOperational });
+                                      setStore({ ...store, status: newStatus, operational_status: newOperational });
+                                      try {
+                                        const ok = await updateStoreInfo(storeId, { status: newStatus, operational_status: newOperational });
+                                        if (!ok) throw new Error('Update failed');
+                                        toast.success(`Store is now ${newStatus} (${newOperational})`);
+                                      } catch (err) {
+                                        // Revert UI if update fails
+                                        setEditData({ ...editData, status: prevStatus, operational_status: prevOperational });
+                                        setStore({ ...store, status: prevStatus, operational_status: prevOperational });
+                                        toast.error('Failed to update store status');
+                                      }
+                                    }}
+                                    className="sr-only peer"
+                                  />
+                                  <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:bg-green-500 transition-all relative">
+                                    <div className={`absolute left-1 top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${editData?.status === 'ACTIVE' ? 'translate-x-4' : ''}`}></div>
+                                  </div>
+                                </label>
+                              </div>
+                            </div>
                           </div>
                         </div>
 
-                        <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                          <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                            <Activity size={16} className="text-blue-600" />
-                            Store Info
-                          </h3>
-                          <div className="grid grid-cols-2 gap-2 text-xs">
-                            <div className="flex items-center gap-2">
-                              <Hash size={12} className="text-gray-500" />
-                              <span className="text-gray-800">Store ID:</span>
-                              <span className="font-semibold text-gray-900">{store.store_id}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Calendar size={12} className="text-gray-500" />
-                              <span className="text-gray-800">Created:</span>
-                              <span className="font-semibold text-gray-900">{formatDate(store.created_at)}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Activity size={12} className="text-gray-500" />
-                              <span className="text-gray-800">Status:</span>
-                              <span className={`font-semibold ${
-                                store.approval_status === 'APPROVED' ? 'text-green-600' :
-                                store.approval_status === 'REJECTED' ? 'text-red-600' :
-                                'text-yellow-600'
-                              }`}>
-                                {store.approval_status || 'SUBMITTED'}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Activity size={12} className="text-gray-500" />
-                              <span className="text-gray-800">Active:</span>
-                              <label className="inline-flex items-center cursor-pointer ml-2">
-                                <input
-                                  type="checkbox"
-                                  checked={!!editData && editData.status === 'ACTIVE'}
-                                  onChange={async (e) => {
-                                    if (!editData || !store || !storeId) return;
-                                    const prevStatus = editData.status;
-                                    const prevOperational = editData.operational_status;
-                                    // Use correct enum value for status and operational_status
-                                    const newStatus = e.target.checked ? 'ACTIVE' : 'INACTIVE';
-                                    const newOperational = e.target.checked ? 'OPEN' : 'CLOSED';
-                                    // Optimistically update UI
-                                    setEditData({ ...editData, status: newStatus, operational_status: newOperational });
-                                    setStore({ ...store, status: newStatus, operational_status: newOperational });
-                                    try {
-                                      const ok = await updateStoreInfo(storeId, { status: newStatus, operational_status: newOperational });
-                                      if (!ok) throw new Error('Update failed');
-                                      toast.success(`Store is now ${newStatus} (${newOperational})`);
-                                    } catch (err) {
-                                      // Revert UI if update fails
-                                      setEditData({ ...editData, status: prevStatus, operational_status: prevOperational });
-                                      setStore({ ...store, status: prevStatus, operational_status: prevOperational });
-                                      toast.error('Failed to update store status');
-                                    }
-                                  }}
-                                  className="sr-only peer"
-                                />
-                                <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:bg-green-500 transition-all relative">
-                                  <div className={`absolute left-1 top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${editData.status === 'ACTIVE' ? 'translate-x-4' : ''}`}></div>
-                                </div>
-                              </label>
-                            </div>
-                          </div>
-                        </div>
                       </div>
 
                       {/* COLUMN 3: DOCUMENTS & IMAGES */}
-                      <div className="space-y-4">
-                        <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                          <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                      <div className="space-y-3">
+                        <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                          <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
                             <Shield size={16} className="text-blue-600" />
                             Legal Documents
                           </h3>
-                          <div className="space-y-3">
-                            <CompactLockedRow
-                              label="GST Number"
-                              value={store.gst_number}
-                            />
-                            <CompactLockedRow
-                              label="PAN Number"
-                              value={store.pan_number}
-                            />
-                            <CompactLockedRow
-                              label="Aadhar Number"
-                              value={store.aadhar_number}
-                            />
-                            <CompactLockedRow
-                              label="FSSAI Number"
-                              value={store.fssai_number}
-                            />
-                            {store.gst_image_url && (
-                              <div>
-                                <div className="text-xs font-medium text-gray-600 mb-1">GST Image</div>
-                                <img src={store.gst_image_url} alt="GST" className="h-20 rounded border" />
-                              </div>
-                            )}
-                            {store.pan_image_url && (
-                              <div>
-                                <div className="text-xs font-medium text-gray-600 mb-1">PAN Image</div>
-                                <img src={store.pan_image_url} alt="PAN" className="h-20 rounded border" />
-                              </div>
+                          <div className="space-y-2">
+                            {storeDocuments ? (
+                              <>
+                                {/* PAN Document */}
+                                {storeDocuments.pan_document_number && (
+                                  <div className="bg-white rounded p-2 border border-gray-200">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-xs font-semibold text-gray-900">PAN</span>
+                                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                                        storeDocuments.pan_is_verified ? 'bg-green-100 text-green-700' :
+                                        storeDocuments.pan_is_expired ? 'bg-red-100 text-red-700' :
+                                        'bg-yellow-100 text-yellow-700'
+                                      }`}>
+                                        {storeDocuments.pan_is_verified ? 'Verified' :
+                                         storeDocuments.pan_is_expired ? 'Expired' : 'Pending'}
+                                      </span>
+                                    </div>
+                                    <div className="text-xs text-gray-600">Number: {storeDocuments.pan_document_number}</div>
+                                    {storeDocuments.pan_holder_name && (
+                                      <div className="text-xs text-gray-600">Holder: {storeDocuments.pan_holder_name}</div>
+                                    )}
+                                    {storeDocuments.pan_document_url && (
+                                      <a href={storeDocuments.pan_document_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-blue-600 hover:underline mt-1 inline-block">View Document</a>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* GST Document */}
+                                {storeDocuments.gst_document_number && (
+                                  <div className="bg-white rounded p-2 border border-gray-200">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-xs font-semibold text-gray-900">GST</span>
+                                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                                        storeDocuments.gst_is_verified ? 'bg-green-100 text-green-700' :
+                                        storeDocuments.gst_is_expired ? 'bg-red-100 text-red-700' :
+                                        'bg-yellow-100 text-yellow-700'
+                                      }`}>
+                                        {storeDocuments.gst_is_verified ? 'Verified' :
+                                         storeDocuments.gst_is_expired ? 'Expired' : 'Pending'}
+                                      </span>
+                                    </div>
+                                    <div className="text-xs text-gray-600">Number: {storeDocuments.gst_document_number}</div>
+                                    {storeDocuments.gst_document_url && (
+                                      <a href={storeDocuments.gst_document_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-blue-600 hover:underline mt-1 inline-block">View Document</a>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* Aadhaar Document */}
+                                {storeDocuments.aadhaar_document_number && (
+                                  <div className="bg-white rounded p-2 border border-gray-200">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-xs font-semibold text-gray-900">Aadhaar</span>
+                                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                                        storeDocuments.aadhaar_is_verified ? 'bg-green-100 text-green-700' :
+                                        storeDocuments.aadhaar_is_expired ? 'bg-red-100 text-red-700' :
+                                        'bg-yellow-100 text-yellow-700'
+                                      }`}>
+                                        {storeDocuments.aadhaar_is_verified ? 'Verified' :
+                                         storeDocuments.aadhaar_is_expired ? 'Expired' : 'Pending'}
+                                      </span>
+                                    </div>
+                                    <div className="text-xs text-gray-600">Number: {storeDocuments.aadhaar_document_number}</div>
+                                    {storeDocuments.aadhaar_holder_name && (
+                                      <div className="text-xs text-gray-600">Holder: {storeDocuments.aadhaar_holder_name}</div>
+                                    )}
+                                    {storeDocuments.aadhaar_document_url && (
+                                      <a href={storeDocuments.aadhaar_document_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-blue-600 hover:underline mt-1 inline-block">View Document</a>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* FSSAI Document */}
+                                {storeDocuments.fssai_document_number && (
+                                  <div className="bg-white rounded p-2 border border-gray-200">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-xs font-semibold text-gray-900">FSSAI</span>
+                                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                                        storeDocuments.fssai_is_verified ? 'bg-green-100 text-green-700' :
+                                        storeDocuments.fssai_is_expired ? 'bg-red-100 text-red-700' :
+                                        'bg-yellow-100 text-yellow-700'
+                                      }`}>
+                                        {storeDocuments.fssai_is_verified ? 'Verified' :
+                                         storeDocuments.fssai_is_expired ? 'Expired' : 'Pending'}
+                                      </span>
+                                    </div>
+                                    <div className="text-xs text-gray-600">Number: {storeDocuments.fssai_document_number}</div>
+                                    {storeDocuments.fssai_document_url && (
+                                      <a href={storeDocuments.fssai_document_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-blue-600 hover:underline mt-1 inline-block">View Document</a>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* Trade License */}
+                                {storeDocuments.trade_license_document_number && (
+                                  <div className="bg-white rounded p-2 border border-gray-200">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-xs font-semibold text-gray-900">Trade License</span>
+                                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                                        storeDocuments.trade_license_is_verified ? 'bg-green-100 text-green-700' :
+                                        storeDocuments.trade_license_is_expired ? 'bg-red-100 text-red-700' :
+                                        'bg-yellow-100 text-yellow-700'
+                                      }`}>
+                                        {storeDocuments.trade_license_is_verified ? 'Verified' :
+                                         storeDocuments.trade_license_is_expired ? 'Expired' : 'Pending'}
+                                      </span>
+                                    </div>
+                                    <div className="text-xs text-gray-600">Number: {storeDocuments.trade_license_document_number}</div>
+                                    {storeDocuments.trade_license_document_url && (
+                                      <a href={storeDocuments.trade_license_document_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-blue-600 hover:underline mt-1 inline-block">View Document</a>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* Other Documents */}
+                                {storeDocuments.other_document_number && (
+                                  <div className="bg-white rounded p-2 border border-gray-200">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-xs font-semibold text-gray-900">
+                                        {storeDocuments.other_document_type || 'Other Document'}
+                                      </span>
+                                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                                        storeDocuments.other_is_verified ? 'bg-green-100 text-green-700' :
+                                        storeDocuments.other_is_expired ? 'bg-red-100 text-red-700' :
+                                        'bg-yellow-100 text-yellow-700'
+                                      }`}>
+                                        {storeDocuments.other_is_verified ? 'Verified' :
+                                         storeDocuments.other_is_expired ? 'Expired' : 'Pending'}
+                                      </span>
+                                    </div>
+                                    <div className="text-xs text-gray-600">Number: {storeDocuments.other_document_number}</div>
+                                    {storeDocuments.other_document_url && (
+                                      <a href={storeDocuments.other_document_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-blue-600 hover:underline mt-1 inline-block">View Document</a>
+                                    )}
+                                  </div>
+                                )}
+                              </>
+                            ) : (
+                              <p className="text-xs text-gray-500 text-center py-2">No documents found</p>
                             )}
                           </div>
                         </div>
 
+                        {/* Bank Details Card - Dynamically show UI data or bank_accounts table data */}
                         <div className="bg-gray-50 rounded-lg p-2 border border-gray-200">
-                          <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
-                            <Banknote size={16} className="text-blue-600" />
-                            Bank Details
-                            {bankVerification?.verified && (
-                              <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded">
-                                <CheckCircle size={12} />
-                                Verified
-                              </span>
-                            )}
-                            {bankVerifying && (
-                              <span className="text-xs text-amber-700 bg-amber-100 px-2 py-0.5 rounded">
-                                Verifying…
-                              </span>
-                            )}
-                          </h3>
-                          {bankVerification?.verified ? (
-                            <div className="space-y-1 text-sm">
-                              <CompactLockedRow
-                                label="Account Holder"
-                                value={store.bank_account_holder}
-                              />
-                              <CompactLockedRow
-                                label="Account Number"
-                                value={store.bank_account_number}
-                              />
-                              <CompactLockedRow
-                                label="IFSC Code"
-                                value={store.bank_ifsc}
-                              />
-                              <CompactLockedRow
-                                label="Bank Name"
-                                value={store.bank_name}
-                              />
+                          <div className="flex items-center justify-between mb-2">
+                            <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                              <Banknote size={16} className="text-blue-600" />
+                              Bank Details
+                              {bankVerification?.verified && (
+                                <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded">
+                                  <CheckCircle size={12} />
+                                  Verified
+                                </span>
+                              )}
+                              {bankVerifying && (
+                                <span className="text-xs text-amber-700 bg-amber-100 px-2 py-0.5 rounded">
+                                  Verifying…
+                                </span>
+                              )}
+                              {loading && (
+                                <span className="text-xs text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
+                                  Loading…
+                                </span>
+                              )}
+                            </h3>
+                            <button
+                              onClick={async () => {
+                                if (!store?.id) return;
+                                console.log('Manual refresh triggered for store ID:', store.id);
+                                try {
+                                  const mod = await import("@/lib/database");
+                                  const banks = await mod.fetchStoreBankAccounts(store.id);
+                                  const bankAccountsArray = Array.isArray(banks) ? banks : [];
+                                  console.log('Manual refresh result:', bankAccountsArray.length, 'accounts');
+                                  setBankAccounts(bankAccountsArray);
+                                  if (bankAccountsArray.length > 0) {
+                                    toast.success(`Loaded ${bankAccountsArray.length} bank account(s)`);
+                                  } else {
+                                    toast.info('No bank accounts found in database');
+                                  }
+                                } catch (error) {
+                                  console.error('Manual refresh error:', error);
+                                  toast.error('Failed to refresh bank accounts');
+                                }
+                              }}
+                              className="text-xs text-blue-600 hover:text-blue-800 px-2 py-1 rounded hover:bg-blue-50"
+                              title="Refresh bank accounts"
+                            >
+                              🔄 Refresh
+                            </button>
+                          </div>
+                          {/* Priority: Show bank_accounts table data if available, otherwise show UI (store table) data */}
+                          {bankAccounts && Array.isArray(bankAccounts) && bankAccounts.length > 0 ? (
+                            // Show data from merchant_store_bank_accounts table
+                            <div className="space-y-2">
+                              {bankAccounts.map((bank, idx) => (
+                                <div key={bank.id || idx} className="bg-white rounded p-2 border border-gray-200">
+                                  {bank.is_primary && (
+                                    <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded mb-1 inline-block">Primary</span>
+                                  )}
+                                  <div className="space-y-1 text-xs">
+                                    <div className="flex justify-between">
+                                      <span className="text-gray-600">Account Holder:</span>
+                                      <span className="font-semibold text-gray-900">{bank.account_holder_name || '—'}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span className="text-gray-600">Account Number:</span>
+                                      <span className="font-semibold text-gray-900">{bank.account_number ? `****${bank.account_number.slice(-4)}` : '—'}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span className="text-gray-600">IFSC:</span>
+                                      <span className="font-semibold text-gray-900">{bank.ifsc_code || '—'}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span className="text-gray-600">Bank:</span>
+                                      <span className="font-semibold text-gray-900">{bank.bank_name || '—'}</span>
+                                    </div>
+                                    {bank.branch_name && (
+                                      <div className="flex justify-between">
+                                        <span className="text-gray-600">Branch:</span>
+                                        <span className="font-semibold text-gray-900">{bank.branch_name}</span>
+                                      </div>
+                                    )}
+                                    {bank.account_type && (
+                                      <div className="flex justify-between">
+                                        <span className="text-gray-600">Account Type:</span>
+                                        <span className="font-semibold text-gray-900">{bank.account_type}</span>
+                                      </div>
+                                    )}
+                                    <div className="flex justify-between">
+                                      <span className="text-gray-600">Verified:</span>
+                                      <span className={`font-semibold ${bank.is_verified ? 'text-green-600' : 'text-red-600'}`}>
+                                        {bank.is_verified ? 'Yes' : 'No'}
+                                      </span>
+                                    </div>
+                                    {bank.upi_id && (
+                                      <div className="flex justify-between">
+                                        <span className="text-gray-600">UPI ID:</span>
+                                        <span className="font-semibold text-gray-900">{bank.upi_id}</span>
+                                      </div>
+                                    )}
+                                    {bank.payout_method && (
+                                      <div className="flex justify-between">
+                                        <span className="text-gray-600">Payout Method:</span>
+                                        <span className="font-semibold text-gray-900">{bank.payout_method}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
                             </div>
                           ) : (
-                            <div className="space-y-1 text-sm">
-                              <p className="text-xs text-gray-500 mb-1">
-                                Account holder name must match store or owner name. We will send ₹1 to verify (max 3 attempts per day).
-                              </p>
-                              <CompactEditableRow
-                                label="Account Holder"
-                                value={editData?.bank_account_holder}
-                                isEditing={editingField === "bank_account_holder"}
-                                onEdit={() => setEditingField("bank_account_holder")}
-                                onSave={() => setEditingField(null)}
-                                onChange={(v) => setEditData((d) => (d ? { ...d, bank_account_holder: v } : d))}
-                              />
-                              <CompactEditableRow
-                                label="Account Number"
-                                value={editData?.bank_account_number}
-                                isEditing={editingField === "bank_account_number"}
-                                onEdit={() => setEditingField("bank_account_number")}
-                                onSave={() => setEditingField(null)}
-                                onChange={(v) => setEditData((d) => (d ? { ...d, bank_account_number: v } : d))}
-                              />
-                              <CompactEditableRow
-                                label="IFSC Code"
-                                value={editData?.bank_ifsc}
-                                isEditing={editingField === "bank_ifsc"}
-                                onEdit={() => setEditingField("bank_ifsc")}
-                                onSave={() => setEditingField(null)}
-                                onChange={(v) => setEditData((d) => (d ? { ...d, bank_ifsc: v } : d))}
-                              />
-                              <CompactEditableRow
-                                label="Bank Name"
-                                value={editData?.bank_name}
-                                isEditing={editingField === "bank_name"}
-                                onEdit={() => setEditingField("bank_name")}
-                                onSave={() => setEditingField(null)}
-                                onChange={(v) => setEditData((d) => (d ? { ...d, bank_name: v } : d))}
-                              />
-                              {bankVerification && !bankVerification.canTryVerify && (
-                                <p className="text-xs text-amber-700 mt-1">
-                                  Verification limit reached today ({bankVerification.attemptsToday}/{bankVerification.maxAttemptsPerDay}). Try again tomorrow.
+                            // Show UI data from store table if bank_accounts table is empty
+                            (store?.bank_account_holder || store?.bank_account_number || store?.bank_ifsc || store?.bank_name) ? (
+                              bankVerification?.verified ? (
+                                <div className="space-y-1 text-sm">
+                                  <CompactLockedRow
+                                    label="Account Holder"
+                                    value={store?.bank_account_holder || '—'}
+                                  />
+                                  <CompactLockedRow
+                                    label="Account Number"
+                                    value={store?.bank_account_number || '—'}
+                                  />
+                                  <CompactLockedRow
+                                    label="IFSC Code"
+                                    value={store?.bank_ifsc || '—'}
+                                  />
+                                  <CompactLockedRow
+                                    label="Bank Name"
+                                    value={store?.bank_name || '—'}
+                                  />
+                                </div>
+                              ) : (
+                                <div className="space-y-1 text-sm">
+                                  <p className="text-xs text-gray-500 mb-1">
+                                    Account holder name must match store or owner name. We will send ₹1 to verify (max 3 attempts per day).
+                                  </p>
+                                  <CompactEditableRow
+                                    label="Account Holder"
+                                    value={editData?.bank_account_holder || ''}
+                                    isEditing={editingField === "bank_account_holder"}
+                                    onEdit={() => setEditingField("bank_account_holder")}
+                                    onSave={() => setEditingField(null)}
+                                    onChange={(v) => setEditData((d) => (d ? { ...d, bank_account_holder: v } : d))}
+                                  />
+                                  <CompactEditableRow
+                                    label="Account Number"
+                                    value={editData?.bank_account_number || ''}
+                                    isEditing={editingField === "bank_account_number"}
+                                    onEdit={() => setEditingField("bank_account_number")}
+                                    onSave={() => setEditingField(null)}
+                                    onChange={(v) => setEditData((d) => (d ? { ...d, bank_account_number: v } : d))}
+                                  />
+                                  <CompactEditableRow
+                                    label="IFSC Code"
+                                    value={editData?.bank_ifsc || ''}
+                                    isEditing={editingField === "bank_ifsc"}
+                                    onEdit={() => setEditingField("bank_ifsc")}
+                                    onSave={() => setEditingField(null)}
+                                    onChange={(v) => setEditData((d) => (d ? { ...d, bank_ifsc: v } : d))}
+                                  />
+                                  <CompactEditableRow
+                                    label="Bank Name"
+                                    value={editData?.bank_name || ''}
+                                    isEditing={editingField === "bank_name"}
+                                    onEdit={() => setEditingField("bank_name")}
+                                    onSave={() => setEditingField(null)}
+                                    onChange={(v) => setEditData((d) => (d ? { ...d, bank_name: v } : d))}
+                                  />
+                                  {bankVerification && !bankVerification.canTryVerify && (
+                                    <p className="text-xs text-amber-700 mt-1">
+                                      Verification limit reached today ({bankVerification.attemptsToday}/{bankVerification.maxAttemptsPerDay}). Try again tomorrow.
+                                    </p>
+                                  )}
+                                </div>
+                              )
+                            ) : (
+                              <div className="space-y-1 text-sm">
+                                <p className="text-xs text-gray-500 mb-1">
+                                  Account holder name must match store or owner name. We will send ₹1 to verify (max 3 attempts per day).
                                 </p>
-                              )}
-                            </div>
+                                <CompactEditableRow
+                                  label="Account Holder"
+                                  value={editData?.bank_account_holder || ''}
+                                  isEditing={editingField === "bank_account_holder"}
+                                  onEdit={() => setEditingField("bank_account_holder")}
+                                  onSave={() => setEditingField(null)}
+                                  onChange={(v) => setEditData((d) => (d ? { ...d, bank_account_holder: v } : d))}
+                                />
+                                <CompactEditableRow
+                                  label="Account Number"
+                                  value={editData?.bank_account_number || ''}
+                                  isEditing={editingField === "bank_account_number"}
+                                  onEdit={() => setEditingField("bank_account_number")}
+                                  onSave={() => setEditingField(null)}
+                                  onChange={(v) => setEditData((d) => (d ? { ...d, bank_account_number: v } : d))}
+                                />
+                                <CompactEditableRow
+                                  label="IFSC Code"
+                                  value={editData?.bank_ifsc || ''}
+                                  isEditing={editingField === "bank_ifsc"}
+                                  onEdit={() => setEditingField("bank_ifsc")}
+                                  onSave={() => setEditingField(null)}
+                                  onChange={(v) => setEditData((d) => (d ? { ...d, bank_ifsc: v } : d))}
+                                />
+                                <CompactEditableRow
+                                  label="Bank Name"
+                                  value={editData?.bank_name || ''}
+                                  isEditing={editingField === "bank_name"}
+                                  onEdit={() => setEditingField("bank_name")}
+                                  onSave={() => setEditingField(null)}
+                                  onChange={(v) => setEditData((d) => (d ? { ...d, bank_name: v } : d))}
+                                />
+                                {bankVerification && !bankVerification.canTryVerify && (
+                                  <p className="text-xs text-amber-700 mt-1">
+                                    Verification limit reached today ({bankVerification.attemptsToday}/{bankVerification.maxAttemptsPerDay}). Try again tomorrow.
+                                  </p>
+                                )}
+                              </div>
+                            )
                           )}
-                          <div className="flex items-center justify-between gap-2 mt-2">
-                              <span className="font-medium text-gray-900">Accepts Online Payment</span>
-                              <label className="inline-flex items-center cursor-pointer ml-2">
-                                <input
-                                  type="checkbox"
-                                  checked={!!editData.accepts_online_payment}
-                                  onChange={async (e) => {
-                                    if (!storeId) return;
-                                    const newValue = e.target.checked;
-                                    setEditData({ ...editData, accepts_online_payment: newValue });
-                                    setStore({ ...store, accepts_online_payment: newValue });
-                                    try {
-                                      await updateStoreInfo(storeId, { accepts_online_payment: newValue });
-                                      toast.success(`Accepts Online Payment: ${newValue ? 'Yes' : 'No'}`);
-                                    } catch (err) {
-                                      toast.error('Failed to update Online Payment status');
-                                    }
-                                  }}
-                                  className="sr-only peer"
-                                />
-                                <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:bg-green-500 transition-all relative">
-                                  <div className={`absolute left-1 top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${editData.accepts_online_payment ? 'translate-x-4' : ''}`}></div>
-                                </div>
-                              </label>
-                            </div>
-                            <div className="flex items-center justify-between gap-2 mt-1">
-                              <span className="font-medium text-gray-900">Accepts Cash</span>
-                              <label className="inline-flex items-center cursor-pointer ml-2">
-                                <input
-                                  type="checkbox"
-                                  checked={!!editData.accepts_cash}
-                                  onChange={async (e) => {
-                                    if (!storeId) return;
-                                    const newValue = e.target.checked;
-                                    setEditData({ ...editData, accepts_cash: newValue });
-                                    setStore({ ...store, accepts_cash: newValue });
-                                    try {
-                                      await updateStoreInfo(storeId, { accepts_cash: newValue });
-                                      toast.success(`Accepts Cash: ${newValue ? 'Yes' : 'No'}`);
-                                    } catch (err) {
-                                      toast.error('Failed to update Cash status');
-                                    }
-                                  }}
-                                  className="sr-only peer"
-                                />
-                                <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer peer-checked:bg-green-500 transition-all relative">
-                                  <div className={`absolute left-1 top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${editData.accepts_cash ? 'translate-x-4' : ''}`}></div>
-                                </div>
-                              </label>
-                            </div>
                         </div>
                       </div>
                     </div>
 
                     {/* IMAGE CARDS - HORIZONTAL LAYOUT */}
-                    <div
-                      className="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-5"
-                      style={{
-                        maxHeight: 'calc(100vh - 15px - 120px)', // 120px is a safe header/spacing estimate
-                        overflowY: 'auto',
-                        paddingBottom: '15px',
-                      }}
-                    >
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-5">
                       {/* STORE BANNER CARD */}
                       <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-4 border border-blue-100">
                         <div className="flex items-center justify-between mb-3">
@@ -1099,6 +1414,8 @@ export default function ProfilePage() {
                   </div>
                 </div>
               </div>
+              {/* Minimal bottom padding - only 5-10px, no extra space */}
+              <div className="pb-2"></div>
             </div>
           </div>
         </div>

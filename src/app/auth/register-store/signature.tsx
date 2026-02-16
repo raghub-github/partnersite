@@ -232,8 +232,9 @@ export default function SignatureStepPage({
     [step1, step2, documents, parentInfo]
   );
 
-  const downloadPdf = useCallback(async () => {
-    if (!signatureDataUrl) return;
+  // Generate PDF as blob for upload (returns blob and filename)
+  const generatePdfBlob = useCallback(async (): Promise<{ blob: Blob; filename: string } | null> => {
+    if (!signatureDataUrl) return null;
     try {
       const termsBody = agreementTemplate?.content_markdown || defaultAgreementText;
       const structured = buildStructuredContract(contractDataForPdf, termsBody);
@@ -388,7 +389,7 @@ export default function SignatureStepPage({
 
       checkNewPage(headH + 15);
       doc.setFont("helvetica", "bold");
-      doc.text("Annexure B - Bank Details", margin, y);
+      doc.text(`Annexure B - ${structured.annexureB.isUPI ? 'UPI Details' : 'Bank Details'}`, margin, y);
       y += headH;
       const bHeaders = structured.annexureB.headers as string[];
       const bRows = structured.annexureB.rows;
@@ -446,14 +447,33 @@ export default function SignatureStepPage({
       doc.text("Signed by: " + (signerName || "—"), imgX, y + imgH + 4);
       doc.text("Date: " + new Date().toLocaleDateString("en-IN", { dateStyle: "medium" }), imgX, y + imgH + 8);
 
-      const filename = `contract-approval-${(step1?.store_name || "store").replace(/[^a-zA-Z0-9-_]/g, "_")}.pdf`;
-      doc.save(filename);
+      const filename = `contract-approval-${(step1?.store_name || "store").replace(/[^a-zA-Z0-9-_]/g, "_")}-${Date.now()}.pdf`;
+      const pdfBlob = doc.output("blob");
+      return { blob: pdfBlob, filename };
+    } catch (err) {
+      console.error("PDF generation failed:", err);
+      throw new Error("Could not generate PDF. Please try again.");
+    }
+  }, [signatureDataUrl, signerName, step1, step2, documents, parentInfo, agreementTemplate?.content_markdown, defaultAgreementText, contractDataForPdf]);
+
+  const downloadPdf = useCallback(async () => {
+    const pdfData = await generatePdfBlob();
+    if (!pdfData) return;
+    try {
+      const url = URL.createObjectURL(pdfData.blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = pdfData.filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
       setPdfDownloaded(true);
     } catch (err) {
       console.error("PDF download failed:", err);
-      setError("Could not generate PDF. Please try again or use the contract copy from the previous step.");
+      setError("Could not download PDF. Please try again.");
     }
-  }, [signatureDataUrl, signerName, step1, step2, documents, parentInfo, agreementTemplate?.content_markdown, defaultAgreementText, contractDataForPdf]);
+  }, [generatePdfBlob]);
 
   const handleSubmit = async () => {
     if (!signerName.trim()) {
@@ -485,7 +505,8 @@ export default function SignatureStepPage({
         const res = await fetch("/api/upload/r2", { method: "POST", body: form });
         const data = await res.json();
         if (!data.url) throw new Error("Image upload failed");
-        return data.url;
+        // Return the path (R2 key) instead of URL for signed URL generation
+        return data.path || data.url;
       }
 
       const storeFolder = parentMerchantId || "store";
@@ -515,11 +536,35 @@ export default function SignatureStepPage({
         }
       }
 
+      // Generate PDF and upload to R2
+      let signedPdfUrl: string | null = null;
+      try {
+        const pdfData = await generatePdfBlob();
+        if (pdfData) {
+          const pdfFile = new File([pdfData.blob], pdfData.filename, { type: "application/pdf" });
+          const pdfR2Key = await uploadToR2(pdfFile, `${storeFolder}/agreements`, pdfData.filename);
+          if (pdfR2Key) {
+            // Get signed URL from R2 (7 days expiry)
+            const signedUrlRes = await fetch(`/api/r2/signed-url?key=${encodeURIComponent(pdfR2Key)}&expires=${7 * 24 * 60 * 60}`);
+            if (signedUrlRes.ok) {
+              const signedUrlData = await signedUrlRes.json();
+              signedPdfUrl = signedUrlData.signedUrl || null;
+            }
+          }
+        }
+      } catch (pdfErr) {
+        console.error("PDF upload failed:", pdfErr);
+        // Don't fail the entire submission if PDF upload fails
+      }
+
       const res = await fetch("/api/register-store", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          step1,
+          step1: {
+            ...step1,
+            __storePublicId: step1?.store_public_id || (typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("store_id") : null),
+          },
           step2,
           storeSetup,
           documents: undefined,
@@ -538,6 +583,7 @@ export default function SignatureStepPage({
             templateTitle: agreementTemplate?.title || "Merchant Partner Agreement",
             templateContentSnapshot: agreementTemplate?.content_markdown || defaultAgreementText,
             templatePdfUrl: agreementTemplate?.pdf_url || null,
+            signedPdfUrl: signedPdfUrl, // Signed PDF URL from R2
             signerName: signerName.trim(),
             signerEmail: signerEmail || null,
             signerPhone: signerPhone || null,
@@ -664,7 +710,7 @@ export default function SignatureStepPage({
               className="flex items-center gap-1.5 px-3 py-2 sm:px-5 sm:py-2.5 border border-slate-300 text-slate-700 rounded-lg sm:rounded-xl hover:bg-slate-50 font-medium text-sm disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {actionLoading ? <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 animate-spin" /> : <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />}
-              Back
+              Previous
             </button>
             <button
               type="button"

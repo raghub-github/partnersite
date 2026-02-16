@@ -53,7 +53,7 @@ export async function GET(request: NextRequest) {
 
     const { data: stores, error: storesError } = await db
       .from("merchant_stores")
-      .select("store_id, store_name, full_address, store_phones, approval_status, is_active, current_onboarding_step, onboarding_completed")
+      .select("id, store_id, store_name, full_address, store_phones, approval_status, is_active, current_onboarding_step, onboarding_completed")
       .eq("parent_id", parentId);
 
     if (storesError) {
@@ -61,6 +61,35 @@ export async function GET(request: NextRequest) {
         { success: false, error: "Failed to fetch stores" },
         { status: 500 }
       );
+    }
+
+    // Check payment status by store_id (each store has its own payment record)
+    const storeIds = (stores ?? []).map((s) => s.id).filter((id): id is number => id != null);
+    let paymentByStoreId: Record<number, "pending" | "completed"> = {};
+    
+    if (storeIds.length > 0) {
+      // Check payment status for each store individually
+      const { data: payments } = await db
+        .from("merchant_onboarding_payments")
+        .select("merchant_store_id, status")
+        .eq("merchant_parent_id", parentId)
+        .in("merchant_store_id", storeIds)
+        .eq("status", "captured");
+      
+      // Mark stores with captured payments as completed
+      for (const p of payments ?? []) {
+        const sid = p.merchant_store_id as number | null;
+        if (sid != null) {
+          paymentByStoreId[sid] = "completed";
+        }
+      }
+      
+      // All other stores default to pending
+      for (const sid of storeIds) {
+        if (!paymentByStoreId[sid]) {
+          paymentByStoreId[sid] = "pending";
+        }
+      }
     }
 
     const { data: progress, error: progressError } = await db
@@ -80,7 +109,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const storeList = stores ?? [];
+    const storeList = (stores ?? []).map((s) => ({
+      ...s,
+      payment_status: (s.id != null ? (paymentByStoreId[s.id] ?? "pending") : "pending") as "pending" | "completed",
+    }));
     const verifiedStores = storeList.filter((s) => s.approval_status === "APPROVED");
     // Only treat as "incomplete draft" when there is real unfinished work. Do not show "Resume draft"
     // when all stores are SUBMITTED/APPROVED/REJECTED (stale progress row with store_id null).

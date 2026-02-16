@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { validateMerchantFromSession } from "@/lib/auth/validate-merchant";
 import { createClient } from "@supabase/supabase-js";
+import { logAuthError, shouldClearSession } from "@/lib/auth/auth-error-handler";
+import { getR2SignedUrl, extractR2KeyFromUrl } from "@/lib/r2";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -10,6 +12,18 @@ function getSupabaseAdmin() {
   return createClient(supabaseUrl, supabaseServiceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+}
+
+/** Returns a fresh R2 signed URL for display; avoids expired URLs. Uses 7-day expiry for progress responses. */
+async function toFreshSignedUrl(storedUrlOrKey: string | null | undefined): Promise<string | null> {
+  if (!storedUrlOrKey || typeof storedUrlOrKey !== "string") return null;
+  const key = extractR2KeyFromUrl(storedUrlOrKey) || (storedUrlOrKey.includes("://") ? null : storedUrlOrKey.replace(/^\/+/, ""));
+  if (!key) return storedUrlOrKey;
+  try {
+    return await getR2SignedUrl(key, 86400 * 7); // 7 days
+  } catch {
+    return storedUrlOrKey;
+  }
 }
 
 function toEnumStoreType(raw: string | undefined): string | null {
@@ -35,6 +49,9 @@ const STEP_KEYS: Array<keyof ProgressFlags> = [
   "step_5_completed",
   "step_6_completed",
 ];
+
+/** Shape of form_data we read for step_store.storePublicId; form_data is otherwise unknown. */
+type ProgressFormData = { step_store?: { storePublicId?: string }; [key: string]: unknown };
 
 type ProgressRow = ProgressFlags & {
   id: number;
@@ -98,16 +115,99 @@ function countCompletedSteps(flags: ProgressFlags) {
 }
 
 async function generateStorePublicId(db: ReturnType<typeof getSupabaseAdmin>) {
+  // Use the database function for consistent Store ID generation
+  const { data, error } = await db.rpc('generate_unique_store_id');
+  if (error) {
+    console.error("Error calling generate_unique_store_id function:", error);
+    // Fallback to the original logic if the function doesn't exist
+    const { data: storeData, error: storeError } = await db
+      .from("merchant_stores")
+      .select("store_id");
+    if (storeError) throw new Error("Unable to generate store id");
+    
+    // Also check progress table for any pending Store IDs
+    const { data: progressData } = await db
+      .from("merchant_store_registration_progress")
+      .select("form_data");
+    
+    let maxNum = 1000;
+    
+    // Check merchant_stores
+    for (const row of storeData || []) {
+      const match = typeof row.store_id === "string" && row.store_id.match(/^GMMC(\d+)$/);
+      if (match) maxNum = Math.max(maxNum, Number(match[1]));
+    }
+    
+    // Check progress table
+    for (const row of progressData || []) {
+      const storePublicId = (row.form_data as ProgressFormData | null | undefined)?.step_store?.storePublicId;
+      if (typeof storePublicId === "string") {
+        const match = storePublicId.match(/^GMMC(\d+)$/);
+        if (match) maxNum = Math.max(maxNum, Number(match[1]));
+      }
+    }
+    
+    return `GMMC${maxNum + 1}`;
+  }
+  return data;
+}
+
+/** Insert merchant_stores row when step 1 is completed (so store_id exists in DB immediately). */
+async function insertStoreAfterStep1(
+  db: ReturnType<typeof getSupabaseAdmin>,
+  params: { parentId: number; step1: any; generatedStoreId: string }
+): Promise<{ storeDbId: number; storePublicId: string } | null> {
+  const { parentId, step1, generatedStoreId } = params;
+  if (!step1?.store_name || !generatedStoreId) return null;
+
+  const ownerFullName =
+    typeof step1.owner_full_name === "string" && step1.owner_full_name.trim()
+      ? step1.owner_full_name.trim()
+      : "Store Owner";
+
+  const payload = {
+    store_id: generatedStoreId,
+    parent_id: parentId,
+    store_name: step1.store_name,
+    store_display_name: step1.store_display_name || null,
+    store_description: step1.store_description || null,
+    store_type: toEnumStoreType(step1.store_type),
+    store_email: step1.store_email || null,
+    store_phones: Array.isArray(step1.store_phones) ? step1.store_phones : [],
+    full_address: "Pending",
+    city: "Pending",
+    state: "Pending",
+    postal_code: "Pending",
+    country: "IN",
+    current_onboarding_step: 1,
+    onboarding_completed: false,
+    approval_status: "DRAFT" as const,
+    status: "INACTIVE" as const,
+    is_active: false,
+    is_accepting_orders: false,
+    is_available: false,
+  };
+
   const { data, error } = await db
     .from("merchant_stores")
-    .select("store_id");
-  if (error) throw new Error("Unable to generate store id");
-  let maxNum = 1000;
-  for (const row of data || []) {
-    const match = typeof row.store_id === "string" && row.store_id.match(/^GMMC(\d+)$/);
-    if (match) maxNum = Math.max(maxNum, Number(match[1]));
+    .insert([payload])
+    .select("id, store_id")
+    .single();
+
+  if (error) {
+    if (error.code === "23505") {
+      const { data: existing } = await db
+        .from("merchant_stores")
+        .select("id, store_id")
+        .eq("store_id", generatedStoreId)
+        .maybeSingle();
+      if (existing)
+        return { storeDbId: existing.id as number, storePublicId: existing.store_id as string };
+    }
+    console.error("[register-store-progress] insertStoreAfterStep1 failed:", error);
+    return null;
   }
-  return `GMMC${maxNum + 1}`;
+  return { storeDbId: data.id as number, storePublicId: data.store_id as string };
 }
 
 async function upsertStoreDraft(db: ReturnType<typeof getSupabaseAdmin>, params: {
@@ -203,7 +303,25 @@ export async function GET(req: NextRequest) {
       error: userError,
     } = await supabase.auth.getUser();
 
-    if (userError || !user) {
+    if (userError) {
+      // Only log actual errors, not missing sessions
+      if (userError.message !== 'Auth session missing!') {
+        logAuthError('register-store-progress-GET', userError);
+      }
+      if (shouldClearSession(userError)) {
+        return NextResponse.json({ 
+          success: false, 
+          error: "Session invalid", 
+          code: "SESSION_INVALID" 
+        }, { status: 401 });
+      }
+      return NextResponse.json({ 
+        success: false, 
+        error: userError.message || "Authentication failed" 
+      }, { status: 401 });
+    }
+
+    if (!user) {
       return NextResponse.json({ success: false, error: "Not authenticated" }, { status: 401 });
     }
 
@@ -225,6 +343,7 @@ export async function GET(req: NextRequest) {
     let progress: ProgressRow | null = null;
     let err: { message?: string } | null = null;
 
+    // First try to find by storePublicId if provided
     if (storePublicId) {
       const byStore = await db
         .from("merchant_store_registration_progress")
@@ -239,6 +358,7 @@ export async function GET(req: NextRequest) {
       else if (byStore.data) progress = byStore.data as ProgressRow;
     }
 
+    // If not found by storePublicId, try to find the most recent active progress for this parent
     if (!progress) {
       const byParent = await db
         .from("merchant_store_registration_progress")
@@ -252,6 +372,39 @@ export async function GET(req: NextRequest) {
       else if (byParent.data) progress = byParent.data as ProgressRow;
     }
 
+    // If we found progress but no Store ID is generated yet, and step 1 is completed, generate it
+    if (progress && !(progress.form_data as ProgressFormData | null | undefined)?.step_store?.storePublicId && progress.step_1_completed) {
+      try {
+        const generatedStoreId = await generateStorePublicId(db);
+        console.log(`Generated Store ID during GET: ${generatedStoreId} for existing progress`);
+        
+        const updatedFormData = {
+          ...((progress.form_data as any) || {}),
+          step_store: {
+            ...((progress.form_data as any)?.step_store || {}),
+            storePublicId: generatedStoreId,
+          },
+        };
+
+        // Update the progress record with the generated Store ID
+        const { data: updatedProgress, error: updateError } = await db
+          .from("merchant_store_registration_progress")
+          .update({
+            form_data: updatedFormData,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", progress.id)
+          .select("*")
+          .single();
+
+        if (!updateError && updatedProgress) {
+          progress = updatedProgress as ProgressRow;
+        }
+      } catch (error) {
+        console.error("Failed to generate Store ID during GET:", error);
+      }
+    }
+
     if (err) {
       return NextResponse.json(
         { success: false, error: "Failed to fetch progress" },
@@ -261,6 +414,79 @@ export async function GET(req: NextRequest) {
 
     if (!progress) {
       return NextResponse.json({ success: true, progress: null });
+    }
+
+    // Merge merchant_store_documents into form_data.step4 so UI shows saved doc URLs after refresh
+    const stepStore = (progress.form_data as any)?.step_store;
+    const storeDbId = stepStore?.storeDbId ? Number(stepStore.storeDbId) : null;
+    if (storeDbId) {
+      const { data: docRow } = await db
+        .from("merchant_store_documents")
+        .select("*")
+        .eq("store_id", storeDbId)
+        .maybeSingle();
+      if (docRow) {
+        const formData = (progress.form_data || {}) as Record<string, unknown>;
+        const step4 = (formData.step4 || {}) as Record<string, unknown>;
+        const rawPan = docRow.pan_document_url ?? step4.pan_image_url;
+        const rawAadharFront = docRow.aadhaar_document_url ?? step4.aadhar_front_url;
+        const rawAadharBack = (docRow.aadhaar_document_metadata as any)?.back_url ?? step4.aadhar_back_url;
+        const rawGst = docRow.gst_document_url ?? step4.gst_image_url;
+        const rawFssai = docRow.fssai_document_url ?? step4.fssai_image_url;
+        const rawDrug = docRow.drug_license_document_url ?? step4.drug_license_image_url;
+        const rawPharmacist = docRow.pharmacist_certificate_document_url ?? step4.pharmacist_certificate_url;
+        const rawPharmacyCouncil = docRow.pharmacy_council_registration_document_url ?? step4.pharmacy_council_registration_url;
+        const rawOther = docRow.other_document_url ?? step4.other_document_file_url;
+        const [
+          pan_image_url,
+          aadhar_front_url,
+          aadhar_back_url,
+          gst_image_url,
+          fssai_image_url,
+          drug_license_image_url,
+          pharmacist_certificate_url,
+          pharmacy_council_registration_url,
+          other_document_file_url,
+        ] = await Promise.all([
+          toFreshSignedUrl(rawPan),
+          toFreshSignedUrl(rawAadharFront),
+          toFreshSignedUrl(rawAadharBack),
+          toFreshSignedUrl(rawGst),
+          toFreshSignedUrl(rawFssai),
+          toFreshSignedUrl(rawDrug),
+          toFreshSignedUrl(rawPharmacist),
+          toFreshSignedUrl(rawPharmacyCouncil),
+          toFreshSignedUrl(rawOther),
+        ]);
+        const mergedStep4 = {
+          ...step4,
+          pan_number: docRow.pan_document_number ?? step4.pan_number,
+          pan_holder_name: docRow.pan_holder_name ?? step4.pan_holder_name,
+          pan_image_url: pan_image_url ?? rawPan,
+          aadhar_number: docRow.aadhaar_document_number ?? step4.aadhar_number,
+          aadhar_holder_name: docRow.aadhaar_holder_name ?? step4.aadhar_holder_name,
+          aadhar_front_url: aadhar_front_url ?? rawAadharFront,
+          aadhar_back_url: aadhar_back_url ?? rawAadharBack,
+          gst_number: docRow.gst_document_number ?? step4.gst_number,
+          gst_image_url: gst_image_url ?? rawGst,
+          fssai_number: docRow.fssai_document_number ?? step4.fssai_number,
+          fssai_image_url: fssai_image_url ?? rawFssai,
+          fssai_expiry_date: docRow.fssai_expiry_date ?? step4.fssai_expiry_date,
+          drug_license_number: docRow.drug_license_document_number ?? step4.drug_license_number,
+          drug_license_image_url: drug_license_image_url ?? rawDrug,
+          drug_license_expiry_date: docRow.drug_license_expiry_date ?? step4.drug_license_expiry_date,
+          pharmacist_registration_number: docRow.pharmacist_certificate_document_number ?? step4.pharmacist_registration_number,
+          pharmacist_certificate_url: pharmacist_certificate_url ?? rawPharmacist,
+          pharmacist_expiry_date: docRow.pharmacist_certificate_expiry_date ?? step4.pharmacist_expiry_date,
+          pharmacy_council_registration_url: pharmacy_council_registration_url ?? rawPharmacyCouncil,
+          other_document_number: docRow.other_document_number ?? step4.other_document_number,
+          other_document_type: docRow.other_document_type ?? step4.other_document_type,
+          other_document_name: docRow.other_document_name ?? step4.other_document_name,
+          other_document_file_url: other_document_file_url ?? rawOther,
+          other_document_expiry_date: docRow.other_expiry_date ?? step4.other_document_expiry_date,
+        };
+        progress = { ...progress, form_data: { ...formData, step4: mergedStep4 } } as ProgressRow;
+      }
     }
 
     // Reconcile stale counters/flags for already-saved rows.
@@ -311,7 +537,25 @@ export async function PUT(req: NextRequest) {
       error: userError,
     } = await supabase.auth.getUser();
 
-    if (userError || !user) {
+    if (userError) {
+      // Only log actual errors, not missing sessions
+      if (userError.message !== 'Auth session missing!') {
+        logAuthError('register-store-progress-PUT', userError);
+      }
+      if (shouldClearSession(userError)) {
+        return NextResponse.json({ 
+          success: false, 
+          error: "Session invalid", 
+          code: "SESSION_INVALID" 
+        }, { status: 401 });
+      }
+      return NextResponse.json({ 
+        success: false, 
+        error: userError.message || "Authentication failed" 
+      }, { status: 401 });
+    }
+
+    if (!user) {
       return NextResponse.json({ success: false, error: "Not authenticated" }, { status: 401 });
     }
 
@@ -386,6 +630,51 @@ export async function PUT(req: NextRequest) {
           }
         : null;
 
+    // If we have storePublicId but no valid storeDbId, resolve from merchant_stores (e.g. after migration).
+    if (mergedFormData?.step_store?.storePublicId && (!stepStore?.storeDbId || stepStore.storeDbId <= 0)) {
+      const { data: storeRow } = await db
+        .from("merchant_stores")
+        .select("id, store_id")
+        .eq("store_id", String(mergedFormData.step_store.storePublicId))
+        .maybeSingle();
+      if (storeRow) {
+        stepStore = { storeDbId: storeRow.id as number, storePublicId: storeRow.store_id as string };
+        if (!mergedFormData.step_store) mergedFormData.step_store = {};
+        mergedFormData.step_store.storeDbId = storeRow.id;
+      }
+    }
+
+    // When step 1 is completed: ensure we have a store ID and a merchant_stores row (data in DB).
+    if (normalizedCurrentStep >= 1 && nextFlags.step_1_completed) {
+      const existingPublicId = mergedFormData?.step_store?.storePublicId;
+      if (!stepStore?.storeDbId || stepStore.storeDbId <= 0) {
+        try {
+          const storeIdToUse =
+            typeof existingPublicId === "string" && existingPublicId.trim()
+              ? existingPublicId.trim()
+              : await generateStorePublicId(db);
+          if (!mergedFormData.step_store) mergedFormData.step_store = {};
+          mergedFormData.step_store.storePublicId = storeIdToUse;
+
+          const inserted = await insertStoreAfterStep1(db, {
+            parentId: validation.merchantParentId,
+            step1: mergedFormData?.step1,
+            generatedStoreId: storeIdToUse,
+          });
+          if (inserted) {
+            mergedFormData.step_store.storeDbId = inserted.storeDbId;
+            stepStore = { storeDbId: inserted.storeDbId, storePublicId: inserted.storePublicId };
+          } else {
+            stepStore = { storeDbId: 0, storePublicId: storeIdToUse };
+          }
+        } catch (error) {
+          console.error("Failed to ensure store row:", error);
+          if (!stepStore && existingPublicId)
+            stepStore = { storeDbId: 0, storePublicId: String(existingPublicId) };
+        }
+      }
+    }
+
     if (normalizedCurrentStep >= 2) {
       stepStore = await upsertStoreDraft(db, {
         parentId: validation.merchantParentId,
@@ -435,13 +724,18 @@ export async function PUT(req: NextRequest) {
         try {
           const { data: existingMedia } = await db
             .from("merchant_store_media_files")
-            .select("public_url")
+            .select("public_url, r2_key")
             .eq("store_id", stepStore.storeDbId)
             .eq("media_scope", "MENU_REFERENCE");
-          const existingUrls = new Set((existingMedia || []).map((row: any) => row.public_url));
-          const toInsert = mediaCandidates.filter((row) => !existingUrls.has(row.public_url));
+          const existingUrls = new Set((existingMedia || []).map((row: any) => row.public_url).filter(Boolean));
+          const existingR2Keys = new Set((existingMedia || []).map((row: any) => row.r2_key).filter(Boolean));
+          // Filter out duplicates by both public_url and r2_key
+          const toInsert = mediaCandidates.filter(
+            (row) => !existingUrls.has(row.public_url) && !existingR2Keys.has(row.r2_key)
+          );
           if (toInsert.length > 0) await db.from("merchant_store_media_files").insert(toInsert);
-        } catch {
+        } catch (mediaError: any) {
+          console.warn("[register-store-progress] media insert skipped:", mediaError.message);
           // Optional table in rollout phase.
         }
       }
@@ -461,30 +755,30 @@ export async function PUT(req: NextRequest) {
         store_id: stepStore.storeDbId,
         pan_document_number: docs.pan_number || null,
         pan_document_url: docs.pan_image_url || null,
-        pan_document_name: (docs.pan_image?.name ?? (docs.pan_image_url ? "pan" : null)) || null,
+        pan_document_name: docs.pan_image?.name || (docs.pan_image_url ? "pan" : null) || null,
         pan_holder_name: docs.pan_holder_name || null,
         aadhaar_document_number: docs.aadhar_number || null,
         aadhaar_document_url: docs.aadhar_front_url || null,
-        aadhaar_document_name: (docs.aadhar_front?.name ?? (docs.aadhar_front_url ? "aadhaar_front" : null)) || null,
+        aadhaar_document_name: docs.aadhar_front?.name || (docs.aadhar_front_url ? "aadhaar_front" : null) || null,
         aadhaar_holder_name: docs.aadhar_holder_name || null,
         aadhaar_document_metadata:
           docs.aadhar_back_url != null ? { back_url: docs.aadhar_back_url } : {},
         gst_document_number: docs.gst_number || null,
         gst_document_url: docs.gst_image_url || null,
-        gst_document_name: (docs.gst_image?.name ?? (docs.gst_image_url ? "gst" : null)) || null,
+        gst_document_name: docs.gst_image?.name || (docs.gst_image_url ? "gst" : null) || null,
         fssai_document_number: docs.fssai_number || null,
         fssai_document_url: docs.fssai_image_url || null,
-        fssai_document_name: (docs.fssai_image?.name ?? (docs.fssai_image_url ? "fssai" : null)) || null,
+        fssai_document_name: docs.fssai_image?.name || (docs.fssai_image_url ? "fssai" : null) || null,
         fssai_expiry_date: parseDate(docs.fssai_expiry_date),
         drug_license_document_number: docs.drug_license_number || null,
         drug_license_document_url: docs.drug_license_image_url || null,
         drug_license_document_name:
-          (docs.drug_license_image?.name ?? (docs.drug_license_image_url ? "drug_license" : null)) || null,
+          docs.drug_license_image?.name || (docs.drug_license_image_url ? "drug_license" : null) || null,
         drug_license_expiry_date: parseDate(docs.drug_license_expiry_date),
         pharmacist_certificate_document_number: docs.pharmacist_registration_number || null,
         pharmacist_certificate_document_url: docs.pharmacist_certificate_url || null,
         pharmacist_certificate_document_name:
-          (docs.pharmacist_certificate?.name ?? (docs.pharmacist_certificate_url ? "pharmacist" : null)) || null,
+          docs.pharmacist_certificate?.name || (docs.pharmacist_certificate_url ? "pharmacist" : null) || null,
         pharmacist_certificate_expiry_date: parseDate(docs.pharmacist_expiry_date),
         pharmacy_council_registration_document_url: docs.pharmacy_council_registration_url || null,
         pharmacy_council_registration_document_name:
@@ -493,7 +787,7 @@ export async function PUT(req: NextRequest) {
         other_document_number: docs.other_document_number || null,
         other_document_url: docs.other_document_file_url || null,
         other_document_name:
-          (docs.other_document_file?.name ?? (docs.other_document_file_url ? "other" : null)) || null,
+          docs.other_document_file?.name || (docs.other_document_file_url ? "other" : null) || null,
         other_document_type: docs.other_document_type || null,
         other_expiry_date: parseDate(docs.other_document_expiry_date),
       };
@@ -772,7 +1066,7 @@ export async function PUT(req: NextRequest) {
 
     const payload = {
       parent_id: validation.merchantParentId,
-      store_id: existing?.store_id ?? null,
+      store_id: stepStore?.storeDbId || existing?.store_id || null,
       current_step: normalizedNextStep,
       total_steps: 9,
       completed_steps: completedSteps,
@@ -780,6 +1074,7 @@ export async function PUT(req: NextRequest) {
       form_data: mergedFormData,
       registration_status: registrationStatus,
       updated_at: new Date().toISOString(),
+      ...(normalizedCurrentStep >= 1 && nextFlags.step_1_completed ? { last_step_completed_at: new Date().toISOString() } : {}),
     };
 
     if (existing?.id) {

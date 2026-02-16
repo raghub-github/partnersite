@@ -72,3 +72,8 @@ html, body {
 html::-webkit-scrollbar, body::-webkit-scrollbar {
   display: none;
 }
+
+/* Add cursor pointer to all buttons globally */
+button {
+  cursor: pointer !important;
+}

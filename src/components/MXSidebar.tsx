@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
@@ -42,6 +42,11 @@ export const MXSidebar: React.FC<MXSidebarProps> = ({
   const router = useRouter()
   const [isMobileOpen, setIsMobileOpen] = useState(false)
   const [expandedMenus, setExpandedMenus] = useState<string[]>(['dashboard'])
+
+  // On mobile: keep sidebar always closed on route change — never expand after navigation.
+  useEffect(() => {
+    setIsMobileOpen(false)
+  }, [pathname])
   const [showLogoutModal, setShowLogoutModal] = useState(false)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
 
@@ -55,26 +60,26 @@ export const MXSidebar: React.FC<MXSidebarProps> = ({
     {
       id: 'orders',
       label: 'Orders',
-      icon: <ShoppingCart size={20} />,
-      href: '/mx/orders',
+      icon: <UtensilsCrossed size={20} />,
+      href: '/mx/food-orders',
       submenu: [
         {
           id: 'active-orders',
           label: 'Active Orders',
-          icon: <ShoppingCart size={16} />,
-          href: '/mx/orders?status=active',
+          icon: <UtensilsCrossed size={16} />,
+          href: '/mx/food-orders?filter=active',
         },
         {
           id: 'completed-orders',
           label: 'Completed',
-          icon: <ShoppingCart size={16} />,
-          href: '/mx/completed',
+          icon: <UtensilsCrossed size={16} />,
+          href: '/mx/food-orders?filter=DELIVERED',
         },
         {
           id: 'cancelled-orders',
           label: 'Cancelled',
-          icon: <ShoppingCart size={16} />,
-          href: '/mx/cancelled',
+          icon: <UtensilsCrossed size={16} />,
+          href: '/mx/food-orders?filter=CANCELLED',
         },
       ],
     },

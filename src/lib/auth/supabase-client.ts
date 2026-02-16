@@ -3,7 +3,7 @@
  * Google OAuth and Phone OTP are configured in Supabase Dashboard — no Google client/secret in app .env.
  */
 
-import { supabase } from "@/lib/supabase";
+import { createClient } from "@/lib/supabase/client";
 
 export interface AuthResponse {
   success: boolean;
@@ -21,6 +21,7 @@ export async function signInWithGoogle(redirectTo?: string): Promise<AuthRespons
     if (typeof window === "undefined") {
       return { success: false, error: "Must be called from the client" };
     }
+    const supabase = createClient();
     const baseUrl = window.location.origin;
     const redirectUrl = redirectTo || `${baseUrl}/auth/callback`;
     if (typeof window !== "undefined") {
@@ -52,6 +53,7 @@ export async function signInWithGoogle(redirectTo?: string): Promise<AuthRespons
 /** Request OTP via email (Supabase). Enable Email in Supabase Dashboard; use 6-digit OTP template. */
 export async function requestEmailOTP(email: string): Promise<AuthResponse> {
   try {
+    const supabase = createClient();
     const { data, error } = await supabase.auth.signInWithOtp({
       email: email.trim().toLowerCase(),
       options: {
@@ -71,6 +73,7 @@ export async function requestEmailOTP(email: string): Promise<AuthResponse> {
 /** Verify email OTP (6-digit). */
 export async function verifyEmailOTP(email: string, token: string): Promise<AuthResponse> {
   try {
+    const supabase = createClient();
     const { data, error } = await supabase.auth.verifyOtp({
       email: email.trim().toLowerCase(),
       token: token.trim(),
@@ -89,6 +92,7 @@ export async function verifyEmailOTP(email: string, token: string): Promise<Auth
 /** Request OTP via phone (Supabase). Enable Phone provider in Supabase Dashboard. */
 export async function requestPhoneOTP(phone: string): Promise<AuthResponse> {
   try {
+    const supabase = createClient();
     const { data, error } = await supabase.auth.signInWithOtp({
       phone: phone.startsWith("+") ? phone : `+91${phone.replace(/\D/g, "").slice(-10)}`,
     });
@@ -105,6 +109,7 @@ export async function requestPhoneOTP(phone: string): Promise<AuthResponse> {
 /** Verify phone OTP. */
 export async function verifyPhoneOTP(phone: string, token: string): Promise<AuthResponse> {
   try {
+    const supabase = createClient();
     const normalized = phone.startsWith("+") ? phone : `+91${phone.replace(/\D/g, "").slice(-10)}`;
     const { data, error } = await supabase.auth.verifyOtp({
       phone: normalized,

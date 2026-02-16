@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { MXLayoutWhite } from '@/components/MXLayoutWhite'
 import { fetchStoreById, fetchStoreByName, fetchAllOffers, createOffer, updateOffer, deleteOffer, uploadOfferImage, fetchMenuItems } from '@/lib/database'
 import { Plus, Edit2, Trash2, Zap, X, Calendar, Percent, DollarSign, Tag, Gift, User, Clock, ShoppingBag, CheckCircle, ChevronDown, Copy, Search, Check, Sparkles, ExternalLink, ChevronRight, Star, Shield, Award, Target, TrendingUp } from 'lucide-react'
+import { PageSkeletonGeneric } from '@/components/PageSkeleton'
 import { Toaster, toast } from 'sonner'
 
 export const dynamic = 'force-dynamic'
@@ -617,22 +618,7 @@ function OffersContent() {
   if (isLoading) {
     return (
       <MXLayoutWhite restaurantName={store?.store_name || "Loading..."} restaurantId={storeId || ""}>
-        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-4">
-          <div className="max-w-7xl mx-auto">
-            <div className="animate-pulse space-y-6">
-              <div className="h-10 bg-gray-200 rounded w-64"></div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {[1, 2, 3, 4, 5, 6].map(i => (
-                  <div key={i} className="bg-white rounded-xl p-6 space-y-4 shadow-sm">
-                    <div className="h-6 bg-gray-200 rounded w-3/4"></div>
-                    <div className="h-4 bg-gray-100 rounded w-full"></div>
-                    <div className="h-4 bg-gray-100 rounded w-2/3"></div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
+        <PageSkeletonGeneric />
       </MXLayoutWhite>
     )
   }

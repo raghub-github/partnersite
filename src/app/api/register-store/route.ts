@@ -86,22 +86,47 @@ export async function POST(req: NextRequest) {
 
     const db = getSupabaseAdmin();
 
-    // 1. Generate storeId (global sequence, always GMMC{number})
-    // Find the highest numeric part of existing store_ids
-    const { data: existingStores, error: idError } = await db
-      .from('merchant_stores')
-      .select('store_id');
-    let maxNum = 1000;
-    if (existingStores && Array.isArray(existingStores)) {
-      for (const s of existingStores) {
-        const match = typeof s.store_id === 'string' && s.store_id.match(/^GMMC(\d+)$/);
-        if (match) {
-          const num = parseInt(match[1], 10);
-          if (num > maxNum) maxNum = num;
+    // 1. Get storeId from progress table or generate new one
+    let storeId = step1?.__storePublicId || null;
+    
+    // If no Store ID is provided, check if it exists in the progress table
+    if (!storeId) {
+      const { data: progressData } = await db
+        .from('merchant_store_registration_progress')
+        .select('form_data')
+        .eq('parent_id', parentId)
+        .neq('registration_status', 'COMPLETED')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      storeId = progressData?.form_data?.step_store?.storePublicId || null;
+    }
+    
+    // If still no Store ID, generate a new one (fallback)
+    if (!storeId) {
+      // Use the database function for consistent Store ID generation
+      const { data: generatedId, error: genError } = await db.rpc('generate_unique_store_id');
+      if (genError) {
+        // Fallback to original logic
+        const { data: existingStores, error: idError } = await db
+          .from('merchant_stores')
+          .select('store_id');
+        let maxNum = 1000;
+        if (existingStores && Array.isArray(existingStores)) {
+          for (const s of existingStores) {
+            const match = typeof s.store_id === 'string' && s.store_id.match(/^GMMC(\d+)$/);
+            if (match) {
+              const num = parseInt(match[1], 10);
+              if (num > maxNum) maxNum = num;
+            }
+          }
         }
+        storeId = `GMMC${maxNum + 1}`;
+      } else {
+        storeId = generatedId;
       }
     }
-    const storeId = `GMMC${maxNum + 1}`;
     // Create directory structure (R2 is flat, so prefix keys)
     const r2Base = `store-documents/${storeId}`;
     // Map all possible frontend keys to valid enum values for document_type_merchant
@@ -248,11 +273,27 @@ export async function POST(req: NextRequest) {
         });
       }
       if (mediaRows.length > 0) {
-        const { error: mediaInsertError } = await db
-          .from('merchant_store_media_files')
-          .insert(mediaRows);
-        if (mediaInsertError) {
-          console.warn('merchant_store_media_files insert skipped:', mediaInsertError.message);
+        try {
+          // Check for existing media files to avoid duplicates
+          const { data: existingMedia } = await db
+            .from('merchant_store_media_files')
+            .select('r2_key')
+            .eq('store_id', storeData.id)
+            .eq('media_scope', 'MENU_REFERENCE');
+          
+          const existingR2Keys = new Set((existingMedia || []).map((row: any) => row.r2_key).filter(Boolean));
+          const toInsert = mediaRows.filter((row: any) => !existingR2Keys.has(row.r2_key));
+          
+          if (toInsert.length > 0) {
+            const { error: mediaInsertError } = await db
+              .from('merchant_store_media_files')
+              .insert(toInsert);
+            if (mediaInsertError) {
+              console.warn('merchant_store_media_files insert skipped:', mediaInsertError.message);
+            }
+          }
+        } catch (mediaError: any) {
+          console.warn('merchant_store_media_files insert skipped:', mediaError.message);
         }
       }
     }
@@ -373,10 +414,38 @@ export async function POST(req: NextRequest) {
       same_for_all_days: sameForAllDays,
       closed_days: closedDays,
     };
-    const { error: opError } = await db
-      .from('merchant_store_operating_hours')
-      .insert([opRow]);
-    if (opError) throw new Error(opError.message);
+    // Use upsert to avoid duplicate key errors
+    try {
+      const { error: opError } = await db
+        .from('merchant_store_operating_hours')
+        .upsert([opRow], { onConflict: 'store_id' });
+      if (opError) {
+        // If upsert fails, try update/insert approach
+        const { data: existingHours } = await db
+          .from('merchant_store_operating_hours')
+          .select('id')
+          .eq('store_id', storeData.id)
+          .maybeSingle();
+        
+        if (existingHours) {
+          // Update existing record
+          const { error: updateError } = await db
+            .from('merchant_store_operating_hours')
+            .update(opRow)
+            .eq('store_id', storeData.id);
+          if (updateError) throw new Error(updateError.message);
+        } else {
+          // Insert new record
+          const { error: insertError } = await db
+            .from('merchant_store_operating_hours')
+            .insert([opRow]);
+          if (insertError) throw new Error(insertError.message);
+        }
+      }
+    } catch (opError: any) {
+      console.error('[register-store] Operating hours error:', opError);
+      throw new Error(opError.message || 'Failed to save operating hours');
+    }
 
     // 4. Insert documents (one row per store)
     if (documentUrls && documentUrls.length > 0) {
@@ -509,6 +578,13 @@ export async function POST(req: NextRequest) {
         null;
       const userAgent = req.headers.get('user-agent') || null;
 
+      // Extract R2 key from signed URL for auto-renewal
+      let contractPdfR2Key: string | null = null;
+      if (agreementAcceptance.signedPdfUrl) {
+        const { extractR2KeyFromUrl } = await import('@/lib/r2');
+        contractPdfR2Key = extractR2KeyFromUrl(agreementAcceptance.signedPdfUrl) || null;
+      }
+
       const { error: agreementError } = await db
         .from('merchant_store_agreement_acceptances')
         .upsert(
@@ -518,8 +594,11 @@ export async function POST(req: NextRequest) {
               template_id: agreementAcceptance.templateId || null,
               template_key: agreementAcceptance.templateKey || 'DEFAULT_CHILD_ONBOARDING_AGREEMENT',
               template_version: agreementAcceptance.templateVersion || 'v1',
-              template_snapshot: templateSnapshot,
-              contract_pdf_url: agreementAcceptance.templatePdfUrl || null,
+              template_snapshot: {
+                ...templateSnapshot,
+                r2_key: contractPdfR2Key, // Store R2 key in snapshot for auto-renewal
+              },
+              contract_pdf_url: agreementAcceptance.signedPdfUrl || agreementAcceptance.templatePdfUrl || null,
               signer_name: agreementAcceptance.signerName || null,
               signer_email: agreementAcceptance.signerEmail || null,
               signer_phone: agreementAcceptance.signerPhone || null,
@@ -541,16 +620,23 @@ export async function POST(req: NextRequest) {
     // 6. Mark the registration progress as COMPLETED
     // This prevents the "Incomplete onboarding draft" banner from showing after submission
     try {
+      // Update progress record to mark as completed and link to the actual store
       await db
         .from('merchant_store_registration_progress')
         .update({ 
           registration_status: 'COMPLETED',
-          store_id: storeData.id,
-          updated_at: new Date().toISOString()
+          store_id: storeData.id, // Link to the actual merchant_stores.id
+          completed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          current_step: 9,
+          step_6_completed: true, // Mark final step as completed
+          completed_steps: 9
         })
         .eq('parent_id', parentId)
-        .is('store_id', null)
+        .or(`store_id.is.null,store_id.eq.${storeData.id}`) // Update either null store_id or matching store_id
         .neq('registration_status', 'COMPLETED');
+        
+      console.log(`[register-store] Marked progress as completed for parent_id: ${parentId}, store_id: ${storeData.id}, public_id: ${storeId}`);
     } catch (progressError) {
       console.warn('[register-store] Failed to mark progress as completed:', progressError);
       // Don't fail the entire registration if this update fails

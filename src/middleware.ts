@@ -6,6 +6,7 @@ import {
   checkSessionValidity,
   updateActivity,
   expireSession,
+  initializeSession,
 } from "@/lib/auth/session-manager";
 
 export async function middleware(request: NextRequest) {
@@ -32,15 +33,17 @@ export async function middleware(request: NextRequest) {
           },
           setAll(cookiesToSet) {
             cookiesToSet.forEach(({ name, value, options }) => {
+              // Set cookie in request for current request
               request.cookies.set(name, value);
-              response.cookies.set(name, value, options);
+              // Set cookie in response for future requests
+              response.cookies.set(name, value, {
+                ...options,
+                httpOnly: options.httpOnly !== false,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'lax',
+              });
             });
           },
-        },
-        auth: {
-          autoRefreshToken: false,
-          persistSession: true,
-          detectSessionInUrl: false,
         },
       }
     );
@@ -92,15 +95,26 @@ export async function middleware(request: NextRequest) {
     }
 
     if (sessionError) {
+      // Only log actual errors, not missing sessions for unauthenticated users
+      if (sessionError.message !== 'Auth session missing!') {
+        console.log('[middleware] Session error:', sessionError);
+      }
       const isInvalid =
         sessionError.code === "refresh_token_not_found" ||
         sessionError.code === "refresh_token_already_used" ||
-        (sessionError.message ?? "").toLowerCase().includes("invalid refresh token");
+        sessionError.code === "invalid_refresh_token" ||
+        (sessionError.message ?? "").toLowerCase().includes("invalid refresh token") ||
+        (sessionError.message ?? "").toLowerCase().includes("refresh token not found");
+      
       if (isInvalid) {
+        console.log('[middleware] Invalid refresh token detected, clearing session');
         try {
           await supabase.auth.signOut();
-        } catch {}
+        } catch (signOutError) {
+          console.log('[middleware] Error signing out:', signOutError);
+        }
         clearSupabaseCookies();
+        
         if (pathname.startsWith("/api/")) {
           return NextResponse.json(
             { success: false, error: "Session invalid", code: "SESSION_INVALID" },
@@ -110,7 +124,8 @@ export async function middleware(request: NextRequest) {
         if (!isLoginPage && !pathname.startsWith("/auth/register")) {
           const redirectUrl = request.nextUrl.clone();
           redirectUrl.pathname = "/auth/login";
-          redirectUrl.searchParams.set("redirect", pathname);
+          const fullPath = pathname + (request.nextUrl.search || "");
+          redirectUrl.searchParams.set("redirect", fullPath);
           redirectUrl.searchParams.set("reason", "session_invalid");
           return NextResponse.redirect(redirectUrl);
         }
@@ -132,7 +147,7 @@ export async function middleware(request: NextRequest) {
       return response;
     }
 
-    const protectedPaths = ["/mx", "/admin", "/auth/store"];
+    const protectedPaths = ["/mx", "/auth/store"];
     const isProtected = protectedPaths.some((p) => pathname.startsWith(p));
 
     if (!session && isProtected && !isPublic) {
@@ -144,7 +159,8 @@ export async function middleware(request: NextRequest) {
       }
       const redirectUrl = request.nextUrl.clone();
       redirectUrl.pathname = "/auth/login";
-      redirectUrl.searchParams.set("redirect", pathname);
+      const fullPath = pathname + (request.nextUrl.search || "");
+      redirectUrl.searchParams.set("redirect", fullPath);
       return NextResponse.redirect(redirectUrl);
     }
 
@@ -154,7 +170,18 @@ export async function middleware(request: NextRequest) {
 
     if (session && isProtected) {
       const cookieWrapper = { get: (name: string) => request.cookies.get(name) };
-      const metadata = getSessionMetadata(cookieWrapper);
+      let metadata = getSessionMetadata(cookieWrapper);
+
+      // If user has valid Supabase session but no custom session cookies yet (e.g. came from /auth/post-login), initialize them
+      if (!metadata) {
+        const cookieSetter = {
+          set: (name: string, value: string, options: { maxAge: number; path: string; httpOnly?: boolean; sameSite?: string; secure?: boolean }) => {
+            response.cookies.set(name, value, options as any);
+          },
+        };
+        metadata = initializeSession(cookieSetter);
+      }
+
       const validity = checkSessionValidity(metadata);
 
       if (!validity.isValid) {
@@ -175,6 +202,8 @@ export async function middleware(request: NextRequest) {
         const redirectUrl = request.nextUrl.clone();
         redirectUrl.pathname = "/auth/login";
         redirectUrl.searchParams.set("expired", validity.reason || "unknown");
+        const fullPath = pathname + (request.nextUrl.search || "");
+        redirectUrl.searchParams.set("redirect", fullPath);
         return NextResponse.redirect(redirectUrl);
       }
 

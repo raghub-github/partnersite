@@ -158,7 +158,7 @@ const NeedHelpBadge: React.FC = () => {
           cursor: 'pointer',
         }}
       >
-        Need a hand ?
+        Need a hand !
       </button>
 
       {/* Modal Form */}

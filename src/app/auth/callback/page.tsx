@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { createClient } from "@/lib/supabase/client";
 import { Store } from "lucide-react";
 
 function parseHashParams(hash: string): Record<string, string> {
@@ -60,6 +60,7 @@ function LoadingSpinner() {
 function AuthCallbackContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const supabase = createClient();
 
   useEffect(() => {
     const run = async () => {

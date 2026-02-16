@@ -6,21 +6,28 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
 export async function createServerSupabaseClient() {
   const cookieStore = await cookies();
+  
   return createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
       getAll() {
         return cookieStore.getAll();
       },
       setAll(cookiesToSet) {
-        cookiesToSet.forEach(({ name, value, options }) =>
-          cookieStore.set(name, value, options)
-        );
+        try {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            // Set cookies with proper options for SSR
+            cookieStore.set(name, value, {
+              ...options,
+              // Don't override httpOnly if it's explicitly set
+              httpOnly: options.httpOnly !== false,
+              secure: process.env.NODE_ENV === 'production',
+              sameSite: 'lax',
+            });
+          });
+        } catch (error) {
+          console.error('Error setting cookies in server client:', error);
+        }
       },
-    },
-    auth: {
-      autoRefreshToken: false,
-      persistSession: true,
-      detectSessionInUrl: false,
     },
   });
 }

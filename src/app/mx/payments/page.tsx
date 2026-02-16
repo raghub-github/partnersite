@@ -10,6 +10,7 @@ import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts'
 import { CreditCard, TrendingUp, Package, X, Wallet, ArrowDownToLine } from 'lucide-react'
+import { PageSkeletonGeneric } from '@/components/PageSkeleton'
 import { Toaster, toast } from 'sonner'
 
 export const dynamic = 'force-dynamic'
@@ -44,9 +45,11 @@ function PaymentsContent() {
   })
 
   useEffect(() => {
-    const getRestaurantId = async () => {
-      let id = searchParams?.get('restaurantId')
-      if (!id) id = typeof window !== 'undefined' ? localStorage.getItem('selectedRestaurantId') : null
+    const getRestaurantId = () => {
+      let id = searchParams?.get('restaurantId') ?? searchParams?.get('storeId')
+      if (!id && typeof window !== 'undefined') {
+        id = localStorage.getItem('selectedStoreId') ?? localStorage.getItem('selectedRestaurantId')
+      }
       if (!id) id = DEMO_RESTAURANT_ID
       setRestaurantId(id)
     }
@@ -89,71 +92,7 @@ function PaymentsContent() {
   if (isLoading) {
     return (
       <MXLayoutWhite restaurantName={restaurant?.restaurant_name} restaurantId={restaurantId || ''}>
-        <div className="min-h-screen bg-gray-50 p-6">
-          <div className="max-w-6xl mx-auto space-y-6">
-            {/* Header Skeleton */}
-            <div className="space-y-2">
-              <div className="h-8 bg-gray-200 rounded w-1/3 animate-pulse"></div>
-              <div className="h-4 bg-gray-100 rounded w-1/2 animate-pulse"></div>
-            </div>
-            {/* Wallet Skeleton */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 my-6">
-              <div className="h-24 bg-gray-100 rounded-lg animate-pulse"></div>
-              <div className="h-24 bg-gray-100 rounded-lg animate-pulse"></div>
-              <div className="h-24 bg-gray-100 rounded-lg animate-pulse"></div>
-            </div>
-            {/* Analytics Skeleton */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="h-64 bg-gray-100 rounded-lg animate-pulse"></div>
-              <div className="h-64 bg-gray-100 rounded-lg animate-pulse"></div>
-            </div>
-            <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm hover:shadow-md transition-shadow">
-              <p className="text-sm text-gray-600 font-medium">Growth Rate</p>
-              <p className="text-2xl font-bold text-emerald-600 mt-1">--%</p>
-              <p className="text-xs text-gray-600 mt-2">Month on month</p>
-            </div>
-            {/* Payment Status Skeleton */}
-            <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm mb-8">
-              <h3 className="text-lg font-bold text-gray-900 mb-4">💳 Payment Status Summary</h3>
-              <div className="grid grid-cols-3 gap-4">
-                <div className="text-center p-4 rounded-lg bg-emerald-50 border border-emerald-200 animate-pulse">
-                  <div className="h-4 bg-emerald-200 rounded w-2/3 mx-auto mb-2"></div>
-                  <div className="h-8 bg-emerald-100 rounded w-1/2 mx-auto"></div>
-                </div>
-                <div className="text-center p-4 rounded-lg bg-yellow-50 border border-yellow-200 animate-pulse">
-                  <div className="h-4 bg-yellow-200 rounded w-2/3 mx-auto mb-2"></div>
-                  <div className="h-8 bg-yellow-100 rounded w-1/2 mx-auto"></div>
-                </div>
-                <div className="text-center p-4 rounded-lg bg-red-50 border border-red-200 animate-pulse">
-                  <div className="h-4 bg-red-200 rounded w-2/3 mx-auto mb-2"></div>
-                  <div className="h-8 bg-red-100 rounded w-1/2 mx-auto"></div>
-                </div>
-              </div>
-            </div>
-            {showAnalytics && (
-              <div className="space-y-6">
-                <h2 className="text-2xl font-bold text-gray-900">📊 Analytics Dashboard</h2>
-                {/* Charts */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* Revenue Chart */}
-                  <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
-                    <h3 className="text-lg font-bold text-gray-900 mb-4">💰 Revenue Trend (Last 30 Days)</h3>
-                    <div className="h-64 flex items-center justify-center text-gray-500 bg-gray-50 rounded-lg">
-                      No data available
-                    </div>
-                  </div>
-                  {/* Orders Chart */}
-                  <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
-                    <h3 className="text-lg font-bold text-gray-900 mb-4">📦 Daily Orders (Last 30 Days)</h3>
-                    <div className="h-64 flex items-center justify-center text-gray-500 bg-gray-50 rounded-lg">
-                      No data available
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+        <PageSkeletonGeneric />
       </MXLayoutWhite>
     )
   }

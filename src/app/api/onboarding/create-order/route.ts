@@ -31,6 +31,7 @@ export async function POST(request: NextRequest) {
     }
     const body = await request.json().catch(() => ({}));
     const merchantParentId = body.merchantParentId ?? body.merchant_parent_id;
+    const merchantStoreId = body.merchantStoreId ?? body.merchant_store_id ?? null; // Store ID from step 1
     if (!merchantParentId) {
       return NextResponse.json(
         { success: false, error: "merchantParentId is required" },
@@ -38,10 +39,29 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // If store_id is provided as string (public ID), get numeric ID from database
+    let storeDbId: number | null = null;
+    if (merchantStoreId) {
+      const db = getSupabaseAdmin();
+      if (typeof merchantStoreId === 'string' && merchantStoreId.startsWith('GMMC')) {
+        // It's a public store_id, need to get numeric ID
+        const { data: storeRow } = await db
+          .from('merchant_stores')
+          .select('id')
+          .eq('store_id', merchantStoreId)
+          .maybeSingle();
+        if (storeRow?.id) {
+          storeDbId = storeRow.id;
+        }
+      } else if (typeof merchantStoreId === 'number') {
+        storeDbId = merchantStoreId;
+      }
+    }
+
     const amountPaise = Number(body.amountPaise) || PROMO_AMOUNT_PAISE;
     const planId = body.planId ?? "FREE";
     const planName = body.planName ?? "Starter Plan";
-    const receipt = `onboard_${merchantParentId}_${Date.now()}`;
+    const receipt = `onboard_${merchantParentId}_${storeDbId ? `store_${storeDbId}_` : ''}${Date.now()}`;
 
     const orderRes = await fetch("https://api.razorpay.com/v1/orders", {
       method: "POST",
@@ -69,6 +89,7 @@ export async function POST(request: NextRequest) {
     const db = getSupabaseAdmin();
     const { error: insertErr } = await db.from("merchant_onboarding_payments").insert({
       merchant_parent_id: merchantParentId,
+      merchant_store_id: storeDbId, // Save store_id when payment is created
       amount_paise: amountPaise,
       currency: "INR",
       plan_id: planId,

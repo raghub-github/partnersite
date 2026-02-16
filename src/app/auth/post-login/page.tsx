@@ -15,6 +15,7 @@ type StoreItem = {
   is_active: boolean | null;
   current_onboarding_step?: number | null;
   onboarding_completed?: boolean | null;
+  payment_status?: "pending" | "completed";
 };
 
 type ResolveData = {
@@ -230,18 +231,6 @@ export default function PostLoginPage() {
               </button>
             </div>
 
-            {onboardingProgress && !onboardingProgress.store_id && (
-              <div className="mx-3 sm:mx-4 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                <span className="flex-1">Incomplete onboarding draft found. Resume and complete remaining steps.</span>
-                <button
-                  type="button"
-                  onClick={() => goToOnboarding()}
-                  className="rounded-md border border-amber-300 bg-white px-2.5 py-1.5 font-semibold hover:bg-amber-100 shrink-0"
-                >
-                  Resume draft
-                </button>
-              </div>
-            )}
 
             {stores.length === 0 ? (
               <div className="p-6 sm:p-8 text-center">
@@ -265,6 +254,7 @@ export default function PostLoginPage() {
                         <th className="text-left py-3 px-3 sm:px-4 font-semibold text-slate-700">Store</th>
                         <th className="text-left py-3 px-3 sm:px-4 font-semibold text-slate-700">Address</th>
                         <th className="text-left py-3 px-3 sm:px-4 font-semibold text-slate-700">Status</th>
+                        <th className="text-left py-3 px-3 sm:px-4 font-semibold text-slate-700">Payment</th>
                         <th className="text-left py-3 px-3 sm:px-4 font-semibold text-slate-700">Step</th>
                         <th className="text-right py-3 px-3 sm:px-4 font-semibold text-slate-700">Action</th>
                       </tr>
@@ -293,6 +283,13 @@ export default function PostLoginPage() {
                             <td className="py-3 px-3 sm:px-4">
                               <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${badge.className}`}>
                                 {badge.label}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 sm:px-4">
+                              <span className={`inline-block text-xs font-medium px-2 py-0.5 rounded-full ${
+                                store.payment_status === "completed" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+                              }`}>
+                                {store.payment_status === "completed" ? "Completed" : "Pending"}
                               </span>
                             </td>
                             <td className="py-3 px-3 sm:px-4 text-slate-600">
@@ -351,9 +348,16 @@ export default function PostLoginPage() {
                               <p className="text-xs text-slate-600 truncate mt-0.5">{store.full_address}</p>
                             )}
                           </div>
-                          <span className={`shrink-0 text-xs font-medium px-2 py-0.5 rounded-full ${badge.className}`}>
-                            {badge.label}
-                          </span>
+                          <div className="shrink-0 flex flex-col items-end gap-1">
+                            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${badge.className}`}>
+                              {badge.label}
+                            </span>
+                            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                              store.payment_status === "completed" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+                            }`}>
+                              Payment: {store.payment_status === "completed" ? "Completed" : "Pending"}
+                            </span>
+                          </div>
                         </div>
                         <div className="flex items-center justify-between gap-2">
                           {step != null && (

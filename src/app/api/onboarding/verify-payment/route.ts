@@ -58,9 +58,39 @@ export async function POST(request: NextRequest) {
     }
 
     const db = getSupabaseAdmin();
+    // Get the payment record first to check if store_id needs to be updated
+    const { data: existingPayment } = await db
+      .from("merchant_onboarding_payments")
+      .select("id, merchant_parent_id, merchant_store_id")
+      .eq("razorpay_order_id", orderId)
+      .maybeSingle();
+    
+    if (!existingPayment) {
+      return NextResponse.json(
+        { success: false, error: "Payment order not found" },
+        { status: 404 }
+      );
+    }
+
+    // If store_id is not set, try to get it from the most recent store for this parent
+    let storeIdToUpdate = existingPayment.merchant_store_id;
+    if (!storeIdToUpdate) {
+      const { data: latestStore } = await db
+        .from("merchant_stores")
+        .select("id")
+        .eq("parent_id", existingPayment.merchant_parent_id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (latestStore?.id) {
+        storeIdToUpdate = latestStore.id;
+      }
+    }
+
     const { data: row, error: updateErr } = await db
       .from("merchant_onboarding_payments")
       .update({
+        merchant_store_id: storeIdToUpdate, // Ensure store_id is saved when payment is captured
         razorpay_payment_id: paymentId,
         razorpay_signature: signature,
         status: "captured",
@@ -69,7 +99,7 @@ export async function POST(request: NextRequest) {
         updated_at: new Date().toISOString(),
       })
       .eq("razorpay_order_id", orderId)
-      .select("id, merchant_parent_id")
+      .select("id, merchant_parent_id, merchant_store_id")
       .single();
 
     if (updateErr || !row) {

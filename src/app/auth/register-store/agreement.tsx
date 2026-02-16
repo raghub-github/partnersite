@@ -18,10 +18,13 @@ export interface ContractData {
     account_number: string;
     ifsc_code: string;
     account_type: string;
+    payout_method?: 'bank' | 'upi';
+    upi_id?: string;
   };
 }
 
-const ANNEXURE_B_HEADERS = ["Beneficiary Name", "Bank Name", "Account Number", "IFSC Code", "Account Type"] as const;
+const ANNEXURE_B_BANK_HEADERS = ["Beneficiary Name", "Bank Name", "Account Number", "IFSC Code", "Account Type"] as const;
+const ANNEXURE_B_UPI_HEADERS = ["Beneficiary Name", "UPI ID", "Payment Method"] as const;
 
 /** Commission: first month 0%; thereafter 15% + GST (as per commercial terms). */
 export const COMMISSION_FIRST_MONTH_PERCENT = 0;
@@ -32,7 +35,7 @@ export interface StructuredContract {
   definitions: { term: string; meaning: string }[];
   sections: { title: string; bullets?: string[]; paragraphs?: string[] }[];
   annexureA: { description: string; table: { headers: string[]; rows: string[][] } };
-  annexureB: { headers: readonly string[]; rows: string[][] };
+  annexureB: { headers: readonly string[]; rows: string[][]; isUPI?: boolean };
   certification: string;
   termsBody: string;
 }
@@ -121,20 +124,45 @@ function buildStructuredContract(data: ContractData, termsBody: string): Structu
     },
   };
 
-  const annexureB = bank
+  // Determine if UPI or Bank details - only show if actually filled
+  const hasUPI = bank?.upi_id && bank.upi_id.trim() !== '';
+  const hasBankAccount = bank?.account_number && bank.account_number.trim() !== '' && bank?.bank_name && bank.bank_name.trim() !== '';
+  
+  // Check payout method preference
+  const prefersUPI = bank?.payout_method === 'upi';
+  const prefersBank = bank?.payout_method === 'bank' || !bank?.payout_method;
+  
+  // Determine which to show: UPI takes priority if both exist and UPI is preferred, or if only UPI exists
+  const isUPI = (prefersUPI && hasUPI) || (hasUPI && !hasBankAccount);
+  const isBank = (prefersBank && hasBankAccount) || (hasBankAccount && !hasUPI);
+  
+  const annexureB = isUPI && hasUPI
     ? {
-        headers: ANNEXURE_B_HEADERS,
+        headers: ANNEXURE_B_UPI_HEADERS,
         rows: [
           [
-            bank.account_holder_name || "—",
-            bank.bank_name || "—",
-            bank.account_number || "—",
-            bank.ifsc_code || "—",
-            (bank.account_type || "SAVINGS").toUpperCase(),
+            bank.account_holder_name?.trim() || "—",
+            bank.upi_id?.trim() ?? "—",
+            "UPI",
           ],
         ],
+        isUPI: true,
       }
-    : { headers: ANNEXURE_B_HEADERS, rows: [] };
+    : isBank && hasBankAccount
+    ? {
+        headers: ANNEXURE_B_BANK_HEADERS,
+        rows: [
+          [
+            bank.account_holder_name?.trim() || "—",
+            bank.bank_name.trim(),
+            bank.account_number.trim(),
+            bank.ifsc_code?.trim() || "—",
+            bank.account_type?.trim() ? bank.account_type.toUpperCase() : "—",
+          ],
+        ],
+        isUPI: false,
+      }
+    : { headers: ANNEXURE_B_BANK_HEADERS, rows: [], isUPI: false };
 
   const certification =
     "I/We hereby certify that the details provided above are correct, that the bank account is an account legally opened and maintained by me/our organization, and that I/we shall be liable to the maximum extent possible under applicable law in the event any details provided above are found to be incorrect.";
@@ -226,6 +254,8 @@ export default function AgreementContractPage({
           account_number: documents.bank.account_number || "",
           ifsc_code: documents.bank.ifsc_code || "",
           account_type: documents.bank.account_type || "savings",
+          payout_method: documents.bank.payout_method || "bank",
+          upi_id: documents.bank.upi_id || "",
         }
       : undefined,
   };
@@ -381,7 +411,7 @@ export default function AgreementContractPage({
 
       checkNewPage(headH + 15);
       doc.setFont("helvetica", "bold");
-      doc.text("Annexure B - Bank Details", margin, y);
+      doc.text(`Annexure B - ${structured.annexureB.isUPI ? 'UPI Details' : 'Bank Details'}`, margin, y);
       y += headH;
 
       const tableHeaders = structured.annexureB.headers as string[];
@@ -454,12 +484,20 @@ export default function AgreementContractPage({
 
   return (
     <div className="min-h-screen w-full bg-gradient-to-br from-slate-50 via-white to-indigo-50/30 flex flex-col">
-      <div className="sticky top-0 z-10 bg-white/95 backdrop-blur border-b border-slate-200 px-2 py-1.5 sm:px-4 sm:py-2 shrink-0 shadow-sm">
-        <div className="max-w-4xl mx-auto flex flex-wrap items-center justify-end gap-1.5 sm:gap-2">
+      {/* Compact Header with Download Button */}
+      <div className="sticky top-0 z-10 bg-white/95 backdrop-blur-sm border-b border-slate-200 px-3 sm:px-4 py-2 sm:py-2.5 shrink-0 shadow-sm">
+        <div className="max-w-4xl mx-auto flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <FileText className="w-4 h-4 sm:w-5 sm:h-5 text-indigo-600 shrink-0" />
+            <div className="min-w-0">
+              <h1 className="text-sm sm:text-base font-bold text-slate-900 truncate">Partner Agreement & Contract</h1>
+              <p className="text-[10px] sm:text-xs text-slate-600 truncate">Merchant Partner Agreement — Version v1</p>
+            </div>
+          </div>
           <button
             type="button"
             onClick={handleDownloadPdf}
-            className="flex items-center gap-1.5 sm:gap-2 px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-lg sm:rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs sm:text-sm font-medium transition-colors shadow-sm"
+            className="flex items-center gap-1.5 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 text-xs sm:text-sm font-medium transition-colors shadow-sm shrink-0"
           >
             <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             <span className="hidden sm:inline">Download PDF</span>
@@ -468,43 +506,34 @@ export default function AgreementContractPage({
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 max-w-4xl w-full mx-auto px-2 sm:px-4 py-2 sm:py-3 flex flex-col">
-        <div className="mb-2 sm:mb-3 shrink-0">
-          <h1 className="text-base sm:text-xl font-bold text-slate-900 flex items-center gap-2">
-            <FileText className="w-4 h-4 sm:w-5 sm:h-5 text-indigo-600 shrink-0" />
-            Partner Agreement & Contract
-          </h1>
-          <p className="text-slate-600 text-xs sm:text-sm mt-0.5">
-            Merchant Partner Agreement — Version v1. Please read the entire contract below. Your store name and details are included.
-          </p>
-        </div>
+      <div className="flex-1 min-h-0 max-w-4xl w-full mx-auto px-2 sm:px-3 md:px-4 py-2 sm:py-3 flex flex-col">
 
-        <article className="bg-white rounded-xl sm:rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex-1 min-h-0 flex flex-col">
-          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto p-3 sm:p-4 pb-28 sm:pb-32 hide-scrollbar">
+        <article className="bg-white rounded-lg sm:rounded-xl border border-slate-200 shadow-sm overflow-hidden flex-1 min-h-0 flex flex-col">
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto p-2.5 sm:p-3 md:p-4 pb-36 sm:pb-40 hide-scrollbar">
             {structured ? (
-              <div className="space-y-3 sm:space-y-4 text-slate-800 text-sm font-[family-name:var(--font-geist-sans)]">
-                <header className="border-b border-slate-100 pb-2 sm:pb-3">
-                  <h2 className="text-sm sm:text-base font-bold text-slate-900 uppercase tracking-wide">
+              <div className="space-y-2.5 sm:space-y-3 text-slate-800 text-xs sm:text-sm font-[family-name:var(--font-geist-sans)]">
+                <header className="border-b border-slate-100 pb-2">
+                  <h2 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wide mb-1.5 sm:mb-2">
                     Restaurant Partner Enrolment Form (&quot;Form&quot;) for Food Ordering and Delivery Services
                   </h2>
-                  <dl className="mt-2 sm:mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-3 sm:gap-x-4 gap-y-1 sm:gap-y-1.5 text-xs sm:text-sm">
+                  <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1 text-[10px] sm:text-xs">
                     <div><dt className="text-slate-500 font-medium">Effective Date</dt><dd className="font-medium text-slate-900">{structured.intro.effectiveDate}</dd></div>
                     <div><dt className="text-slate-500 font-medium">Restaurant Name</dt><dd className="font-medium text-slate-900">{structured.intro.storeName}</dd></div>
-                    <div><dt className="text-slate-500 font-medium">Legal Entity Name (Restaurant Partner)</dt><dd className="font-medium text-slate-900">{structured.intro.ownerName}</dd></div>
-                    <div><dt className="text-slate-500 font-medium">Legal Entity Address</dt><dd className="font-medium text-slate-900">{structured.intro.address}</dd></div>
+                    <div><dt className="text-slate-500 font-medium">Legal Entity Name</dt><dd className="font-medium text-slate-900">{structured.intro.ownerName}</dd></div>
+                    <div><dt className="text-slate-500 font-medium">Address</dt><dd className="font-medium text-slate-900">{structured.intro.address}</dd></div>
                     <div><dt className="text-slate-500 font-medium">Contact Person</dt><dd className="font-medium text-slate-900">{structured.intro.contactPerson}</dd></div>
                     <div><dt className="text-slate-500 font-medium">Phone</dt><dd className="font-medium text-slate-900">{structured.intro.phone}</dd></div>
-                    <div><dt className="text-slate-500 font-medium">Email ID</dt><dd className="font-medium text-slate-900">{structured.intro.email}</dd></div>
+                    <div className="sm:col-span-2"><dt className="text-slate-500 font-medium">Email ID</dt><dd className="font-medium text-slate-900">{structured.intro.email}</dd></div>
                   </dl>
                 </header>
 
                 <section>
-                  <h3 className="text-xs sm:text-sm font-bold text-slate-900 mb-1 sm:mb-1.5">Definitions</h3>
-                  <dl className="space-y-1 sm:space-y-1.5 text-xs sm:text-sm">
+                  <h3 className="text-xs sm:text-sm font-bold text-slate-900 mb-1">Definitions</h3>
+                  <dl className="space-y-1 text-[10px] sm:text-xs">
                     {structured.definitions.map((d, i) => (
-                      <div key={i}>
+                      <div key={i} className="mb-1">
                         <dt className="font-semibold text-slate-800">{d.term}</dt>
-                        <dd className="text-slate-600 pl-2 mt-0.5">{d.meaning}</dd>
+                        <dd className="text-slate-600 pl-2 mt-0.5 leading-relaxed">{d.meaning}</dd>
                       </div>
                     ))}
                   </dl>
@@ -512,18 +541,18 @@ export default function AgreementContractPage({
 
                 {structured.sections.map((sec, idx) => (
                   <section key={idx}>
-                    <h3 className="text-xs sm:text-sm font-bold text-slate-900 mb-1 sm:mb-1.5">{sec.title}</h3>
+                    <h3 className="text-xs sm:text-sm font-bold text-slate-900 mb-1">{sec.title}</h3>
                     {sec.bullets && (
-                      <ul className="list-disc pl-4 sm:pl-5 space-y-0.5 sm:space-y-1 text-xs sm:text-sm leading-snug sm:leading-relaxed">
+                      <ul className="list-disc pl-4 space-y-0.5 text-[10px] sm:text-xs leading-relaxed">
                         {sec.bullets.map((b, i) => (
-                          <li key={i}>{b}</li>
+                          <li key={i} className="mb-0.5">{b}</li>
                         ))}
                       </ul>
                     )}
                     {sec.paragraphs && (
-                      <div className="space-y-0.5 sm:space-y-1 text-xs sm:text-sm leading-snug sm:leading-relaxed">
+                      <div className="space-y-0.5 text-[10px] sm:text-xs leading-relaxed">
                         {sec.paragraphs.map((p, i) => (
-                          <p key={i}>{p}</p>
+                          <p key={i} className="mb-0.5">{p}</p>
                         ))}
                       </div>
                     )}
@@ -531,14 +560,14 @@ export default function AgreementContractPage({
                 ))}
 
                 <section>
-                  <h3 className="text-xs sm:text-sm font-bold text-slate-900 mb-1.5 sm:mb-2">Annexure A — Commission and Charges</h3>
-                  <p className="text-xs sm:text-sm leading-snug sm:leading-relaxed text-slate-700 mb-2 sm:mb-3">{structured.annexureA.description}</p>
-                  <div className="overflow-x-auto -mx-1 sm:mx-0 rounded-lg sm:rounded-xl border border-slate-200">
-                    <table className="w-full min-w-[260px] sm:min-w-[400px] text-xs sm:text-sm border-collapse">
+                  <h3 className="text-xs sm:text-sm font-bold text-slate-900 mb-1.5">Annexure A — Commission and Charges</h3>
+                  <p className="text-[10px] sm:text-xs leading-relaxed text-slate-700 mb-2">{structured.annexureA.description}</p>
+                  <div className="overflow-x-auto -mx-1 rounded-lg border border-slate-200">
+                    <table className="w-full min-w-[240px] sm:min-w-[400px] text-[10px] sm:text-xs border-collapse">
                       <thead>
                         <tr className="bg-slate-50 border-b border-slate-200">
                           {structured.annexureA.table.headers.map((h, i) => (
-                            <th key={i} className="text-left font-semibold text-slate-700 px-2 sm:px-4 py-1.5 sm:py-2 border-r border-slate-200 last:border-r-0 break-words">
+                            <th key={i} className="text-left font-semibold text-slate-700 px-2 sm:px-3 py-1 sm:py-1.5 border-r border-slate-200 last:border-r-0 break-words">
                               {h}
                             </th>
                           ))}
@@ -548,7 +577,7 @@ export default function AgreementContractPage({
                         {structured.annexureA.table.rows.map((row, ri) => (
                           <tr key={ri} className="border-b border-slate-100">
                             {row.map((cell, ci) => (
-                              <td key={ci} className="px-2 sm:px-4 py-1.5 sm:py-2 border-r border-slate-100 last:border-r-0 text-slate-800 break-words">
+                              <td key={ci} className="px-2 sm:px-3 py-1 sm:py-1.5 border-r border-slate-100 last:border-r-0 text-slate-800 break-words">
                                 {cell}
                               </td>
                             ))}
@@ -560,13 +589,15 @@ export default function AgreementContractPage({
                 </section>
 
                 <section>
-                  <h3 className="text-xs sm:text-sm font-bold text-slate-900 mb-1.5 sm:mb-2">Annexure B — Bank Details</h3>
-                  <div className="overflow-x-auto -mx-1 sm:mx-0 rounded-lg sm:rounded-xl border border-slate-200">
-                    <table className="w-full min-w-[280px] sm:min-w-[520px] text-xs sm:text-sm border-collapse">
+                  <h3 className="text-xs sm:text-sm font-bold text-slate-900 mb-1.5">
+                    Annexure B — {structured.annexureB.isUPI ? 'UPI Details' : 'Bank Details'}
+                  </h3>
+                  <div className="overflow-x-auto -mx-1 rounded-lg border border-slate-200">
+                    <table className="w-full min-w-[200px] sm:min-w-[400px] text-[10px] sm:text-xs border-collapse">
                       <thead>
                         <tr className="bg-slate-50 border-b border-slate-200">
                           {structured.annexureB.headers.map((h, i) => (
-                            <th key={i} className="text-left font-semibold text-slate-700 px-2 sm:px-4 py-1.5 sm:py-2 border-r border-slate-200 last:border-r-0 break-words">
+                            <th key={i} className="text-left font-semibold text-slate-700 px-2 sm:px-3 py-1 sm:py-1.5 border-r border-slate-200 last:border-r-0 break-words">
                               {h}
                             </th>
                           ))}
@@ -577,7 +608,7 @@ export default function AgreementContractPage({
                           structured.annexureB.rows.map((row, ri) => (
                             <tr key={ri} className="border-b border-slate-100 hover:bg-slate-50/50">
                               {row.map((cell, ci) => (
-                                <td key={ci} className="px-2 sm:px-4 py-1.5 sm:py-2 border-r border-slate-100 last:border-r-0 text-slate-800 break-words">
+                                <td key={ci} className="px-2 sm:px-3 py-1 sm:py-1.5 border-r border-slate-100 last:border-r-0 text-slate-800 break-words font-medium">
                                   {cell}
                                 </td>
                               ))}
@@ -585,7 +616,7 @@ export default function AgreementContractPage({
                           ))
                         ) : (
                           <tr>
-                            <td colSpan={structured.annexureB.headers.length} className="px-2 sm:px-4 py-1.5 sm:py-2 text-slate-500 italic">
+                            <td colSpan={structured.annexureB.headers.length} className="px-2 sm:px-3 py-1 sm:py-1.5 text-slate-500 italic">
                               To be provided or as per application.
                             </td>
                           </tr>
@@ -593,14 +624,14 @@ export default function AgreementContractPage({
                       </tbody>
                     </table>
                   </div>
-                  <p className="mt-2 sm:mt-3 text-xs sm:text-sm leading-snug sm:leading-relaxed text-slate-600 italic border-l-4 border-indigo-200 pl-3 sm:pl-4 py-0.5">
+                  <p className="mt-1.5 sm:mt-2 text-[10px] sm:text-xs leading-relaxed text-slate-600 italic border-l-3 border-indigo-200 pl-2 sm:pl-3 py-0.5">
                     {structured.certification}
                   </p>
                 </section>
 
-                <section className="pt-1.5 border-t border-slate-100">
-                  <h3 className="text-xs sm:text-sm font-bold text-slate-900 mb-1 sm:mb-1.5">Terms and Conditions</h3>
-                  <div className="text-xs sm:text-sm leading-snug sm:leading-relaxed text-slate-600 whitespace-pre-line">
+                <section className="pt-1 border-t border-slate-100">
+                  <h3 className="text-xs sm:text-sm font-bold text-slate-900 mb-1">Terms and Conditions</h3>
+                  <div className="text-[10px] sm:text-xs leading-relaxed text-slate-600 whitespace-pre-line">
                     {structured.termsBody}
                   </div>
                 </section>
@@ -614,39 +645,39 @@ export default function AgreementContractPage({
 
       {/* Checkbox + Navigation - Fixed bottom; left offset so sidebar Help button does not overlap */}
       <div
-        className="fixed bottom-0 left-14 sm:left-[13rem] md:left-56 lg:left-60 right-0 z-20 bg-white border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] py-2 sm:py-3 px-2 sm:px-4"
-        style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 12px)' }}
+        className="fixed bottom-0 left-14 sm:left-[13rem] md:left-56 lg:left-60 right-0 z-20 bg-white border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] py-2 sm:py-2.5 px-2 sm:px-3"
+        style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 10px)' }}
       >
-        <div className="max-w-4xl mx-auto space-y-2">
-          <label className="flex items-start gap-2 sm:gap-3 cursor-pointer group w-full">
+        <div className="max-w-4xl mx-auto space-y-1.5 sm:space-y-2">
+          <label className="flex items-start gap-2 cursor-pointer group w-full">
             <input
               type="checkbox"
               checked={agreedToRead}
               onChange={(e) => setAgreedToRead(e.target.checked)}
-              className="mt-0.5 h-4 w-4 min-w-[1rem] rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
+              className="mt-0.5 h-3.5 w-3.5 sm:h-4 sm:w-4 min-w-[0.875rem] sm:min-w-[1rem] rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
               aria-label="I agree to the contract and terms"
             />
-            <span className="text-xs sm:text-sm text-slate-700 group-hover:text-slate-900 leading-snug">
-              I have read the entire contract and agreement details above. I understand the terms, charges, payment settlement process, and bank details. I am ready to proceed to digital signature.
+            <span className="text-[10px] sm:text-xs text-slate-700 group-hover:text-slate-900 leading-relaxed">
+              I have read the entire contract and agreement details above. I understand the terms, charges, payment settlement process, and {structured?.annexureB.isUPI ? 'UPI' : 'bank'} details. I am ready to proceed to digital signature.
             </span>
           </label>
-          <div className="flex items-center justify-between gap-2 sm:gap-3">
+          <div className="flex items-center justify-between gap-2">
             <button
               type="button"
               onClick={onBack}
               disabled={actionLoading}
-              className="flex items-center gap-1.5 text-slate-600 hover:text-slate-900 font-medium text-xs sm:text-base px-3 py-2 sm:px-5 sm:py-2.5 border border-slate-300 rounded-lg sm:rounded-xl hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed"
+              className="flex items-center gap-1.5 text-slate-600 hover:text-slate-900 font-medium text-xs sm:text-sm px-3 py-1.5 sm:px-4 sm:py-2 border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {actionLoading ? <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 animate-spin" /> : <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 rotate-180" />}
-              Back
+              {actionLoading ? <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 animate-spin" /> : <ChevronRight className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 rotate-180" />}
+              Previous
             </button>
             <button
               type="button"
               onClick={() => onContinue(contractText)}
               disabled={!canContinue || actionLoading}
-              className="px-4 py-2.5 sm:px-8 sm:py-3 bg-indigo-600 text-white font-semibold text-sm sm:text-base rounded-lg sm:rounded-xl hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-lg shadow-indigo-200 transition"
+              className="px-4 py-2 sm:px-6 sm:py-2.5 bg-indigo-600 text-white font-semibold text-xs sm:text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 sm:gap-2 shadow-md shadow-indigo-200 transition"
             >
-              {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ChevronRight className="w-4 h-4" />}
+              {actionLoading ? <Loader2 className="w-3.5 h-3.5 sm:w-4 animate-spin" /> : <ChevronRight className="w-3.5 h-3.5 sm:w-4" />}
               {actionLoading ? 'Loading...' : 'Continue to Digital Signature'}
             </button>
           </div>

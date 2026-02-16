@@ -22,6 +22,7 @@ import { Suspense } from 'react'
 
 
 import { useMerchantSession } from '@/context/MerchantSessionContext';
+import { PageSkeletonDashboard } from '@/components/PageSkeleton';
 
 export const dynamic = 'force-dynamic'
 
@@ -326,20 +327,7 @@ function DashboardContent() {
   if (isLoading) {
     return (
       <MXLayoutWhite restaurantName={store?.store_name} restaurantId={storeId || ''}>
-        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-          <div className="bg-white/50 border-b border-gray-200/50 backdrop-blur-sm">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-              <div className="space-y-6">
-                <div className="h-8 bg-gray-200/50 rounded w-1/3 animate-pulse"></div>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  {[1, 2, 3, 4].map((i) => (
-                    <div key={i} className="h-28 bg-gray-100/50 rounded-xl animate-pulse backdrop-blur-sm"></div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <PageSkeletonDashboard />
       </MXLayoutWhite>
     )
   }

@@ -24,6 +24,14 @@ function LoginPageContent() {
 
   const registered = searchParams?.get("registered");
   const queryError = searchParams?.get("error");
+  const redirectTo = searchParams?.get("redirect");
+
+  // Preserve redirect so after OAuth callback (or phone login) user returns to same page
+  useEffect(() => {
+    if (typeof window !== "undefined" && redirectTo) {
+      sessionStorage.setItem("auth_redirect", redirectTo);
+    }
+  }, [redirectTo]);
 
   const normalizeLoginError = (raw: string) => {
     const message = (raw || "").trim();
@@ -56,7 +64,11 @@ function LoginPageContent() {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.error || "Session could not be set.");
     }
-    window.location.href = "/auth/post-login";
+    const next = (typeof window !== "undefined" && sessionStorage.getItem("auth_redirect")) || redirectTo || "/auth/post-login";
+    if (typeof window !== "undefined" && sessionStorage.getItem("auth_redirect")) {
+      sessionStorage.removeItem("auth_redirect");
+    }
+    window.location.href = next.startsWith("/") ? next : "/auth/post-login";
   };
 
   const handleGoogleLogin = async () => {
