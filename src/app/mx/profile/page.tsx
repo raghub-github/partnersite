@@ -553,7 +553,10 @@ export default function ProfilePage() {
           <header className="sticky top-0 z-20 bg-white border-b border-gray-200 flex-shrink-0">
             <div className="px-4 py-3 md:px-6 md:py-4">
               <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-                <div className="min-w-0 flex-1">
+                {/* Spacer for hamburger menu on left (mobile) */}
+                <div className="md:hidden w-12"></div>
+                {/* Heading on right for mobile, left for desktop */}
+                <div className="min-w-0 flex-1 ml-auto md:ml-0">
                   <h1 className="text-lg md:text-2xl font-bold text-gray-900 truncate">Merchant Profile</h1>
                   <p className="text-xs md:text-sm text-gray-600 mt-0.5">Manage your restaurant details</p>
                 </div>

@@ -45,6 +45,18 @@ input:not([disabled]), textarea:not([disabled]), select:not([disabled]) {
 .hide-scrollbar::-webkit-scrollbar {
   display: none; /* Chrome/Safari/Webkit */
 }
+
+/* Dashboard content area: smooth scroll + hidden scrollbar */
+.dashboard-scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.dashboard-scroll::-webkit-scrollbar {
+  display: none;
+}
 @import "tailwindcss";
 
 :root {

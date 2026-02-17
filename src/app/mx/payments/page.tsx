@@ -105,7 +105,10 @@ function PaymentsContent() {
           <div className="max-w-7xl mx-auto">
             {/* Header with Wallet */}
             <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 mb-8">
-              <div>
+              {/* Spacer for hamburger menu on left (mobile) */}
+              <div className="md:hidden w-12"></div>
+              {/* Heading on right for mobile, left for desktop */}
+              <div className="ml-auto md:ml-0">
                 <h1 className="text-3xl font-bold text-gray-900">Payments & Wallet</h1>
                 <p className="text-sm text-gray-600">Track revenue and manage your store wallet</p>
               </div>

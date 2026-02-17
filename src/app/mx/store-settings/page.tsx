@@ -7,7 +7,7 @@ import { supabase } from '@/lib/supabase';
 import { fetchRestaurantById as fetchStoreById, fetchRestaurantByName as fetchStoreByName } from '@/lib/database'
 import { MerchantStore } from '@/lib/merchantStore'
 import { DEMO_RESTAURANT_ID as DEMO_STORE_ID } from '@/lib/constants'
-import { Clock, Phone, Save, AlertCircle, CheckCircle2, X, Zap, Shield, BarChart3, Bell, Crown, Star, Check, MapPin, Settings, Calendar, Copy, Power, Plus, Trash2, ChevronDown, ChevronUp, Gift, Target, Globe, Users, Package, CreditCard, Sparkles } from 'lucide-react'
+import { Clock, Phone, Save, AlertCircle, CheckCircle2, X, Zap, Shield, BarChart3, Bell, Crown, Star, Check, MapPin, Settings, Calendar, Copy, Power, Plus, Trash2, ChevronDown, ChevronUp, Gift, Target, Globe, Users, Package, CreditCard, Sparkles, Smartphone } from 'lucide-react'
 import { PageSkeletonGeneric } from '@/components/PageSkeleton'
 import { Toaster, toast } from 'sonner'
 
@@ -40,10 +40,10 @@ function StoreSettingsContent() {
   const [isLoading, setIsLoading] = useState(true)
   const [storeId, setStoreId] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
-  const [activeTab, setActiveTab] = useState<'basic' | 'premium' | 'timings' | 'gatimitra'>(() => {
+  const [activeTab, setActiveTab] = useState<'basic' | 'premium' | 'timings' | 'gatimitra' | 'pos'>(() => {
     if (typeof window !== 'undefined') {
       const urlTab = new URLSearchParams(window.location.search).get('tab')
-      if (urlTab === 'premium' || urlTab === 'timings' || urlTab === 'gatimitra') return urlTab as any
+      if (urlTab === 'premium' || urlTab === 'timings' || urlTab === 'gatimitra' || urlTab === 'pos') return urlTab as any
     }
     return 'basic'
   })
@@ -59,6 +59,13 @@ function StoreSettingsContent() {
       }
     }
   }, [activeTab])
+
+  // POS integration state
+  const [posPartner, setPosPartner] = useState('')
+  const [posStoreId, setPosStoreId] = useState('')
+  const [posStatus, setPosStatus] = useState<string | null>(null)
+  const [posSaving, setPosSaving] = useState(false)
+  const [posIntegrationActive, setPosIntegrationActive] = useState(false)
   
   const [showStoreTimingModal, setShowStoreTimingModal] = useState(false)
   const [expandedDay, setExpandedDay] = useState<DayType | null>(null)
@@ -313,6 +320,75 @@ function StoreSettingsContent() {
     const t = setInterval(() => fetchStoreOperations(), 30000)
     return () => clearInterval(t)
   }, [storeId, isStoreOpen, manualCloseUntil])
+
+  // Load POS integration when storeId is set
+  useEffect(() => {
+    if (!storeId) return
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/merchant/pos-integration?storeId=${encodeURIComponent(storeId)}`)
+        const data = await res.json()
+        if (res.ok) {
+          setPosPartner(data.pos_partner || '')
+          setPosStoreId(data.pos_store_id || '')
+          setPosStatus(data.status || null)
+          setPosIntegrationActive(data.active === true)
+        }
+      } catch {
+        setPosStatus(null)
+        setPosIntegrationActive(false)
+      }
+    }
+    load()
+  }, [storeId])
+
+  const savePosIntegration = async () => {
+    if (!storeId || !posPartner.trim()) {
+      toast.error('Please choose your partner POS')
+      return
+    }
+    setPosSaving(true)
+    try {
+      const res = await fetch('/api/merchant/pos-integration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storeId,
+          pos_partner: posPartner.trim(),
+          pos_store_id: posStoreId.trim() || undefined,
+        }),
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        setPosStatus('PENDING')
+        setPosIntegrationActive(false)
+        toast.success(data.message || 'POS registration saved.')
+      } else {
+        toast.error(data.error || 'Failed to save')
+      }
+    } catch {
+      toast.error('Failed to save POS integration')
+    } finally {
+      setPosSaving(false)
+    }
+  }
+
+  const markPosActive = async () => {
+    if (!storeId) return
+    try {
+      const res = await fetch(`/api/merchant/pos-integration?storeId=${encodeURIComponent(storeId)}&status=ACTIVE`, { method: 'PATCH' })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        setPosStatus('ACTIVE')
+        setPosIntegrationActive(true)
+        toast.success('POS integration marked active. You can now switch to POS mode on the dashboard.')
+      } else {
+        toast.error(data.error || 'Failed to update')
+      }
+    } catch {
+      toast.error('Failed to update status')
+    }
+  }
 
   const handleStoreToggle = async () => {
     if (isStoreOpen) {
@@ -879,7 +955,10 @@ function StoreSettingsContent() {
           <div className="max-w-7xl mx-auto">
             {/* Header with Tabs */}
             <div className="mb-8">
-              <div className="space-y-1 mb-6">
+              {/* Spacer for hamburger menu on left (mobile) */}
+              <div className="md:hidden h-2"></div>
+              {/* Heading on right for mobile, left for desktop */}
+              <div className="space-y-1 mb-6 ml-auto md:ml-0">
                 <h1 className="text-3xl font-bold text-gray-900">Store Settings</h1>
                 <p className="text-sm text-gray-600">Manage your store and delivery configuration</p>
               </div>
@@ -929,6 +1008,17 @@ function StoreSettingsContent() {
                 >
                   <img src="/gstore.png" alt="Store" className="w-5 h-5" />
                   Store on Gatimitra
+                </button>
+                <button
+                  onClick={() => setActiveTab('pos')}
+                  className={`px-6 py-3 font-semibold text-sm border-b-2 transition-colors flex items-center gap-2 ${
+                    activeTab === 'pos'
+                      ? 'border-orange-600 text-orange-700'
+                      : 'border-transparent text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  <Smartphone size={16} />
+                  POS
                 </button>
               </div>
             </div>
@@ -1810,6 +1900,82 @@ function StoreSettingsContent() {
                 >
                   View store now
                 </a>
+              </div>
+            )}
+
+            {activeTab === 'pos' && (
+              <div className="space-y-6">
+                <div className="bg-white rounded-xl border border-sky-200/80 shadow-sm overflow-hidden">
+                  <div className="p-6 flex items-start justify-between gap-4">
+                    <div>
+                      <h3 className="text-lg font-bold text-gray-900">Point of sale system [POS]</h3>
+                      <p className="text-sm text-gray-600 mt-1">Configure and integrate your external POS</p>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-sky-100">
+                      <Smartphone size={22} className="text-sky-600" />
+                    </div>
+                  </div>
+                  <div className="px-6 pb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">Choose your partner POS</label>
+                      <select
+                        value={posPartner}
+                        onChange={(e) => setPosPartner(e.target.value)}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg bg-white text-gray-900 focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                      >
+                        <option value="">Choose your partner POS</option>
+                        <option value="PetPooja">PetPooja</option>
+                        <option value="UrbanPiper">UrbanPiper</option>
+                        <option value="RistaApps">RistaApps</option>
+                        <option value="Posist">Posist</option>
+                        <option value="Limetray">Limetray</option>
+                        <option value="WeraFoods">WeraFoods</option>
+                        <option value="Possier">Possier</option>
+                        <option value="Froogal">Froogal</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">POS store ID (optional)</label>
+                      <input
+                        type="text"
+                        value={posStoreId}
+                        onChange={(e) => setPosStoreId(e.target.value)}
+                        placeholder="POS store ID (optional)"
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg bg-white text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                      />
+                    </div>
+                  </div>
+                  <div className="px-6 pb-6">
+                    <div className="flex items-center gap-2 p-3 rounded-lg bg-teal-50 border border-teal-200">
+                      <AlertCircle size={18} className="text-teal-600 flex-shrink-0" />
+                      <p className="text-sm font-medium text-teal-900">
+                        <strong>NOTE:</strong> Please ask your POS partner to initiate the integration once you complete registration.
+                      </p>
+                    </div>
+                    <div className="mt-4 flex flex-wrap items-center gap-3">
+                      <button
+                        onClick={savePosIntegration}
+                        disabled={posSaving || !posPartner.trim()}
+                        className="px-4 py-2.5 bg-orange-600 text-white rounded-lg font-semibold hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {posSaving ? 'Saving...' : 'Save'}
+                      </button>
+                      {posStatus === 'PENDING' && (
+                        <button
+                          onClick={markPosActive}
+                          className="px-4 py-2.5 border border-emerald-300 bg-emerald-50 text-emerald-700 rounded-lg font-semibold hover:bg-emerald-100"
+                        >
+                          Partner has initiated – mark active
+                        </button>
+                      )}
+                      {posIntegrationActive && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 text-sm font-medium">
+                          <CheckCircle2 size={16} /> Integration active – you can switch to POS on dashboard
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
           </div>

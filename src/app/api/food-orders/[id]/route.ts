@@ -94,10 +94,7 @@ export async function PATCH(
     else if (newStatus === 'PREPARING') updates.prepared_at = null;
     else if (newStatus === 'READY_FOR_PICKUP') updates.prepared_at = now;
     else if (newStatus === 'OUT_FOR_DELIVERY') {
-      const { data: otpRow } = await db.from('order_food_otps').select('verified_at').eq('order_id', existing.order_id).maybeSingle();
-      if (otpRow && !otpRow.verified_at) {
-        return NextResponse.json({ error: 'OTP must be validated before dispatch' }, { status: 400 });
-      }
+      // Store can mark as dispatched from portal without OTP validation (OTP is for rider handover only).
       updates.dispatched_at = now;
     } else if (newStatus === 'DELIVERED') updates.delivered_at = now;
     else if (newStatus === 'CANCELLED') {

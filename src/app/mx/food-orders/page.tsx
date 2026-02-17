@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState, useCallback, useRef, Suspense } from 'react';
+import React, { useEffect, useState, useCallback, useRef, Suspense } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { MXLayoutWhite } from '@/components/MXLayoutWhite';
 import { Toaster, toast } from 'sonner';
@@ -25,6 +26,11 @@ import {
   Phone,
   MapPin,
   SlidersHorizontal,
+  Loader2,
+  Power,
+  Check,
+  User,
+  Bike,
 } from 'lucide-react';
 import { useFoodOrders, type OrdersFoodRow, type FoodOrderStats } from '@/hooks/useFoodOrders';
 import { PageSkeletonOrders } from '@/components/PageSkeleton';
@@ -92,6 +98,49 @@ function useNewOrderSound(enabled: boolean) {
 
 const ORDERS_STORAGE_KEY = 'food-orders-ui';
 
+// Helper function to format order ID display with last 4 digits in increasing size
+function FormattedOrderId({ 
+  formattedOrderId, 
+  fallbackOrderId, 
+  size = 'base' 
+}: { 
+  formattedOrderId?: string | null; 
+  fallbackOrderId: number; 
+  size?: 'sm' | 'base' | 'lg';
+}) {
+  const sizeClasses = {
+    sm: { base: 'text-xs', sizes: ['0.625rem', '0.7rem', '0.775rem', '0.85rem'] },
+    base: { base: 'text-base', sizes: ['0.875rem', '1rem', '1.125rem', '1.25rem'] },
+    lg: { base: 'text-lg', sizes: ['1rem', '1.125rem', '1.25rem', '1.375rem'] },
+  };
+  
+  const classes = sizeClasses[size];
+  
+  if (formattedOrderId) {
+    const prefix = formattedOrderId.slice(0, -4);
+    const lastFour = formattedOrderId.slice(-4);
+    
+    return (
+      <div className="flex items-baseline gap-0.5">
+        <span className={`font-bold text-gray-900 ${classes.base}`}>
+          {prefix}
+        </span>
+        {lastFour.split('').map((digit, idx) => (
+          <span 
+            key={idx}
+            className="font-bold text-orange-600"
+            style={{ fontSize: classes.sizes[idx] }}
+          >
+            {digit}
+          </span>
+        ))}
+      </div>
+    );
+  }
+  
+  return <span className={`font-bold text-gray-900 ${classes.base}`}>#{fallbackOrderId}</span>;
+}
+
 function OrdersPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -119,16 +168,28 @@ function OrdersPageContent() {
   });
   const [actionLoading, setActionLoading] = useState<number | null>(null);
   const [isStoreOpen, setIsStoreOpen] = useState<boolean | null>(null);
-  const [showCloseDurationModal, setShowCloseDurationModal] = useState(false);
-  const [closeDurationMins, setCloseDurationMins] = useState(30);
+  const [showStoreCloseModal, setShowStoreCloseModal] = useState(false);
+  const [closeClosureType, setCloseClosureType] = useState<'temporary' | 'today' | 'manual_hold' | null>(null);
+  const [closeClosureDate, setCloseClosureDate] = useState('');
+  const [closeClosureTime, setCloseClosureTime] = useState('12:00');
+  const [closeReason, setCloseReason] = useState('');
+  const [closeReasonOther, setCloseReasonOther] = useState('');
+  const [closeConfirmLoading, setCloseConfirmLoading] = useState(false);
+  const [openingTimeForClose, setOpeningTimeForClose] = useState('09:00');
+  const [showTurnOnModal, setShowTurnOnModal] = useState(false);
+  const [turnOnLoading, setTurnOnLoading] = useState(false);
   const [viewMode, setViewMode] = useState<'card' | 'list'>(() => {
     if (typeof window === 'undefined') return 'card';
+    // Only allow list view on large screens (lg+)
+    const isLargeScreen = typeof window !== 'undefined' && window.innerWidth >= 1024;
+    if (!isLargeScreen) return 'card';
     try {
       const s = localStorage.getItem(ORDERS_STORAGE_KEY);
       const v = s ? JSON.parse(s).viewMode : null;
       return v === 'list' || v === 'card' ? v : 'card';
     } catch { return 'card'; }
   });
+
   const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
   const hasNotifiedNew = useRef<Set<number>>(new Set());
 
@@ -147,6 +208,26 @@ function OrdersPageContent() {
     const path = `${window.location.pathname}${q ? `?${q}` : ''}`;
     router.replace(path, { scroll: false });
   }, [searchParams, router]);
+
+  // Force card view on mobile/tablet, only allow list on lg+
+  useEffect(() => {
+    const handleResize = () => {
+      if (typeof window !== 'undefined' && window.innerWidth < 1024 && viewMode === 'list') {
+        setViewMode('card');
+        try {
+          const s = localStorage.getItem(ORDERS_STORAGE_KEY);
+          const stored = s ? JSON.parse(s) : {};
+          stored.viewMode = 'card';
+          localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(stored));
+        } catch {}
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('resize', handleResize);
+      handleResize(); // Check on mount
+      return () => window.removeEventListener('resize', handleResize);
+    }
+  }, [viewMode]);
 
   const persistLocal = useCallback((key: 'viewMode' | 'notifyEnabled', value: unknown) => {
     if (typeof window === 'undefined') return;
@@ -268,11 +349,23 @@ function OrdersPageContent() {
     try {
       const res = await fetch(`/api/food-orders?store_id=${encodeURIComponent(storeId)}&limit=200`);
       const data = await res.json();
-      if (res.ok && Array.isArray(data.orders)) {
-        setOrders(data.orders);
+      if (res.ok) {
+        if (Array.isArray(data.orders)) {
+          console.log(`[FoodOrders] Loaded ${data.orders.length} orders for store ${storeId}`);
+          setOrders(data.orders);
+        } else {
+          console.warn('[FoodOrders] Invalid response format:', data);
+          setOrders([]);
+        }
+      } else {
+        console.error('[FoodOrders] API error:', data.error);
+        toast.error(data.error || 'Failed to load orders');
+        setOrders([]);
       }
-    } catch {
+    } catch (err) {
+      console.error('[FoodOrders] Fetch error:', err);
       toast.error('Failed to load orders');
+      setOrders([]);
     } finally {
       setLoading(false);
     }
@@ -306,7 +399,8 @@ function OrdersPageContent() {
           if (exists) return prev.map((o) => (o.id === row.id ? row : o));
           if (row.order_status === 'CREATED' || row.order_status === 'NEW' || !row.order_status) {
             if (notifyEnabled) {
-              toast.success(`New Order #${row.order_id}`, { duration: 5000 });
+              const displayId = row.formatted_order_id || `#${row.order_id}`;
+              toast.success(`New Order ${displayId}`, { duration: 5000 });
               if (!hasNotifiedNew.current.has(row.id)) {
                 hasNotifiedNew.current.add(row.id);
                 playNewOrderSound();
@@ -340,6 +434,24 @@ function OrdersPageContent() {
     [storeId]
   );
 
+  // Auto-fetch OTP for all orders when they're loaded (always visible)
+  useEffect(() => {
+    const orderIds = orders.map(o => o.id).filter(Boolean) as number[];
+    orderIds.forEach((orderId) => {
+      if (!otpCache[orderId]) {
+        fetchOtp(orderId);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orders.length, fetchOtp]);
+
+  // Auto-fetch OTP when order is selected (for header display)
+  useEffect(() => {
+    if (selectedOrder?.id && !otpCache[selectedOrder.id]) {
+      fetchOtp(selectedOrder.id);
+    }
+  }, [selectedOrder?.id, fetchOtp]);
+
   const validateOtp = useCallback(
     async (orderId: number) => {
       if (!storeId || !otpInput.trim()) return;
@@ -363,12 +475,18 @@ function OrdersPageContent() {
     [storeId, otpInput]
   );
 
-  const handleStoreToggle = useCallback(async () => {
+  const handleStoreToggle = useCallback(() => {
     if (!storeId) return;
     if (isStoreOpen) {
-      setShowCloseDurationModal(true);
+      setShowStoreCloseModal(true);
       return;
     }
+    setShowTurnOnModal(true);
+  }, [storeId, isStoreOpen]);
+
+  const handleConfirmTurnOn = useCallback(async () => {
+    if (!storeId) return;
+    setTurnOnLoading(true);
     try {
       const res = await fetch('/api/store-operations', {
         method: 'POST',
@@ -379,36 +497,125 @@ function OrdersPageContent() {
       if (res.ok && data.success) {
         setIsStoreOpen(true);
         setStore((prev) => (prev ? { ...prev, operational_status: 'OPEN', is_accepting_orders: true } : prev));
-        toast.success('Store opened successfully');
+        setShowTurnOnModal(false);
+        toast.success('Store is now OPEN. Orders are being accepted!');
       } else {
         toast.error(data.error || 'Failed to open store');
       }
     } catch {
       toast.error('Failed to open store');
+    } finally {
+      setTurnOnLoading(false);
     }
-  }, [storeId, isStoreOpen]);
+  }, [storeId]);
 
-  const handleConfirmClose = useCallback(async () => {
-    if (!storeId || closeDurationMins < 1) return;
+  // When store close modal opens: fetch opening time and set default date/time
+  useEffect(() => {
+    if (!showStoreCloseModal || !storeId) return;
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = (now.getMonth() + 1).toString().padStart(2, '0');
+    const d = now.getDate().toString().padStart(2, '0');
+    setCloseClosureDate(`${y}-${m}-${d}`);
+    const in10 = new Date(now.getTime() + 10 * 60 * 1000);
+    setCloseClosureTime(`${in10.getHours().toString().padStart(2, '0')}:${in10.getMinutes().toString().padStart(2, '0')}`);
+    setCloseClosureType(null);
+    setCloseReason('');
+    setCloseReasonOther('');
+    fetch(`/api/store-operations?store_id=${encodeURIComponent(storeId)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.today_slots?.[0]?.start) setOpeningTimeForClose(data.today_slots[0].start);
+      })
+      .catch(() => {});
+  }, [showStoreCloseModal, storeId]);
+
+  const formatTimeHMS = useCallback((t: string) => {
+    if (!t) return '00:00:00';
+    const parts = t.split(':');
+    if (parts.length === 2) return `${t}:00`;
+    if (parts.length === 1) return `${t.padStart(2, '0')}:00:00`;
+    return t;
+  }, []);
+
+  const confirmStoreClose = useCallback(async () => {
+    if (!storeId || !closeClosureType) return;
+    setCloseConfirmLoading(true);
+    const now = new Date();
+    let durationMinutes: number | undefined;
+    if (closeClosureType === 'temporary') {
+      const closedUntil = new Date(`${closeClosureDate}T${closeClosureTime}:00`);
+      durationMinutes = Math.max(1, Math.round((closedUntil.getTime() - now.getTime()) / (1000 * 60)));
+    } else if (closeClosureType === 'today') {
+      const [h, m] = openingTimeForClose.split(':').map(Number);
+      const tomorrowOpen = new Date(now);
+      tomorrowOpen.setDate(tomorrowOpen.getDate() + 1);
+      tomorrowOpen.setHours(h, m, 0, 0);
+      durationMinutes = Math.max(1, Math.round((tomorrowOpen.getTime() - now.getTime()) / (1000 * 60)));
+    }
+    const reasonText = closeReason === 'Other' ? (closeReasonOther?.trim() || 'Other') : closeReason;
+    const body: { store_id: string; action: string; closure_type: string; duration_minutes?: number; close_reason?: string } = {
+      store_id: storeId,
+      action: 'manual_close',
+      closure_type: closeClosureType,
+      close_reason: reasonText,
+    };
+    if (durationMinutes != null) body.duration_minutes = durationMinutes;
     try {
       const res = await fetch('/api/store-operations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ store_id: storeId, action: 'manual_close', duration_minutes: closeDurationMins }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (res.ok && data.success) {
         setIsStoreOpen(false);
         setStore((prev) => (prev ? { ...prev, operational_status: 'CLOSED', is_accepting_orders: false } : prev));
-        setShowCloseDurationModal(false);
-        toast.success(`Store closed for ${closeDurationMins} minutes`);
+        setShowStoreCloseModal(false);
+        setCloseClosureType(null);
+        setCloseReason('');
+        setCloseReasonOther('');
+        if (closeClosureType === 'manual_hold') toast.success('Store closed. It will only open when you turn it ON.');
+        else if (closeClosureType === 'temporary') {
+          const until = new Date(`${closeClosureDate}T${closeClosureTime}:00`);
+          toast.success(`Store closed until ${until.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}. You can also turn it ON manually anytime.`);
+        } else toast.success(`Store closed for today. Reopens tomorrow at ${openingTimeForClose}`);
       } else {
         toast.error(data.error || 'Failed to close store');
       }
     } catch {
       toast.error('Failed to close store');
+    } finally {
+      setCloseConfirmLoading(false);
     }
-  }, [storeId, closeDurationMins]);
+  }, [storeId, closeClosureType, closeClosureDate, closeClosureTime, closeReason, closeReasonOther, openingTimeForClose]);
+
+  const handleStoreCloseModalConfirm = useCallback(() => {
+    if (!closeClosureType) {
+      toast.error('Please select closure type');
+      return;
+    }
+    if (closeClosureType === 'temporary') {
+      if (!closeClosureDate || !closeClosureTime) {
+        toast.error('Please select date and time for reopening');
+        return;
+      }
+      const closedUntil = new Date(`${closeClosureDate}T${closeClosureTime}:00`);
+      if (closedUntil.getTime() <= Date.now()) {
+        toast.error('Reopening date and time must be in the future');
+        return;
+      }
+    }
+    if (!closeReason?.trim()) {
+      toast.error('Please select a reason for closing');
+      return;
+    }
+    if (closeReason === 'Other' && !closeReasonOther?.trim()) {
+      toast.error('Please enter the reason in "Other"');
+      return;
+    }
+    void confirmStoreClose();
+  }, [closeClosureType, closeClosureDate, closeClosureTime, closeReason, closeReasonOther, confirmStoreClose]);
 
   const updateStatus = useCallback(
     async (order: OrdersFoodRow, newStatus: string, extra?: { rejected_reason?: string }) => {
@@ -498,6 +705,7 @@ function OrdersPageContent() {
   ) : null;
 
   return (
+    <>
     <MXLayoutWhite restaurantName={store?.store_name} restaurantId={storeId || ''} leftSidebarCollapsed mobileMenuExtra={mobileStatsExtra}>
       <Toaster position="top-right" richColors />
       <div className="flex h-full min-h-0 bg-gray-50 relative flex-col">
@@ -552,17 +760,18 @@ function OrdersPageContent() {
                 <span className="hidden min-[400px]:inline">{isStoreOpen === null ? 'Loading...' : isStoreOpen ? 'Store Open' : 'Store Closed'}</span>
                 <span className="min-[400px]:hidden">{isStoreOpen === null ? '...' : isStoreOpen ? 'Open' : 'Closed'}</span>
               </button>
-              <div className="hidden md:flex items-center gap-1 border border-gray-200 rounded-lg p-0.5 shrink-0">
+              {/* View mode toggle - only visible on large screens (lg+) */}
+              <div className="hidden lg:flex items-center gap-1 border border-gray-200 rounded-lg p-0.5 shrink-0">
                 <button
                   onClick={() => { setViewMode('card'); persistLocal('viewMode', 'card'); }}
-                  className={`p-1.5 rounded ${viewMode === 'card' ? 'bg-orange-100 text-orange-600' : 'text-gray-500 hover:bg-gray-100'}`}
+                  className={`p-1.5 rounded transition-colors ${viewMode === 'card' ? 'bg-orange-100 text-orange-600' : 'text-gray-500 hover:bg-gray-100'}`}
                   title="Card view"
                 >
                   <LayoutGrid size={16} />
                 </button>
                 <button
                   onClick={() => { setViewMode('list'); persistLocal('viewMode', 'list'); }}
-                  className={`p-1.5 rounded ${viewMode === 'list' ? 'bg-orange-100 text-orange-600' : 'text-gray-500 hover:bg-gray-100'}`}
+                  className={`p-1.5 rounded transition-colors ${viewMode === 'list' ? 'bg-orange-100 text-orange-600' : 'text-gray-500 hover:bg-gray-100'}`}
                   title="List view"
                 >
                   <List size={16} />
@@ -583,157 +792,278 @@ function OrdersPageContent() {
           </div>
         </header>
 
-        <div className="flex flex-1 min-h-0 lg:pr-64">
-          <div className="flex flex-col flex-1 min-w-0">
-          <div className="flex flex-col lg:flex-row flex-1 min-h-0">
+        <div className="flex flex-1 min-h-0 lg:pr-64 overflow-hidden">
+          <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+          <div className="flex flex-col lg:flex-row flex-1 min-h-0 overflow-hidden">
             {/* Desktop (lg+): When order open, split layout. Mobile: full-screen overlay on card click */}
             {rightPanelOpen && selectedOrder ? (
               <>
-                {/* Order details: inline on desktop (lg+), full-screen overlay on mobile */}
-                <div className="hidden lg:flex flex-1 min-w-0 border-r border-gray-200 bg-white flex-col overflow-hidden order-1">
-                <div className="p-3 border-b border-gray-200 flex items-center justify-between">
-                  <h3 className="font-semibold text-gray-900">Order #{selectedOrder.order_id}</h3>
-                  <button
-                    onClick={closeOrderPanel}
-                    className="p-1.5 hover:bg-gray-100 rounded"
-                  >
-                    <X size={18} />
-                  </button>
-                </div>
-                <div className="flex-1 overflow-y-auto p-4 space-y-4 hide-scrollbar">
-                  <DetailSection title="Status">
-                    <span
-                      className={`inline-block px-2 py-1 rounded text-xs font-semibold ${
-                        (selectedOrder.order_status || 'CREATED') === 'CREATED' || (selectedOrder.order_status || '') === 'NEW'
-                          ? 'bg-red-100 text-red-800'
-                          : (selectedOrder.order_status || '') === 'DELIVERED'
-                            ? 'bg-green-100 text-green-800'
-                            : (selectedOrder.order_status || '') === 'CANCELLED'
-                              ? 'bg-gray-100 text-gray-700'
-                              : 'bg-blue-100 text-blue-800'
-                      }`}
-                    >
-                      {STATUS_LABEL[selectedOrder.order_status || 'CREATED'] || selectedOrder.order_status || 'CREATED'}
-                    </span>
-                  </DetailSection>
-                  <DetailSection title="Restaurant">
-                    <div className="space-y-0.5">
-                      <p className="font-medium text-gray-900">{selectedOrder.restaurant_name || '—'}</p>
-                      {selectedOrder.restaurant_phone && (
-                        <a
-                          href={`tel:${selectedOrder.restaurant_phone}`}
-                          className="text-sm text-orange-600 hover:text-orange-700 flex items-center gap-1.5"
-                        >
-                          <Phone size={12} />
-                          {selectedOrder.restaurant_phone}
-                        </a>
-                      )}
-                    </div>
-                  </DetailSection>
-                  <DetailSection title="Items & Value">
-                    <p className="font-medium">
-                      {selectedOrder.food_items_count ?? '—'} items • ₹{Number(selectedOrder.food_items_total_value || 0).toFixed(2)}
-                    </p>
-                  </DetailSection>
-                  <DetailSection title="Prep time">
-                    {selectedOrder.preparation_time_minutes ?? '—'} min
-                  </DetailSection>
-                  {selectedOrder.delivery_instructions && (
-                    <DetailSection title="Instructions">
-                      <span className="text-amber-700 font-medium flex items-center gap-1">
-                        <MapPin size={14} /> {selectedOrder.delivery_instructions}
-                      </span>
-                    </DetailSection>
-                  )}
-                  <DetailSection title="Flags">
-                    <div className="flex flex-wrap gap-1.5">
-                      {selectedOrder.requires_utensils && (
-                        <span className="px-2 py-0.5 bg-gray-100 text-gray-700 text-xs rounded flex items-center gap-1">
-                          <UtensilsCrossed size={12} /> Utensils
-                        </span>
-                      )}
-                      {selectedOrder.is_fragile && (
-                        <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-xs rounded">⚠ Fragile</span>
-                      )}
-                      {selectedOrder.is_high_value && (
-                        <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs rounded flex items-center gap-1">
-                          <Star size={12} /> High Value
-                        </span>
-                      )}
-                      {selectedOrder.veg_non_veg && selectedOrder.veg_non_veg !== 'na' && (
-                        <span className="px-2 py-0.5 bg-green-100 text-green-800 text-xs rounded">
-                          {formatVegNonVeg(selectedOrder.veg_non_veg)}
-                        </span>
-                      )}
-                      {(!selectedOrder.requires_utensils && !selectedOrder.is_fragile && !selectedOrder.is_high_value && (!selectedOrder.veg_non_veg || selectedOrder.veg_non_veg === 'na')) && (
-                        <span className="text-gray-400 text-xs">None</span>
-                      )}
-                    </div>
-                  </DetailSection>
-                  {selectedOrder.rejected_reason && (
-                    <DetailSection title="Rejection reason">
-                      <p className="text-red-700 text-sm">{selectedOrder.rejected_reason}</p>
-                    </DetailSection>
-                  )}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-gray-100">
-                    <DetailSection title="Created">{formatTimeAgo(selectedOrder.created_at)}</DetailSection>
-                    <DetailSection title="Updated">{formatTimeAgo(selectedOrder.updated_at)}</DetailSection>
-                    {selectedOrder.accepted_at && (
-                      <DetailSection title="Accepted">{formatTimeAgo(selectedOrder.accepted_at)}</DetailSection>
-                    )}
-                    {selectedOrder.prepared_at && (
-                      <DetailSection title="Prepared">{formatTimeAgo(selectedOrder.prepared_at)}</DetailSection>
-                    )}
-                    {selectedOrder.dispatched_at && (
-                      <DetailSection title="Dispatched">{formatTimeAgo(selectedOrder.dispatched_at)}</DetailSection>
-                    )}
-                    {selectedOrder.delivered_at && (
-                      <DetailSection title="Delivered">{formatTimeAgo(selectedOrder.delivered_at)}</DetailSection>
-                    )}
-                    {selectedOrder.cancelled_at && (
-                      <DetailSection title="Cancelled">{formatTimeAgo(selectedOrder.cancelled_at)}</DetailSection>
-                    )}
-                  </div>
-                  {(selectedOrder.order_status === 'READY_FOR_PICKUP' || selectedOrder.order_status === 'OUT_FOR_DELIVERY') && (
-                    <DetailSection title="OTP">
-                      {otpCache[selectedOrder.id] ? (
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold">{otpCache[selectedOrder.id].otp_code}</span>
-                          <span className="text-xs text-slate-600">({otpCache[selectedOrder.id].otp_type})</span>
-                          {otpVerified.has(selectedOrder.id) && (
-                            <span className="text-green-600 text-xs font-medium">✓ Verified</span>
+                {/* Order details: single card, actions top-right, reject half width, space used evenly */}
+                <div className="hidden lg:flex flex-1 min-w-0 border-r border-gray-200 bg-gray-50/80 flex-col overflow-hidden order-1 p-3">
+                <div className="flex-1 overflow-y-auto min-h-0 hide-scrollbar overflow-x-hidden">
+                  <div className="bg-white rounded-xl border border-gray-200/80 shadow-md overflow-hidden flex flex-col h-full min-h-[320px]">
+                    {/* Top row: Compact premium header with OTP */}
+                    <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-3 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200/60">
+                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                        <FormattedOrderId 
+                          formattedOrderId={selectedOrder.formatted_order_id} 
+                          fallbackOrderId={selectedOrder.order_id}
+                          size="base"
+                        />
+                        {/* OTP always visible - bold and big */}
+                        <div className="flex items-center gap-2 px-3 py-1 bg-gradient-to-r from-slate-100 to-slate-50 rounded-lg border border-slate-200">
+                          <span className="text-xs font-semibold text-gray-700">OTP:</span>
+                          {otpCache[selectedOrder.id] ? (
+                            <>
+                              <span className="font-mono font-bold text-lg text-gray-900 tracking-wider">{otpCache[selectedOrder.id].otp_code}</span>
+                              <span className="text-[10px] text-slate-600">({otpCache[selectedOrder.id].otp_type})</span>
+                              {otpVerified.has(selectedOrder.id) && <span className="text-green-600 text-xs font-medium">✓</span>}
+                            </>
+                          ) : (
+                            <span className="text-xs text-gray-500 animate-pulse">Loading...</span>
                           )}
                         </div>
-                      ) : (
-                        <button
-                          onClick={() => fetchOtp(selectedOrder.id)}
-                          className="text-orange-600 text-sm font-medium"
+                        <span
+                          className={`shrink-0 px-2 py-0.5 rounded-md text-[10px] font-semibold tracking-wide ${
+                            (selectedOrder.order_status || 'CREATED') === 'CREATED' || (selectedOrder.order_status || '') === 'NEW'
+                              ? 'bg-red-100 text-red-700'
+                              : (selectedOrder.order_status || '') === 'DELIVERED'
+                                ? 'bg-green-100 text-green-700'
+                                : (selectedOrder.order_status || '') === 'CANCELLED' || (selectedOrder.order_status || '') === 'RTO'
+                                  ? 'bg-gray-100 text-gray-600'
+                                  : 'bg-blue-100 text-blue-700'
+                          }`}
                         >
-                          Show OTP
+                          {STATUS_LABEL[selectedOrder.order_status || 'CREATED'] || selectedOrder.order_status || 'CREATED'}
+                        </span>
+                        <span className="text-[10px] text-gray-500">{formatTimeAgo(selectedOrder.created_at)}</span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <div className="flex items-center gap-2 w-full min-w-[200px] justify-end">
+                          <ActionBtns
+                            order={selectedOrder}
+                            onAccept={() => updateStatus(selectedOrder, 'ACCEPTED')}
+                            onReject={() => { setRejectModal(selectedOrder); closeOrderPanel(); }}
+                            onPreparing={() => updateStatus(selectedOrder, 'PREPARING')}
+                            onReady={() => updateStatus(selectedOrder, 'READY_FOR_PICKUP')}
+                            onDispatch={() => setDispatchModal(selectedOrder)}
+                            onComplete={() => updateStatus(selectedOrder, 'DELIVERED')}
+                            onRto={() => updateStatus(selectedOrder, 'RTO')}
+                            loading={actionLoading === selectedOrder.id}
+                            otpVerified={otpVerified.has(selectedOrder.id)}
+                            topRightLayout
+                          />
+                        </div>
+                        <button onClick={closeOrderPanel} className="p-1.5 hover:bg-gray-100 rounded-md shrink-0 transition-colors" aria-label="Close">
+                          <X size={16} className="text-gray-500" />
                         </button>
+                      </div>
+                    </div>
+                    {/* Card body: compact premium layout */}
+                    <div className="flex-1 overflow-y-auto p-4 min-h-0 overflow-x-hidden">
+                      <div className="flex flex-col lg:flex-row gap-4 items-start">
+                        {/* Left: Customer & Rider Details - auto width based on content */}
+                        <div className="flex flex-col gap-3 w-full lg:w-auto lg:min-w-[260px] lg:max-w-none lg:flex-shrink-0">
+                          {/* Customer - Full Details - auto width */}
+                          {selectedOrder.customer_name && (
+                            <div className="rounded-lg bg-gradient-to-br from-blue-50/50 to-blue-100/30 p-3 border border-blue-100/60 shadow-sm w-full">
+                              <div className="flex items-start gap-2.5">
+                                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+                                  <User size={16} className="text-blue-600" />
+                                </div>
+                                <div className="min-w-0 flex-1 space-y-1.5">
+                                  <div className="flex items-center gap-2">
+                                    <p className="font-semibold text-gray-900 text-sm">{selectedOrder.customer_name}</p>
+                                    {selectedOrder.customer_scores && (
+                                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${
+                                        (selectedOrder.customer_scores.trust_score || 100) >= 80 
+                                          ? 'bg-green-100 text-green-700' 
+                                          : (selectedOrder.customer_scores.trust_score || 100) >= 50
+                                            ? 'bg-yellow-100 text-yellow-700'
+                                            : 'bg-red-100 text-red-700'
+                                      }`}>
+                                        {(selectedOrder.customer_scores.trust_score || 100).toFixed(0)}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {selectedOrder.customer_phone && (
+                                    <a href={`tel:${selectedOrder.customer_phone}`} className="flex items-center gap-1.5 text-blue-600 text-xs font-medium hover:text-blue-700">
+                                      <Phone size={12} /> {selectedOrder.customer_phone}
+                                    </a>
+                                  )}
+                                  {(selectedOrder.drop_address_raw || selectedOrder.drop_address_normalized) && (
+                                    <div className="flex items-start gap-1.5 text-xs text-gray-700">
+                                      <MapPin size={12} className="shrink-0 mt-0.5 text-amber-600" />
+                                      <span className="leading-relaxed">{selectedOrder.drop_address_normalized || selectedOrder.drop_address_raw}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* Rider - Full Details with Timeline (always show if rider_id exists) - auto width */}
+                          {(selectedOrder.rider_id || selectedOrder.rider_name || selectedOrder.rider_details) ? (
+                            <div className="rounded-lg bg-gradient-to-br from-purple-50/50 to-purple-100/30 p-3 border border-purple-100/60 shadow-sm w-full">
+                              <div className="space-y-2.5">
+                                <div className="flex items-start gap-2.5">
+                                  {selectedOrder.rider_details?.selfie_url ? (
+                                    <img 
+                                      src={selectedOrder.rider_details.selfie_url} 
+                                      alt={selectedOrder.rider_name || 'Rider'} 
+                                      className="w-8 h-8 rounded-full object-cover border-2 border-purple-200 shrink-0"
+                                    />
+                                  ) : (
+                                    <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center shrink-0">
+                                      <Bike size={16} className="text-purple-600" />
+                                    </div>
+                                  )}
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2 mb-1">
+                                      <p className="font-semibold text-gray-900 text-sm">
+                                        {selectedOrder.rider_details?.name || selectedOrder.rider_name || `Rider #${selectedOrder.rider_id}`}
+                                      </p>
+                                      {selectedOrder.rider_details?.id && (
+                                        <span className="text-[9px] text-gray-500">ID: {selectedOrder.rider_details.id}</span>
+                                      )}
+                                      {selectedOrder.rider_details?.status && (
+                                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${
+                                          selectedOrder.rider_details.status === 'ACTIVE' 
+                                            ? 'bg-green-100 text-green-700' 
+                                            : 'bg-gray-100 text-gray-600'
+                                        }`}>
+                                          {selectedOrder.rider_details.status}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {selectedOrder.rider_details?.mobile && (
+                                      <a href={`tel:${selectedOrder.rider_details.mobile}`} className="flex items-center gap-1.5 text-purple-600 text-xs font-medium hover:text-purple-700">
+                                        <Phone size={12} /> {selectedOrder.rider_details.mobile}
+                                      </a>
+                                    )}
+                                    {selectedOrder.rider_details?.city && (
+                                      <p className="text-xs text-gray-600 mt-0.5">{selectedOrder.rider_details.city}</p>
+                                    )}
+                                  </div>
+                                </div>
+                                {/* Rider Timeline */}
+                                {selectedOrder.rider_id && (
+                                  <div className="pt-2 border-t border-purple-100/60">
+                                    <RiderTimeline riderId={selectedOrder.rider_id} orderId={selectedOrder.order_id} />
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ) : null}
+                          
+                          {/* Delivery Instructions */}
+                          {selectedOrder.delivery_instructions && (
+                            <div className="rounded-lg bg-amber-50/60 p-2.5 border border-amber-100">
+                              <div className="flex items-start gap-2">
+                                <MapPin size={12} className="shrink-0 mt-0.5 text-amber-600" />
+                                <p className="text-xs text-gray-700 leading-relaxed">{selectedOrder.delivery_instructions}</p>
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* Flags - compact */}
+                          {(selectedOrder.requires_utensils || (selectedOrder.veg_non_veg && selectedOrder.veg_non_veg !== 'na') || selectedOrder.is_fragile || selectedOrder.is_high_value) && (
+                            <div className="rounded-lg bg-gray-50/60 p-2.5 border border-gray-100">
+                              <div className="flex flex-wrap gap-1.5">
+                                {selectedOrder.requires_utensils && (
+                                  <span className="px-2 py-0.5 bg-gray-100 text-gray-700 text-[10px] rounded-md flex items-center gap-1 w-fit"><UtensilsCrossed size={10} /> Utensils</span>
+                                )}
+                                {selectedOrder.veg_non_veg && selectedOrder.veg_non_veg !== 'na' && (
+                                  <span className="px-2 py-0.5 bg-green-100 text-green-800 text-[10px] rounded-md w-fit">{formatVegNonVeg(selectedOrder.veg_non_veg)}</span>
+                                )}
+                                {selectedOrder.is_fragile && <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-[10px] rounded-md">Fragile</span>}
+                                {selectedOrder.is_high_value && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 text-[10px] rounded-md">High value</span>}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        
+                        {/* Center: Items & Amount - flexible width, uses remaining space */}
+                        <div className="flex-1 min-w-0 space-y-3 lg:max-w-none">
+                          {/* Items - compact premium with QTY | Price | Amount */}
+                          <div className="rounded-lg bg-white p-3 border border-gray-200 shadow-sm w-full">
+                            <div className="flex items-center justify-between mb-2.5">
+                              <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Items</p>
+                              <span className="text-xs text-gray-500">{selectedOrder.preparation_time_minutes ?? '—'}m prep</span>
+                            </div>
+                            {/* Header row */}
+                            {selectedOrder.items && Array.isArray(selectedOrder.items) && selectedOrder.items.length > 0 && (
+                              <div className="grid grid-cols-12 gap-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5 pb-1 border-b border-gray-200">
+                                <div className="col-span-5">Item</div>
+                                <div className="col-span-2 text-center">QTY</div>
+                                <div className="col-span-2 text-right">Price</div>
+                                <div className="col-span-3 text-right">Amount</div>
+                              </div>
+                            )}
+                            {selectedOrder.items && Array.isArray(selectedOrder.items) && selectedOrder.items.length > 0 ? (
+                              <div className="space-y-2">
+                                {selectedOrder.items.map((item: any, idx: number) => {
+                                  const qty = item.quantity || 1;
+                                  const itemPrice = Number(item.price || 0);
+                                  const amount = Number(item.total || itemPrice * qty);
+                                  return (
+                                    <div key={idx} className="grid grid-cols-12 gap-2 text-xs items-center py-1 border-b border-gray-100 last:border-0">
+                                      <div className="col-span-5 min-w-0">
+                                        <p className="font-medium text-gray-900 truncate">{item.name || `Item ${idx + 1}`}</p>
+                                        {item.customizations && Array.isArray(item.customizations) && item.customizations.length > 0 && (
+                                          <p className="text-[10px] text-gray-500 mt-0.5 truncate">{item.customizations.join(', ')}</p>
+                                        )}
+                                      </div>
+                                      <div className="col-span-2 text-center">
+                                        <p className="text-gray-600 font-medium">{qty}</p>
+                                      </div>
+                                      <div className="col-span-2 text-right">
+                                        <p className="text-gray-600">₹{itemPrice.toFixed(2)}</p>
+                                      </div>
+                                      <div className="col-span-3 text-right">
+                                        <p className="font-semibold text-gray-900">₹{amount.toFixed(2)}</p>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <p className="text-xs text-gray-500">{selectedOrder.food_items_count ?? '—'} items</p>
+                            )}
+                            <div className="mt-2.5 pt-2.5 border-t border-gray-100 flex justify-between items-center">
+                              <span className="text-xs text-gray-600">Total</span>
+                              <span className="font-bold text-gray-900">₹{Number(selectedOrder.food_items_total_value || 0).toFixed(2)}</span>
+                            </div>
+                          </div>
+                          
+                        </div>
+                      </div>
+                      
+                      {/* Timeline moved below all info cards */}
+                      <div className="mt-4">
+                        <div className="rounded-lg bg-white p-3 border border-gray-200 shadow-sm">
+                          <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-2.5">Order Status Timeline</p>
+                          <OrderStatusTimeline order={selectedOrder} />
+                        </div>
+                      </div>
+                      {/* Cancellation - compact */}
+                      {(selectedOrder.rejected_reason || selectedOrder.cancelled_by_type) && (
+                        <div className="mt-3 p-2.5 bg-red-50/80 rounded-lg border border-red-200/60">
+                          <p className="text-[10px] font-semibold text-red-600 uppercase tracking-wide mb-1.5">Cancellation</p>
+                          {selectedOrder.rejected_reason && (
+                            <p className="text-xs text-red-800 mb-1.5 leading-relaxed">{selectedOrder.rejected_reason}</p>
+                          )}
+                          {selectedOrder.cancelled_by_type && (
+                            <p className="text-[10px] text-red-700">
+                              <span className="font-medium capitalize">{selectedOrder.cancelled_by_type}</span>
+                              {selectedOrder.cancelled_at && (
+                                <span className="ml-1.5 text-red-600">• {formatTimeAgo(selectedOrder.cancelled_at)}</span>
+                              )}
+                            </p>
+                          )}
+                        </div>
                       )}
-                    </DetailSection>
-                  )}
-                  <div className="pt-2 flex flex-wrap gap-2">
-                    <ActionBtns
-                      order={selectedOrder}
-                      onAccept={() => updateStatus(selectedOrder, 'ACCEPTED')}
-                      onReject={() => {
-                        setRejectModal(selectedOrder);
-                        closeOrderPanel();
-                      }}
-                      onPreparing={() => updateStatus(selectedOrder, 'PREPARING')}
-                      onReady={() => updateStatus(selectedOrder, 'READY_FOR_PICKUP')}
-                      onDispatch={() => {
-                        fetchOtp(selectedOrder.id);
-                        setDispatchModal(selectedOrder);
-                        setOtpInput('');
-                      }}
-                      onComplete={() => updateStatus(selectedOrder, 'DELIVERED')}
-                      onRto={() => updateStatus(selectedOrder, 'RTO')}
-                      loading={actionLoading === selectedOrder.id}
-                      otpVerified={otpVerified.has(selectedOrder.id)}
-                    />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -754,7 +1084,7 @@ function OrdersPageContent() {
                     onReject={() => { setRejectModal(selectedOrder); closeOrderPanel(); }}
                     onPreparing={() => updateStatus(selectedOrder, 'PREPARING')}
                     onReady={() => updateStatus(selectedOrder, 'READY_FOR_PICKUP')}
-                    onDispatch={() => { fetchOtp(selectedOrder.id); setDispatchModal(selectedOrder); setOtpInput(''); }}
+                    onDispatch={() => setDispatchModal(selectedOrder)}
                     onComplete={() => updateStatus(selectedOrder, 'DELIVERED')}
                     onRto={() => updateStatus(selectedOrder, 'RTO')}
                     actionLoading={actionLoading === selectedOrder.id}
@@ -833,7 +1163,8 @@ function OrdersPageContent() {
                 ))}
               </div>
               ) : (
-              <div className="space-y-1">
+              // List view - only shown on large screens (lg+)
+              <div className="hidden lg:block space-y-2">
                 {filteredOrders.map((order) => (
                   <OrderListRow
                     key={order.id}
@@ -844,7 +1175,7 @@ function OrdersPageContent() {
                     onReject={() => setRejectModal(order)}
                     onPreparing={() => updateStatus(order, 'PREPARING')}
                     onReady={() => updateStatus(order, 'READY_FOR_PICKUP')}
-                    onDispatch={() => { fetchOtp(order.id); setDispatchModal(order); setOtpInput(''); }}
+                    onDispatch={() => setDispatchModal(order)}
                     onRto={() => updateStatus(order, 'RTO')}
                     onComplete={() => updateStatus(order, 'DELIVERED')}
                     loading={actionLoading === order.id}
@@ -855,6 +1186,12 @@ function OrdersPageContent() {
                     statusLabel={STATUS_LABEL[order.order_status || 'CREATED'] || order.order_status}
                   />
                 ))}
+                {filteredOrders.length === 0 && (
+                  <div className="flex flex-col items-center justify-center py-16 text-gray-500">
+                    <Package className="w-12 h-12 mb-3 opacity-50" />
+                    <p className="text-sm font-medium">No orders in this filter</p>
+                  </div>
+                )}
               </div>
               )}
               {filteredOrders.length === 0 && (
@@ -972,11 +1309,22 @@ function OrdersPageContent() {
         </>
       )}
 
-      {/* Reject modal */}
-      {rejectModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-3 sm:p-4">
+      {/* Reject modal – portaled so overlay is above sidebar (z-50); backdrop-blur covers full screen */}
+      {rejectModal && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-md flex items-end sm:items-center justify-center z-[100] p-3 sm:p-4">
           <div className="bg-white rounded-t-xl sm:rounded-xl shadow-xl max-w-md w-full p-4 sm:p-5 max-h-[90vh] overflow-y-auto">
-            <h3 className="font-semibold text-gray-900 mb-2">Reject Order #{rejectModal.order_id}</h3>
+            <h3 className="font-semibold text-gray-900 mb-2">
+              Reject Order{' '}
+              {rejectModal.formatted_order_id ? (
+                <FormattedOrderId 
+                  formattedOrderId={rejectModal.formatted_order_id} 
+                  fallbackOrderId={rejectModal.order_id}
+                  size="base"
+                />
+              ) : (
+                `#${rejectModal.order_id}`
+              )}
+            </h3>
             <p className="text-sm text-gray-600 mb-3">Provide a reason (optional):</p>
             <textarea
               value={rejectReason}
@@ -1008,102 +1356,181 @@ function OrdersPageContent() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* Dispatch confirmation modal */}
-      {dispatchModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-3 sm:p-4">
+      {/* Dispatch modal – warning only; no OTP. Portaled so sidebar blurs. */}
+      {dispatchModal && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-md flex items-end sm:items-center justify-center z-[100] p-3 sm:p-4">
           <div className="bg-white rounded-t-xl sm:rounded-xl shadow-xl max-w-sm w-full p-4 sm:p-5 max-h-[90vh] overflow-y-auto">
-            <h3 className="font-semibold text-gray-900 mb-2">Confirm Dispatch - Order #{dispatchModal.order_id}</h3>
-            <p className="text-sm text-gray-600 mb-3">Validate OTP with rider before dispatching.</p>
-            {!otpCache[dispatchModal.id] && (
-              <button
-                onClick={() => fetchOtp(dispatchModal.id)}
-                className="mb-3 w-full py-2 border border-orange-300 text-orange-600 rounded-lg text-sm font-medium hover:bg-orange-50"
-              >
-                Show OTP
-              </button>
-            )}
-            {otpCache[dispatchModal.id] && (
-              <div className="mb-3 px-3 py-2 bg-slate-100 rounded-lg">
-                <span className="text-xs text-slate-600">{otpCache[dispatchModal.id].otp_type || 'Pickup'} OTP: </span>
-                <span className="font-mono font-bold text-lg">{otpCache[dispatchModal.id].otp_code}</span>
-              </div>
-            )}
-            {!otpVerified.has(dispatchModal.id) ? (
-              <>
-                <input
-                  value={otpInput}
-                  onChange={(e) => setOtpInput(e.target.value)}
-                  placeholder="Enter OTP from rider"
-                  className="w-full px-3 py-2 border rounded-lg mb-2 text-center font-mono"
-                  maxLength={6}
+            <h3 className="font-semibold text-gray-900 mb-2">
+              Confirm Dispatch - Order{' '}
+              {dispatchModal.formatted_order_id ? (
+                <FormattedOrderId 
+                  formattedOrderId={dispatchModal.formatted_order_id} 
+                  fallbackOrderId={dispatchModal.order_id}
+                  size="base"
                 />
-                <button
-                  onClick={() => validateOtp(dispatchModal.id)}
-                  className="w-full py-2 bg-orange-600 text-white rounded-lg text-sm font-medium mb-2"
-                >
-                  Validate OTP
-                </button>
-              </>
-            ) : (
-              <p className="text-green-600 text-sm font-medium mb-3">✓ OTP verified</p>
-            )}
+              ) : (
+                `#${dispatchModal.order_id}`
+              )}
+            </h3>
+            <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200">
+              <p className="text-sm text-amber-800">
+                You are marking this order as dispatched from the portal without OTP validation. If this order is falsely marked as dispatched, you will be responsible and penalties may apply.
+              </p>
+            </div>
             <div className="flex gap-2">
               <button
                 onClick={() => setDispatchModal(null)}
-                className="flex-1 py-2 border border-gray-200 rounded-lg text-sm font-medium"
+                className="flex-1 py-2.5 border border-gray-200 rounded-lg text-sm font-medium hover:bg-gray-50"
               >
                 Cancel
               </button>
               <button
-                onClick={() => otpVerified.has(dispatchModal.id) && updateStatus(dispatchModal, 'OUT_FOR_DELIVERY')}
-                disabled={!otpVerified.has(dispatchModal.id)}
-                className="flex-1 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={() => {
+                  updateStatus(dispatchModal, 'OUT_FOR_DELIVERY');
+                  setDispatchModal(null);
+                }}
+                className="flex-1 py-2.5 bg-purple-600 text-white rounded-lg text-sm font-semibold hover:bg-purple-700"
               >
                 Confirm Dispatch
               </button>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* Close duration modal */}
-      {showCloseDurationModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-3 sm:p-4">
-          <div className="bg-white rounded-t-xl sm:rounded-xl max-w-sm w-full p-4 sm:p-6 max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-bold text-gray-900 mb-2">Close Store Temporarily</h3>
-            <p className="text-sm text-gray-600 mb-4">Store will auto-reopen based on your operating hours after the selected duration.</p>
-            <select
-              value={closeDurationMins}
-              onChange={(e) => setCloseDurationMins(Number(e.target.value))}
-              className="w-full px-4 py-2 border border-gray-200 rounded-lg mb-4"
-            >
-              {[15, 30, 60, 120, 240].map((m) => (
-                <option key={m} value={m}>{m} minutes</option>
-              ))}
-            </select>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setShowCloseDurationModal(false)}
-                className="flex-1 px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmClose}
-                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
-              >
-                Close for {closeDurationMins} min
-              </button>
-            </div>
-          </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Reject modal */}
     </MXLayoutWhite>
+
+      {/* Store close modal – portaled so overlay is above sidebar */}
+      {showStoreCloseModal && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center z-[100] p-4" aria-hidden="true">
+          <div className="mx-auto max-w-md rounded-2xl bg-white p-6 shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-lg font-bold text-gray-900 mb-4">How would you like to close your store?</h2>
+            <div className="space-y-3">
+              <label className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer border-2 ${closeClosureType === 'temporary' ? 'bg-orange-50 border-orange-400' : 'border-gray-200 hover:border-orange-200'}`}>
+                <input type="radio" name="closureType" checked={closeClosureType === 'temporary'} onChange={() => setCloseClosureType('temporary')} className="w-4 h-4" />
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-gray-900">Temporary Closed</p>
+                  <p className="text-xs text-gray-600">Close until a specific date and time. Reopens automatically then, or turn ON manually anytime.</p>
+                </div>
+              </label>
+              {closeClosureType === 'temporary' && (
+                <div className="ml-7 space-y-3 p-3 rounded-lg bg-orange-50/50 border border-orange-200">
+                  <p className="text-xs font-semibold text-gray-700">Reopen on (date and time):</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-medium text-gray-500 block mb-1">Date</label>
+                      <input type="date" value={closeClosureDate} onChange={(e) => setCloseClosureDate(e.target.value)} min={(() => { const n = new Date(); return `${n.getFullYear()}-${(n.getMonth() + 1).toString().padStart(2, '0')}-${n.getDate().toString().padStart(2, '0')}`; })()} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-medium text-gray-500 block mb-1">Time</label>
+                      <input type="time" value={closeClosureTime} onChange={(e) => setCloseClosureTime(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900" />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-gray-600">Store stays closed until this date & time, or until you turn it ON manually.</p>
+                </div>
+              )}
+              <label className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer border-2 ${closeClosureType === 'today' ? 'bg-red-50 border-red-400' : 'border-gray-200 hover:border-red-200'}`}>
+                <input type="radio" name="closureType" checked={closeClosureType === 'today'} onChange={() => setCloseClosureType('today')} className="w-4 h-4" />
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-gray-900">Close for Today</p>
+                  <p className="text-xs text-gray-600">Reopen tomorrow at {formatTimeHMS(openingTimeForClose)}</p>
+                </div>
+              </label>
+              <label className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer border-2 ${closeClosureType === 'manual_hold' ? 'bg-amber-50 border-amber-400' : 'border-gray-200 hover:border-amber-200'}`}>
+                <input type="radio" name="closureType" checked={closeClosureType === 'manual_hold'} onChange={() => setCloseClosureType('manual_hold')} className="w-4 h-4" />
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-gray-900">Until I manually turn it ON</p>
+                  <p className="text-xs text-gray-600">Store stays OFF even during operating hours until you turn it ON</p>
+                </div>
+              </label>
+            </div>
+            <div className="mt-4 space-y-2">
+              <label className="text-xs font-semibold text-gray-700 block">Reason for closing <span className="text-red-500">*</span></label>
+              <select value={closeReason} onChange={(e) => setCloseReason(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white">
+                <option value="">Select reason</option>
+                <option value="Staff shortage">Staff shortage</option>
+                <option value="Inventory restock">Inventory restock</option>
+                <option value="Device issue / electricity">Device issue / electricity</option>
+                <option value="Run out of Gas">Run out of Gas</option>
+                <option value="Payment issue">Payment issue</option>
+                <option value="Rush of offline orders">Rush of offline orders</option>
+                <option value="Equipment issue">Equipment issue</option>
+                <option value="Holiday / Off">Holiday / Off</option>
+                <option value="Maintenance">Maintenance</option>
+                <option value="Personal / Emergency">Personal / Emergency</option>
+                <option value="Kitchen / Prep area issue">Kitchen / Prep area issue</option>
+                <option value="Supplier delay">Supplier delay</option>
+                <option value="Other">Other</option>
+              </select>
+              {closeReason === 'Other' && (
+                <input type="text" value={closeReasonOther} onChange={(e) => setCloseReasonOther(e.target.value)} placeholder="Enter reason" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900" />
+              )}
+            </div>
+            <div className="flex gap-3 mt-5">
+              <button type="button" onClick={() => { if (!closeConfirmLoading) { setShowStoreCloseModal(false); setCloseClosureType(null); setCloseReason(''); setCloseReasonOther(''); } }} disabled={closeConfirmLoading} className="flex-1 px-4 py-2.5 border border-gray-300 rounded-xl text-gray-700 font-medium hover:bg-gray-50 disabled:opacity-50">Cancel</button>
+              <button type="button" onClick={handleStoreCloseModalConfirm} disabled={!closeClosureType || !closeReason?.trim() || (closeReason === 'Other' && !closeReasonOther?.trim()) || (closeClosureType === 'temporary' && (!closeClosureDate || !closeClosureTime)) || closeConfirmLoading} className="flex-1 px-4 py-2.5 bg-red-600 text-white rounded-xl font-medium hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2">
+                {closeConfirmLoading ? <><Loader2 size={18} className="animate-spin" /> Confirming...</> : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Turn Store ON modal – portaled so overlay is above sidebar */}
+      {showTurnOnModal && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-md flex items-center justify-center z-[100] p-4" aria-hidden="true">
+          <div className="backdrop-blur-md bg-white/95 rounded-2xl shadow-2xl max-w-sm w-full p-6 border-2 border-emerald-200">
+            <div className="flex justify-center mb-4">
+              <div className="w-14 h-14 rounded-full bg-gradient-to-r from-emerald-100 to-emerald-50 flex items-center justify-center">
+                <Power size={28} className="text-emerald-600" />
+              </div>
+            </div>
+            <div className="text-center space-y-2 mb-6">
+              <h3 className="text-lg font-bold text-gray-900">Turn Store ON?</h3>
+              <p className="text-sm text-gray-600">
+                Your store will be OPEN and customers can place orders. Make sure you&apos;re ready to accept orders!
+              </p>
+            </div>
+            <div className="p-3 rounded-lg bg-amber-50/70 border border-amber-200 mb-6">
+              <p className="text-xs text-amber-800 font-medium">
+                ⚠️ <strong>Orders will start coming immediately!</strong> Be prepared to receive and process them.
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => !turnOnLoading && setShowTurnOnModal(false)}
+                disabled={turnOnLoading}
+                className="flex-1 px-4 py-2.5 border-2 border-gray-300 rounded-lg text-gray-900 font-semibold hover:bg-gray-50/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmTurnOn}
+                disabled={turnOnLoading}
+                className="flex-1 px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-700 text-white rounded-lg font-semibold hover:from-emerald-700 hover:to-emerald-800 transition-all shadow-md hover:shadow-lg disabled:opacity-80 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
+              >
+                {turnOnLoading ? (
+                  <>
+                    <Loader2 size={18} className="animate-spin" />
+                    Turning ON...
+                  </>
+                ) : (
+                  'Yes, Turn ON'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+    </>
   );
 }
 
@@ -1132,6 +1559,178 @@ function DetailSection({ title, children }: { title: string; children: React.Rea
     <div className="min-w-0">
       <p className="text-xs text-gray-500 font-medium uppercase mb-1 break-words">{title}</p>
       <div className="text-sm text-gray-900 break-words">{children}</div>
+    </div>
+  );
+}
+
+const ORDER_STEPS = [
+  { key: 'placed', label: 'Placed', status: 'CREATED', at: (o: OrdersFoodRow) => o.created_at },
+  { key: 'accepted', label: 'Accepted', status: 'ACCEPTED', at: (o: OrdersFoodRow) => o.accepted_at },
+  { key: 'preparing', label: 'Preparing', status: 'PREPARING', at: () => null },
+  { key: 'ready', label: 'Ready', status: 'READY_FOR_PICKUP', at: (o: OrdersFoodRow) => o.prepared_at },
+  { key: 'dispatch', label: 'Dispatch', status: 'OUT_FOR_DELIVERY', at: (o: OrdersFoodRow) => o.dispatched_at },
+  { key: 'delivered', label: 'Delivered', status: 'DELIVERED', at: (o: OrdersFoodRow) => o.delivered_at },
+] as const;
+
+function orderStepIndex(status: string | undefined): number {
+  const order = ['CREATED', 'NEW', 'ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'OUT_FOR_DELIVERY', 'DELIVERED', 'RTO', 'CANCELLED'];
+  const i = order.indexOf(status || 'CREATED');
+  return i >= 0 ? i : 0;
+}
+
+/** Last completed step index based on timestamps (for cancelled/RTO timeline). */
+function lastCompletedStepIndex(order: OrdersFoodRow): number {
+  let last = -1;
+  ORDER_STEPS.forEach((step, i) => {
+    if (step.at(order)) last = i;
+  });
+  return last >= 0 ? last : 0;
+}
+
+const RIDER_STEPS = [
+  { key: 'assigned', label: 'Assigned', at: (data: any) => data.assigned_at },
+  { key: 'accepted', label: 'Accepted', at: (data: any) => data.accepted_at },
+  { key: 'reached', label: 'Reached Store', at: (data: any) => data.reached_merchant_at },
+  { key: 'picked', label: 'Picked Up', at: (data: any) => data.picked_up_at },
+  { key: 'delivered', label: 'Delivered', at: (data: any) => data.delivered_at },
+] as const;
+
+function RiderTimeline({ riderId, orderId }: { riderId: number | null | undefined; orderId: number }) {
+  const [riderAssignment, setRiderAssignment] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  
+  useEffect(() => {
+    if (!riderId || !orderId) {
+      setLoading(false);
+      return;
+    }
+    
+    // Fetch rider assignment details from order_rider_assignments
+    const fetchRiderTimeline = async () => {
+      try {
+        const res = await fetch(`/api/food-orders/${orderId}/rider-timeline?rider_id=${riderId}`);
+        if (res.ok) {
+          const data = await res.json();
+          setRiderAssignment(data);
+        }
+      } catch (err) {
+        console.error('Failed to fetch rider timeline:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchRiderTimeline();
+  }, [riderId, orderId]);
+
+  if (!riderId) return null;
+  if (loading) {
+    return (
+      <div className="flex items-start overflow-x-auto hide-scrollbar">
+        <div className="text-[9px] text-gray-400">Loading rider timeline...</div>
+      </div>
+    );
+  }
+
+  const formatTs = (s: string | null | undefined) => (s ? new Date(s).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true }) : '');
+  
+  // Determine current step based on timestamps
+  // If rider is assigned, at least show "Assigned" as active (index 0)
+  let currentStepIdx = riderId ? 0 : -1;
+  
+  // Find the highest completed step based on timestamps
+  RIDER_STEPS.forEach((step, idx) => {
+    if (riderAssignment && step.at(riderAssignment)) {
+      currentStepIdx = idx;
+    }
+  });
+
+  return (
+    <div className="flex items-start overflow-x-auto hide-scrollbar">
+      {RIDER_STEPS.map((step, i) => {
+        const ts = riderAssignment ? step.at(riderAssignment) : null;
+        const done = currentStepIdx >= i;
+        const isActive = i === currentStepIdx && !ts; // Active but not yet completed
+        const prevDone = i > 0 && (currentStepIdx >= i - 1);
+        
+        return (
+          <React.Fragment key={step.key}>
+            {i > 0 && (
+              <div className={`shrink-0 w-4 h-0.5 mt-3 ${prevDone ? 'bg-blue-400' : 'bg-gray-200'}`} />
+            )}
+            <div className="flex flex-col items-center shrink-0 min-w-[44px]">
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                done && ts 
+                  ? 'bg-blue-500 text-white' // Completed step (has timestamp)
+                  : isActive 
+                    ? 'bg-blue-500 text-white' // Active step (rider assigned but no timestamp yet)
+                    : done && !ts && i === 0
+                      ? 'bg-blue-500 text-white' // Assigned step (rider exists but no timestamp)
+                      : 'bg-gray-200 text-gray-500' // Future step
+              }`}>
+                {(done && ts) || (isActive) || (done && !ts && i === 0) ? (
+                  <Check size={12} strokeWidth={3} />
+                ) : (
+                  <span className="text-[9px] font-bold">{i + 1}</span>
+                )}
+              </div>
+              <span className={`text-[9px] font-medium mt-1 text-center leading-tight ${
+                done || isActive ? 'text-blue-600' : 'text-gray-600'
+              }`}>
+                {step.label}
+              </span>
+              {ts ? <span className="text-[8px] text-gray-400 text-center">{formatTs(ts)}</span> : null}
+            </div>
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
+function OrderStatusTimeline({ order }: { order: OrdersFoodRow }) {
+  const status = order.order_status || 'CREATED';
+  const isTerminal = status === 'CANCELLED' || status === 'RTO';
+  const lastCompletedIdx = lastCompletedStepIndex(order);
+  const currentIdx = isTerminal ? lastCompletedIdx : orderStepIndex(status);
+  const formatTs = (s: string | null | undefined) => (s ? new Date(s).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true }) : '');
+
+  const stepsToShow = isTerminal ? ORDER_STEPS.slice(0, lastCompletedIdx + 1) : ORDER_STEPS;
+
+  return (
+    <div className="flex items-start overflow-x-auto hide-scrollbar">
+      {stepsToShow.map((step, i) => {
+        const stepIdx = orderStepIndex(step.status);
+        const done = currentIdx >= stepIdx || (status === step.status);
+        const ts = step.at(order);
+        const prevDone = i > 0 && (currentIdx >= orderStepIndex(stepsToShow[i - 1].status));
+        return (
+          <React.Fragment key={step.key}>
+            {i > 0 && (
+              <div className={`shrink-0 w-4 h-0.5 mt-3 ${prevDone ? 'bg-green-400' : 'bg-gray-200'}`} />
+            )}
+            <div className="flex flex-col items-center shrink-0 min-w-[44px]">
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center ${done ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'}`}>
+                {done ? <Check size={12} strokeWidth={3} /> : <span className="text-[9px] font-bold">{i + 1}</span>}
+              </div>
+              <span className="text-[9px] font-medium text-gray-600 mt-1 text-center leading-tight">{step.label}</span>
+              {ts ? <span className="text-[8px] text-gray-400 text-center">{formatTs(ts)}</span> : null}
+            </div>
+          </React.Fragment>
+        );
+      })}
+      {isTerminal && (
+        <>
+          <div className="shrink-0 w-4 h-0.5 mt-3 bg-gray-300" />
+          <div className="flex flex-col items-center shrink-0 min-w-[44px]">
+            <div className={`w-6 h-6 rounded-full flex items-center justify-center ${status === 'CANCELLED' ? 'bg-red-100 text-red-600' : 'bg-orange-100 text-orange-600'}`}>
+              <XCircle size={14} strokeWidth={2.5} />
+            </div>
+            <span className="text-[9px] font-medium text-gray-600 mt-1 text-center leading-tight">{status === 'CANCELLED' ? 'Cancelled' : 'RTO'}</span>
+            {order.cancelled_at ? <span className="text-[8px] text-gray-400 text-center">{formatTs(order.cancelled_at)}</span> : null}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1196,8 +1795,25 @@ function OrderDetailMobile({
     >
       {/* Header Card */}
       <div className="shrink-0 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0 flex-1">
-          <span className="font-bold text-gray-900 text-lg">#{order.order_id}</span>
+        <div className="flex items-center gap-3 min-w-0 flex-1 flex-wrap">
+          <FormattedOrderId 
+            formattedOrderId={order.formatted_order_id} 
+            fallbackOrderId={order.order_id}
+            size="lg"
+          />
+          {/* OTP always visible - bold and big */}
+          <div className="flex items-center gap-2 px-3 py-1 bg-gradient-to-r from-slate-100 to-slate-50 rounded-lg border border-slate-200">
+            <span className="text-xs font-semibold text-gray-700">OTP:</span>
+            {otpCode ? (
+              <>
+                <span className="font-mono font-bold text-lg text-gray-900 tracking-wider">{otpCode}</span>
+                {otpType && <span className="text-[10px] text-slate-600">({otpType})</span>}
+                {otpVerified && <span className="text-green-600 text-xs font-medium">✓</span>}
+              </>
+            ) : (
+              <span className="text-xs text-gray-500 animate-pulse">Loading...</span>
+            )}
+          </div>
           <span className={`px-2.5 py-1 rounded-lg text-xs font-semibold ${statusColor}`}>{statusLabel}</span>
         </div>
         <button
@@ -1209,154 +1825,200 @@ function OrderDetailMobile({
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 hide-scrollbar min-h-0">
-        {/* Restaurant Card */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Restaurant</p>
-          <p className="font-semibold text-gray-900 text-base">{order.restaurant_name || '—'}</p>
-          {order.restaurant_phone && (
-            <a
-              href={`tel:${order.restaurant_phone}`}
-              className="mt-1.5 inline-flex items-center gap-2 text-orange-600 font-medium text-sm hover:text-orange-700"
-            >
-              <Phone size={16} />
-              {order.restaurant_phone}
-            </a>
-          )}
-        </div>
-
-        {/* Order Summary Card */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Order Summary</p>
-          <div className="space-y-2">
-            <div className="flex justify-between items-baseline">
-              <span className="text-gray-600">Items</span>
-              <span className="font-semibold text-gray-900">{order.food_items_count ?? '—'} items</span>
-            </div>
-            <div className="flex justify-between items-baseline">
-              <span className="text-gray-600">Total Value</span>
-              <span className="font-bold text-lg text-gray-900">₹{totalValue}</span>
-            </div>
-            <div className="flex justify-between items-baseline">
-              <span className="text-gray-600">Prep Time</span>
-              <span className="font-medium text-gray-900">{order.preparation_time_minutes ?? '—'} min</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Instructions Card (if any) */}
-        {order.delivery_instructions && (
-          <div className="bg-amber-50 rounded-xl border border-amber-200 p-4">
-            <p className="text-xs font-semibold text-amber-800 uppercase tracking-wide mb-2 flex items-center gap-1.5">
-              <MapPin size={14} />
-              Delivery Instructions
-            </p>
-            <p className="text-sm font-medium text-amber-900">{order.delivery_instructions}</p>
-          </div>
-        )}
-
-        {/* Flags Card */}
-        {hasFlags && (
-          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Flags</p>
-            <div className="flex flex-wrap gap-2">
-              {order.requires_utensils && (
-                <span className="px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg flex items-center gap-1.5 font-medium">
-                  <UtensilsCrossed size={14} /> Utensils
-                </span>
-              )}
-              {order.is_fragile && (
-                <span className="px-3 py-1.5 bg-amber-100 text-amber-800 text-sm rounded-lg font-medium">⚠ Fragile</span>
-              )}
-              {order.is_high_value && (
-                <span className="px-3 py-1.5 bg-yellow-100 text-yellow-800 text-sm rounded-lg flex items-center gap-1.5 font-medium">
-                  <Star size={14} /> High Value
-                </span>
-              )}
-              {order.veg_non_veg && order.veg_non_veg !== 'na' && (
-                <span className="px-3 py-1.5 bg-green-100 text-green-800 text-sm rounded-lg font-medium">
-                  {formatVegNonVeg(order.veg_non_veg)}
-                </span>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Rejected Reason (if any) */}
-        {order.rejected_reason && (
-          <div className="bg-red-50 rounded-xl border border-red-200 p-4">
-            <p className="text-xs font-semibold text-red-800 uppercase tracking-wide mb-2">Rejection Reason</p>
-            <p className="text-sm text-red-900">{order.rejected_reason}</p>
-          </div>
-        )}
-
-        {/* Timestamps Card */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Timeline</p>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <p className="text-xs text-gray-500">Created</p>
-              <p className="text-sm font-medium text-gray-900">{formatTimeAgo(order.created_at)}</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500">Updated</p>
-              <p className="text-sm font-medium text-gray-900">{formatTimeAgo(order.updated_at)}</p>
-            </div>
-            {order.accepted_at && (
-              <div>
-                <p className="text-xs text-gray-500">Accepted</p>
-                <p className="text-sm font-medium text-gray-900">{formatTimeAgo(order.accepted_at)}</p>
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3 hide-scrollbar min-h-0">
+        {/* Customer - Full Details */}
+        {order.customer_name && (
+          <div className="rounded-lg bg-gradient-to-br from-blue-50/50 to-blue-100/30 p-3 border border-blue-100/60 shadow-sm">
+            <div className="flex items-start gap-2.5">
+              <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+                <User size={16} className="text-blue-600" />
               </div>
-            )}
-            {order.prepared_at && (
-              <div>
-                <p className="text-xs text-gray-500">Prepared</p>
-                <p className="text-sm font-medium text-gray-900">{formatTimeAgo(order.prepared_at)}</p>
-              </div>
-            )}
-            {order.dispatched_at && (
-              <div>
-                <p className="text-xs text-gray-500">Dispatched</p>
-                <p className="text-sm font-medium text-gray-900">{formatTimeAgo(order.dispatched_at)}</p>
-              </div>
-            )}
-            {order.delivered_at && (
-              <div>
-                <p className="text-xs text-gray-500">Delivered</p>
-                <p className="text-sm font-medium text-gray-900">{formatTimeAgo(order.delivered_at)}</p>
-              </div>
-            )}
-            {order.cancelled_at && (
-              <div>
-                <p className="text-xs text-gray-500">Cancelled</p>
-                <p className="text-sm font-medium text-gray-900">{formatTimeAgo(order.cancelled_at)}</p>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* OTP Card (when applicable) */}
-        {(status === 'READY_FOR_PICKUP' || status === 'OUT_FOR_DELIVERY') && (
-          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">OTP Verification</p>
-            {otpCode ? (
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <span className="font-mono font-bold text-lg text-gray-900">{otpCode}</span>
-                <span className="text-xs text-gray-600">({otpType || 'PICKUP'})</span>
-                {otpVerified && (
-                  <span className="text-green-600 text-sm font-medium">✓ Verified</span>
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-semibold text-gray-900 text-sm">{order.customer_name}</p>
+                  {order.customer_scores && (
+                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${
+                      (order.customer_scores.trust_score || 100) >= 80 
+                        ? 'bg-green-100 text-green-700' 
+                        : (order.customer_scores.trust_score || 100) >= 50
+                          ? 'bg-yellow-100 text-yellow-700'
+                          : 'bg-red-100 text-red-700'
+                    }`}>
+                      {(order.customer_scores.trust_score || 100).toFixed(0)}
+                    </span>
+                  )}
+                </div>
+                {order.customer_phone && (
+                  <a href={`tel:${order.customer_phone}`} className="flex items-center gap-1.5 text-blue-600 text-xs font-medium hover:text-blue-700">
+                    <Phone size={12} /> {order.customer_phone}
+                  </a>
+                )}
+                {(order.drop_address_raw || order.drop_address_normalized) && (
+                  <div className="flex items-start gap-1.5 text-xs text-gray-700">
+                    <MapPin size={12} className="shrink-0 mt-0.5 text-amber-600" />
+                    <span className="leading-relaxed break-words">{order.drop_address_normalized || order.drop_address_raw}</span>
+                  </div>
                 )}
               </div>
-            ) : (
-              <button
-                onClick={onFetchOtp}
-                className="text-orange-600 font-semibold text-sm hover:text-orange-700"
-              >
-                Show OTP
-              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Rider - Full Details with Timeline */}
+        {(order.rider_id || order.rider_name || order.rider_details) ? (
+          <div className="rounded-lg bg-gradient-to-br from-purple-50/50 to-purple-100/30 p-3 border border-purple-100/60 shadow-sm">
+            <div className="space-y-2.5">
+              <div className="flex items-start gap-2.5">
+                {order.rider_details?.selfie_url ? (
+                  <img 
+                    src={order.rider_details.selfie_url} 
+                    alt={order.rider_name || 'Rider'} 
+                    className="w-8 h-8 rounded-full object-cover border-2 border-purple-200 shrink-0"
+                  />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center shrink-0">
+                    <Bike size={16} className="text-purple-600" />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <p className="font-semibold text-gray-900 text-sm">
+                      {order.rider_details?.name || order.rider_name || `Rider #${order.rider_id}`}
+                    </p>
+                    {order.rider_details?.id && (
+                      <span className="text-[9px] text-gray-500">ID: {order.rider_details.id}</span>
+                    )}
+                    {order.rider_details?.status && (
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${
+                        order.rider_details.status === 'ACTIVE' 
+                          ? 'bg-green-100 text-green-700' 
+                          : 'bg-gray-100 text-gray-600'
+                      }`}>
+                        {order.rider_details.status}
+                      </span>
+                    )}
+                  </div>
+                  {order.rider_details?.mobile && (
+                    <a href={`tel:${order.rider_details.mobile}`} className="flex items-center gap-1.5 text-purple-600 text-xs font-medium hover:text-purple-700">
+                      <Phone size={12} /> {order.rider_details.mobile}
+                    </a>
+                  )}
+                  {order.rider_details?.city && (
+                    <p className="text-xs text-gray-600 mt-0.5">{order.rider_details.city}</p>
+                  )}
+                </div>
+              </div>
+              {/* Rider Timeline */}
+              {order.rider_id && (
+                <div className="pt-2 border-t border-purple-100/60">
+                  <RiderTimeline riderId={order.rider_id} orderId={order.order_id} />
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {/* Items - Detailed format with QTY | Price | Amount */}
+        <div className="bg-white rounded-xl border border-gray-200 p-3 shadow-sm">
+          <div className="flex items-center justify-between mb-2.5">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Items</p>
+            <span className="text-xs text-gray-500">{order.preparation_time_minutes ?? '—'}m prep</span>
+          </div>
+          {/* Header row */}
+          {order.items && Array.isArray(order.items) && order.items.length > 0 && (
+            <div className="grid grid-cols-12 gap-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5 pb-1 border-b border-gray-200">
+              <div className="col-span-5">Item</div>
+              <div className="col-span-2 text-center">QTY</div>
+              <div className="col-span-2 text-right">Price</div>
+              <div className="col-span-3 text-right">Amount</div>
+            </div>
+          )}
+          {order.items && Array.isArray(order.items) && order.items.length > 0 ? (
+            <div className="space-y-2">
+              {order.items.map((item: any, idx: number) => {
+                const qty = item.quantity || 1;
+                const itemPrice = Number(item.price || 0);
+                const amount = Number(item.total || itemPrice * qty);
+                return (
+                  <div key={idx} className="grid grid-cols-12 gap-2 text-xs items-center py-1 border-b border-gray-100 last:border-0">
+                    <div className="col-span-5 min-w-0">
+                      <p className="font-medium text-gray-900 truncate">{item.name || `Item ${idx + 1}`}</p>
+                      {item.customizations && Array.isArray(item.customizations) && item.customizations.length > 0 && (
+                        <p className="text-[10px] text-gray-500 mt-0.5 truncate">{item.customizations.join(', ')}</p>
+                      )}
+                    </div>
+                    <div className="col-span-2 text-center">
+                      <p className="text-gray-600 font-medium">{qty}</p>
+                    </div>
+                    <div className="col-span-2 text-right">
+                      <p className="text-gray-600">₹{itemPrice.toFixed(2)}</p>
+                    </div>
+                    <div className="col-span-3 text-right">
+                      <p className="font-semibold text-gray-900">₹{amount.toFixed(2)}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-xs text-gray-500">{order.food_items_count ?? '—'} items</p>
+          )}
+          <div className="mt-2.5 pt-2.5 border-t border-gray-100 flex justify-between items-center">
+            <span className="text-xs text-gray-600">Total</span>
+            <span className="font-bold text-gray-900">₹{Number(order.food_items_total_value || 0).toFixed(2)}</span>
+          </div>
+        </div>
+
+        {/* Delivery Instructions */}
+        {order.delivery_instructions && (
+          <div className="rounded-lg bg-amber-50/60 p-2.5 border border-amber-100">
+            <div className="flex items-start gap-2">
+              <MapPin size={12} className="shrink-0 mt-0.5 text-amber-600" />
+              <p className="text-xs text-gray-700 leading-relaxed break-words">{order.delivery_instructions}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Flags - compact */}
+        {(order.requires_utensils || (order.veg_non_veg && order.veg_non_veg !== 'na') || order.is_fragile || order.is_high_value) && (
+          <div className="rounded-lg bg-gray-50/60 p-2.5 border border-gray-100">
+            <div className="flex flex-wrap gap-1.5">
+              {order.requires_utensils && (
+                <span className="px-2 py-0.5 bg-gray-100 text-gray-700 text-[10px] rounded-md flex items-center gap-1 w-fit"><UtensilsCrossed size={10} /> Utensils</span>
+              )}
+              {order.veg_non_veg && order.veg_non_veg !== 'na' && (
+                <span className="px-2 py-0.5 bg-green-100 text-green-800 text-[10px] rounded-md w-fit">{formatVegNonVeg(order.veg_non_veg)}</span>
+              )}
+              {order.is_fragile && <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-[10px] rounded-md">Fragile</span>}
+              {order.is_high_value && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 text-[10px] rounded-md">High value</span>}
+            </div>
+          </div>
+        )}
+
+        {/* Order Status Timeline */}
+        <div className="rounded-lg bg-white p-3 border border-gray-200 shadow-sm">
+          <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-2.5">Order Status Timeline</p>
+          <OrderStatusTimeline order={order} />
+        </div>
+
+        {/* Cancellation - compact */}
+        {(order.rejected_reason || order.cancelled_by_type) && (
+          <div className="mt-3 p-2.5 bg-red-50/80 rounded-lg border border-red-200/60">
+            <p className="text-[10px] font-semibold text-red-600 uppercase tracking-wide mb-1.5">Cancellation</p>
+            {order.rejected_reason && (
+              <p className="text-xs text-red-800 mb-1.5 leading-relaxed break-words">{order.rejected_reason}</p>
+            )}
+            {order.cancelled_by_type && (
+              <p className="text-[10px] text-red-700">
+                <span className="font-medium capitalize">{order.cancelled_by_type}</span>
+                {order.cancelled_at && (
+                  <span className="ml-1.5 text-red-600">• {formatTimeAgo(order.cancelled_at)}</span>
+                )}
+              </p>
             )}
           </div>
         )}
+
 
         {/* Action Buttons Card */}
         <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
@@ -1434,7 +2096,11 @@ function OrderCard({
     >
       <div className="flex items-start justify-between gap-2 mb-2 min-w-0">
         <div className="min-w-0 flex-1">
-          <p className="font-bold text-gray-900 text-sm">#{order.order_id}</p>
+          <FormattedOrderId 
+            formattedOrderId={order.formatted_order_id} 
+            fallbackOrderId={order.order_id}
+            size="sm"
+          />
           <p className="text-xs text-gray-600 truncate">{order.restaurant_name || '—'}</p>
         </div>
         <span
@@ -1572,6 +2238,7 @@ function OrderListRow({
   const status = order.order_status || 'CREATED';
   const value = Number(order.food_items_total_value || 0);
   const label = statusLabel ?? STATUS_LABEL[status] ?? status;
+  const isNew = status === 'CREATED' || status === 'NEW';
 
   return (
     <div
@@ -1579,41 +2246,84 @@ function OrderListRow({
       role="button"
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}
-      className={`flex items-center gap-2 sm:gap-3 rounded-lg border px-3 py-2.5 sm:py-2 cursor-pointer transition-all overflow-hidden min-w-0 touch-manipulation active:scale-[0.99] ${
+      className={`group relative flex items-center gap-4 rounded-xl border-2 px-4 py-3.5 cursor-pointer transition-all duration-200 overflow-hidden min-w-0 ${
         selected
-          ? 'border-orange-500 bg-orange-50'
-          : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
+          ? 'border-orange-500 bg-gradient-to-r from-orange-50 to-orange-50/50 shadow-md'
+          : isNew
+            ? 'border-red-200 bg-gradient-to-r from-red-50/30 to-white hover:border-red-300 hover:shadow-sm'
+            : 'border-gray-200 bg-white hover:border-orange-200 hover:bg-gradient-to-r hover:from-orange-50/30 hover:to-white hover:shadow-md'
       }`}
     >
-      <div className="min-w-0 flex-1 flex items-center gap-3">
+      {/* Status Badge */}
+      <div className="shrink-0">
         <span
-          className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+          className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wide ${
             status === 'CREATED' || status === 'NEW'
-              ? 'bg-red-100 text-red-800'
-              : status === 'DELIVERED' || status === 'CANCELLED'
-                ? 'bg-gray-100 text-gray-700'
-                : 'bg-blue-100 text-blue-800'
+              ? 'bg-red-100 text-red-700 border border-red-200'
+              : status === 'DELIVERED'
+                ? 'bg-green-100 text-green-700 border border-green-200'
+                : status === 'CANCELLED'
+                  ? 'bg-gray-100 text-gray-600 border border-gray-200'
+                  : 'bg-blue-100 text-blue-700 border border-blue-200'
           }`}
           title={status}
         >
           {label}
         </span>
-        <span className="font-bold text-gray-900 text-sm shrink-0">#{order.order_id}</span>
-        <span className="text-xs text-gray-600 truncate min-w-0">{order.restaurant_name || '—'}</span>
-        <span className="text-xs text-gray-500 shrink-0 flex items-center gap-1">
-          <Clock size={10} />
-          {formatTimeAgo(order.created_at)}
-        </span>
-        <span className="text-xs text-gray-700 shrink-0">
-          {order.food_items_count ?? 0} items · ₹{value.toFixed(0)}
-          {order.preparation_time_minutes != null && ` · ${order.preparation_time_minutes}m prep`}
-        </span>
-        {(status === 'READY_FOR_PICKUP' || status === 'OUT_FOR_DELIVERY') && (otpCode || onFetchOtp) && (
-          <span className="text-xs shrink-0">
-            OTP: {otpCode ? <span className="font-mono font-bold">{otpCode}</span> : <button onClick={(e) => { e.stopPropagation(); onFetchOtp?.(); }} className="text-orange-600">Show</button>}
-          </span>
-        )}
       </div>
+
+      {/* Order ID */}
+      <div className="shrink-0 min-w-[120px]">
+        <FormattedOrderId 
+          formattedOrderId={order.formatted_order_id} 
+          fallbackOrderId={order.order_id}
+          size="sm"
+        />
+      </div>
+
+      {/* Restaurant Name */}
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-gray-900 truncate">{order.restaurant_name || '—'}</p>
+        <div className="flex items-center gap-3 mt-1">
+          <span className="text-xs text-gray-500 flex items-center gap-1">
+            <Clock size={11} />
+            {formatTimeAgo(order.created_at)}
+          </span>
+          <span className="text-xs text-gray-600 font-medium">
+            {order.food_items_count ?? 0} {order.food_items_count === 1 ? 'item' : 'items'}
+          </span>
+          <span className="text-xs font-bold text-gray-900">
+            ₹{value.toFixed(0)}
+          </span>
+          {order.preparation_time_minutes != null && (
+            <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
+              {order.preparation_time_minutes}m prep
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* OTP Display */}
+      {(status === 'READY_FOR_PICKUP' || status === 'OUT_FOR_DELIVERY') && (otpCode || onFetchOtp) && (
+        <div className="shrink-0 px-3 py-1.5 bg-gradient-to-r from-slate-100 to-slate-50 rounded-lg border border-slate-200">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-semibold text-gray-600 uppercase">OTP</span>
+            {otpCode ? (
+              <span className="font-mono font-bold text-sm text-gray-900">{otpCode}</span>
+            ) : (
+              <button 
+                onClick={(e) => { e.stopPropagation(); onFetchOtp?.(); }} 
+                className="text-xs font-medium text-orange-600 hover:text-orange-700"
+              >
+                Show
+              </button>
+            )}
+            {otpVerified && <span className="text-green-600 text-xs">✓</span>}
+          </div>
+        </div>
+      )}
+
+      {/* Action Buttons */}
       <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
         <ActionBtns
           order={order}
@@ -1629,9 +2339,15 @@ function OrderListRow({
           compact
         />
       </div>
+
+      {/* Details Button */}
       <button
         onClick={(e) => { e.stopPropagation(); onClick(); }}
-        className="text-xs font-medium text-orange-600 hover:text-orange-700 shrink-0 flex items-center gap-0.5"
+        className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+          selected
+            ? 'bg-orange-600 text-white hover:bg-orange-700'
+            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+        }`}
       >
         Details <ChevronRight size={14} />
       </button>
@@ -1651,6 +2367,7 @@ function ActionBtns({
   loading,
   compact,
   otpVerified,
+  topRightLayout,
 }: {
   order: OrdersFoodRow;
   onAccept: () => void;
@@ -1663,31 +2380,30 @@ function ActionBtns({
   loading: boolean;
   compact?: boolean;
   otpVerified?: boolean;
+  /** When true: actions at top-right, primary button full width, Reject/secondary half width */
+  topRightLayout?: boolean;
 }) {
   const status = order.order_status || 'CREATED';
   const dis = loading;
+  const btnBase = 'rounded-xl font-medium disabled:opacity-50 min-w-0 transition-all duration-200 active:scale-[0.98] shadow-sm border border-transparent';
+  const primaryFull = topRightLayout ? 'flex-[2] px-4 py-2.5 text-sm font-semibold' : '';
+  const rejectHalf = topRightLayout ? 'flex-1 px-3 py-2.5 text-sm font-semibold' : '';
 
   if (status === 'CREATED' || status === 'NEW') {
     return (
-      <div className={`flex ${compact ? 'gap-2' : 'gap-2'} flex-wrap items-center`}>
+      <div className={`flex gap-2 items-center ${topRightLayout ? 'w-full flex-1' : 'flex-wrap'}`}>
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onAccept();
-          }}
+          onClick={(e) => { e.stopPropagation(); onAccept(); }}
           disabled={dis}
-          className={`${compact ? 'px-4 py-2 text-sm font-semibold' : 'px-5 py-2.5 text-base font-semibold'} bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 shadow-sm`}
+          className={`${btnBase} ${compact ? 'px-4 py-2 text-sm font-semibold' : 'px-5 py-2.5 text-base font-semibold'} ${primaryFull} bg-green-600 text-white hover:bg-green-700 hover:shadow-md border-green-700/20`}
         >
           Accept
         </button>
         {onReject && (
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onReject();
-            }}
+            onClick={(e) => { e.stopPropagation(); onReject(); }}
             disabled={dis}
-            className={`${compact ? 'px-2 py-1 text-xs' : 'px-2.5 py-1 text-xs'} bg-red-100 text-red-700 rounded font-medium hover:bg-red-200 disabled:opacity-50`}
+            className={`${btnBase} ${rejectHalf} ${!topRightLayout ? (compact ? 'px-2.5 py-1.5 text-xs' : 'px-3 py-2 text-sm') : ''} bg-red-50 text-red-700 hover:bg-red-100 border-red-200/60`}
           >
             Reject
           </button>
@@ -1698,12 +2414,9 @@ function ActionBtns({
   if (status === 'ACCEPTED') {
     return (
       <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onPreparing();
-        }}
+        onClick={(e) => { e.stopPropagation(); onPreparing(); }}
         disabled={dis}
-        className={`${compact ? 'px-2 py-1 text-xs' : 'px-3 py-1.5 text-sm'} bg-amber-600 text-white rounded font-medium hover:bg-amber-700 disabled:opacity-50`}
+        className={`${btnBase} ${topRightLayout ? 'w-full px-4 py-2.5 text-sm font-semibold' : ''} ${compact ? 'px-2.5 py-1.5 text-xs' : 'px-4 py-2 text-sm'} bg-amber-500 text-white hover:bg-amber-600 hover:shadow-md border-amber-600/20`}
       >
         Preparing
       </button>
@@ -1711,11 +2424,11 @@ function ActionBtns({
   }
   if (status === 'PREPARING') {
     return (
-      <div className={`flex ${compact ? 'gap-1' : 'gap-2'} flex-wrap`}>
+      <div className={`flex gap-2 ${topRightLayout ? 'w-full' : 'flex-wrap'}`}>
         <button
           onClick={(e) => { e.stopPropagation(); onReady(); }}
           disabled={dis}
-          className={`${compact ? 'px-2 py-1 text-xs' : 'px-3 py-1.5 text-sm'} bg-emerald-600 text-white rounded font-medium hover:bg-emerald-700 disabled:opacity-50`}
+          className={`${btnBase} ${topRightLayout ? 'flex-[2] px-4 py-2.5 text-sm font-semibold' : ''} ${compact ? 'px-2.5 py-1.5 text-xs' : 'px-4 py-2 text-sm'} bg-emerald-600 text-white hover:bg-emerald-700 hover:shadow-md border-emerald-700/20`}
         >
           Ready
         </button>
@@ -1723,7 +2436,7 @@ function ActionBtns({
           <button
             onClick={(e) => { e.stopPropagation(); onRto(); }}
             disabled={dis}
-            className={`${compact ? 'px-2 py-1 text-xs' : 'px-3 py-1.5 text-sm'} bg-orange-100 text-orange-700 rounded font-medium hover:bg-orange-200 disabled:opacity-50`}
+            className={`${btnBase} ${topRightLayout ? 'flex-1 px-3 py-2.5 text-sm font-semibold' : ''} ${compact ? 'px-2.5 py-1.5 text-xs' : 'px-3 py-2 text-sm'} bg-orange-50 text-orange-700 hover:bg-orange-100 border-orange-200/60`}
           >
             RTO
           </button>
@@ -1733,11 +2446,11 @@ function ActionBtns({
   }
   if (status === 'READY_FOR_PICKUP') {
     return (
-      <div className={`flex ${compact ? 'gap-1' : 'gap-2'} flex-wrap`}>
+      <div className={`flex gap-2 ${topRightLayout ? 'w-full' : 'flex-wrap'}`}>
         <button
           onClick={(e) => { e.stopPropagation(); onDispatch(); }}
           disabled={dis}
-          className={`${compact ? 'px-2 py-1 text-xs' : 'px-3 py-1.5 text-sm'} bg-purple-600 text-white rounded font-medium hover:bg-purple-700 disabled:opacity-50`}
+          className={`${btnBase} ${topRightLayout ? 'flex-[2] px-4 py-2.5 text-sm font-semibold' : ''} ${compact ? 'px-2.5 py-1.5 text-xs' : 'px-4 py-2 text-sm'} bg-purple-600 text-white hover:bg-purple-700 hover:shadow-md border-purple-700/20`}
         >
           Dispatch
         </button>
@@ -1745,7 +2458,7 @@ function ActionBtns({
           <button
             onClick={(e) => { e.stopPropagation(); onRto(); }}
             disabled={dis}
-            className={`${compact ? 'px-2 py-1 text-xs' : 'px-3 py-1.5 text-sm'} bg-orange-100 text-orange-700 rounded font-medium hover:bg-orange-200 disabled:opacity-50`}
+            className={`${btnBase} ${topRightLayout ? 'flex-1 px-3 py-2.5 text-sm font-semibold' : ''} ${compact ? 'px-2.5 py-1.5 text-xs' : 'px-3 py-2 text-sm'} bg-orange-50 text-orange-700 hover:bg-orange-100 border-orange-200/60`}
           >
             RTO
           </button>
@@ -1755,11 +2468,11 @@ function ActionBtns({
   }
   if (status === 'OUT_FOR_DELIVERY') {
     return (
-      <div className={`flex ${compact ? 'gap-1' : 'gap-2'} flex-wrap`}>
+      <div className={`flex gap-2 ${topRightLayout ? 'w-full' : 'flex-wrap'}`}>
         <button
           onClick={(e) => { e.stopPropagation(); onComplete(); }}
           disabled={dis}
-          className={`${compact ? 'px-2 py-1 text-xs' : 'px-3 py-1.5 text-sm'} bg-green-600 text-white rounded font-medium hover:bg-green-700 disabled:opacity-50`}
+          className={`${btnBase} ${topRightLayout ? 'flex-[2] px-4 py-2.5 text-sm font-semibold' : ''} ${compact ? 'px-2.5 py-1.5 text-xs' : 'px-4 py-2 text-sm'} bg-green-600 text-white hover:bg-green-700 hover:shadow-md border-green-700/20`}
         >
           Complete
         </button>
@@ -1767,7 +2480,7 @@ function ActionBtns({
           <button
             onClick={(e) => { e.stopPropagation(); onRto(); }}
             disabled={dis}
-            className={`${compact ? 'px-2 py-1 text-xs' : 'px-3 py-1.5 text-sm'} bg-orange-100 text-orange-700 rounded font-medium hover:bg-orange-200 disabled:opacity-50`}
+            className={`${btnBase} ${topRightLayout ? 'flex-1 px-3 py-2.5 text-sm font-semibold' : ''} ${compact ? 'px-2.5 py-1.5 text-xs' : 'px-3 py-2 text-sm'} bg-orange-50 text-orange-700 hover:bg-orange-100 border-orange-200/60`}
           >
             RTO
           </button>

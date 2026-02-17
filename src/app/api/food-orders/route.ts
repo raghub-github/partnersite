@@ -42,6 +42,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Store not found' }, { status: 404 });
     }
 
+    // Select orders_food - drop_address will be fetched from orders_core via order_id
     let query = db
       .from('orders_food')
       .select('*')
@@ -49,16 +50,74 @@ export async function GET(req: NextRequest) {
       .order('created_at', { ascending: false })
       .limit(limit);
 
-    if (status) query = query.eq('order_status', status);
+    if (status) {
+      if (status === 'all') {
+        // Don't filter by status
+      } else if (status === 'active') {
+        // Active orders: CREATED, ACCEPTED, PREPARING, READY_FOR_PICKUP, OUT_FOR_DELIVERY
+        query = query.in('order_status', ['CREATED', 'NEW', 'ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'OUT_FOR_DELIVERY']);
+      } else {
+        query = query.eq('order_status', status);
+      }
+    }
 
-    const { data, error } = await query;
+    const { data: ordersData, error } = await query;
 
     if (error) {
-      console.error('[food-orders] Error:', error);
+      console.error('[food-orders GET] Error:', error);
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ orders: data || [] });
+    // Fetch drop_address and rider details from orders_core for each order
+    const ordersWithDetails = await Promise.all(
+      (ordersData || []).map(async (order: any) => {
+        // Get drop_address and formatted_order_id from orders_core
+        const { data: coreData } = await db
+          .from('orders_core')
+          .select('drop_address_raw, drop_address_normalized, rider_id, formatted_order_id')
+          .eq('id', order.order_id)
+          .single();
+
+        // Get rider details if rider_id exists (from orders_core or orders_food)
+        let riderDetails = null;
+        const riderId = coreData?.rider_id || order.rider_id;
+        if (riderId) {
+          const { data: riderData } = await db
+            .from('riders')
+            .select('id, name, mobile, selfie_url, status, city, lat, lon')
+            .eq('id', riderId)
+            .single();
+          riderDetails = riderData;
+        }
+
+        // Get customer trust/fraud scores for character flag
+        let customerScores = null;
+        if (order.customer_id) {
+          const { data: customerData } = await db
+            .from('customers')
+            .select('trust_score, fraud_score, risk_flag')
+            .eq('id', order.customer_id)
+            .single();
+          customerScores = customerData;
+        }
+
+        return {
+          ...order,
+          drop_address_raw: coreData?.drop_address_raw || null,
+          drop_address_normalized: coreData?.drop_address_normalized || null,
+          formatted_order_id: coreData?.formatted_order_id || order.formatted_order_id || null,
+          rider_details: riderDetails,
+          // Update rider_name from rider_details if available
+          rider_name: riderDetails?.name || order.rider_name,
+          rider_phone: riderDetails?.mobile || order.rider_phone,
+          customer_scores: customerScores,
+        };
+      })
+    );
+
+    console.log(`[food-orders GET] Found ${ordersWithDetails.length} orders for store_id=${storeId} (internal_id=${store.id})`);
+    
+    return NextResponse.json({ orders: ordersWithDetails });
   } catch (err) {
     console.error('[food-orders] Error:', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

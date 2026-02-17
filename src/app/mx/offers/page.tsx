@@ -630,7 +630,10 @@ function OffersContent() {
         <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
           {/* Header */}
           <div className="flex flex-col md:flex-row md:items-center justify-between px-4 md:px-6 pt-6 pb-4 gap-4">
-            <div>
+            {/* Spacer for hamburger menu on left (mobile) */}
+            <div className="md:hidden w-12"></div>
+            {/* Heading on right for mobile, left for desktop */}
+            <div className="ml-auto md:ml-0">
               <h1 className="text-2xl md:text-3xl font-bold text-gray-900 bg-gradient-to-r from-orange-600 to-red-600 bg-clip-text text-transparent">
                 Offers & Promotions
               </h1>

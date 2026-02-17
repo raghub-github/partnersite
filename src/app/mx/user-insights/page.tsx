@@ -763,7 +763,10 @@ const UserInsightsContent = () => {
         {/* Compact Header Section */}
         <div className="mb-6">
           <div className="flex items-center justify-between">
-            <div>
+            {/* Spacer for hamburger menu on left (mobile) */}
+            <div className="md:hidden w-12"></div>
+            {/* Heading on right for mobile, left for desktop */}
+            <div className="ml-auto md:ml-0">
               <h1 className="text-2xl font-bold text-gray-900">User Insights</h1>
               <p className="text-sm text-gray-600 mt-1">Monitor customer feedback and respond to reviews</p>
             </div>

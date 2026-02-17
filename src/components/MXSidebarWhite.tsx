@@ -220,7 +220,7 @@ export const MXSidebarWhite: React.FC<MXSidebarWhiteProps> = ({
 
   const SidebarContent = () => (
     <>
-      {/* Header: Store icon, store id, name + collapse button */}
+      {/* Header: Store icon, store id, name (no collapse button here) */}
       <div className={`flex items-center border-b border-gray-200 ${effectiveCollapsed ? 'justify-center gap-1 p-2' : 'justify-between gap-2 p-6'}`}>
         <div className={`flex items-center ${effectiveCollapsed ? '' : 'gap-3 flex-1 min-w-0'}`}>
           <div className={`rounded-lg bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center flex-shrink-0 ${effectiveCollapsed ? 'w-8 h-8' : 'w-10 h-10'}`}>
@@ -233,17 +233,6 @@ export const MXSidebarWhite: React.FC<MXSidebarWhiteProps> = ({
             </div>
           )}
         </div>
-        <div className="flex items-center gap-1 shrink-0">
-          {onCollapsedChange && !isSmallScreen && (
-            <button
-              onClick={() => onCollapsedChange(!effectiveCollapsed)}
-              className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-900"
-              title={effectiveCollapsed ? 'Expand' : 'Collapse'}
-            >
-              {effectiveCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
-            </button>
-          )}
-        </div>
       </div>
 
       {/* Navigation Menu */}
@@ -252,6 +241,19 @@ export const MXSidebarWhite: React.FC<MXSidebarWhiteProps> = ({
           <NavLinkWithTooltip key={item.id} item={item} />
         ))}
       </nav>
+
+      {/* Collapse/Expand – just above profile */}
+      {onCollapsedChange && !isSmallScreen && (
+        <div className={`border-t border-gray-200 ${effectiveCollapsed ? 'flex justify-center py-2' : 'px-4 py-2'}`}>
+          <button
+            onClick={() => onCollapsedChange(!effectiveCollapsed)}
+            className={`p-1.5 rounded-lg hover:bg-gray-100 text-gray-500 hover:text-gray-900 ${effectiveCollapsed ? '' : 'w-full flex items-center justify-center'}`}
+            title={effectiveCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {effectiveCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
+          </button>
+        </div>
+      )}
 
       {/* Footer: User Profile */}
       <div className={`border-t border-gray-200 ${effectiveCollapsed ? 'p-2' : 'p-4'}`}>

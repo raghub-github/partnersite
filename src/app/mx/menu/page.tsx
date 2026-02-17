@@ -1707,7 +1707,10 @@ function MenuContent() {
       {/* Header */}
       <div className="sticky top-0 z-40 bg-white border-b border-gray-200">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between px-6 py-4 gap-4">
-          <div>
+          {/* Spacer for hamburger menu on left (mobile) */}
+          <div className="md:hidden w-12"></div>
+          {/* Heading on right for mobile, left for desktop */}
+          <div className="ml-auto md:ml-0">
             <h1 className="text-xl md:text-2xl font-bold text-gray-900">Menu Management</h1>
             <p className="text-gray-600 text-sm mt-1">Manage your menu items and categories</p>
             {store && (
