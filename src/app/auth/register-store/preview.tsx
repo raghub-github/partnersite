@@ -7,7 +7,7 @@ declare global {
 }
 import React, { useMemo } from "react";
 // No direct supabase import needed for client
-import { ChevronLeft, CheckCircle, AlertCircle, Loader2, Mail, Phone, HelpCircle } from "lucide-react";
+import { ChevronLeft, CheckCircle, AlertCircle, Loader2, Mail, Phone, HelpCircle, ExternalLink } from "lucide-react";
 
 interface PreviewPageProps {
   step1: any;
@@ -192,59 +192,71 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                 </div>
                 <div className="p-3 sm:p-4">
                   <div className="space-y-3 sm:space-y-4">
-                    {/* Media Section */}
-                    {(storeSetup.logo_preview || storeSetup.banner_preview || (storeSetup.gallery_previews && storeSetup.gallery_previews.length > 0)) && (
-                      <div className="min-w-0">
-                        <h3 className="text-xs sm:text-sm font-semibold text-slate-700 mb-2">Media Assets</h3>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
-                          {storeSetup.logo_preview && (
-                            <div className="space-y-1">
-                              <label className="text-[10px] sm:text-xs font-medium text-slate-500">Logo</label>
-                              <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-lg border-2 border-slate-200 overflow-hidden bg-white p-1">
-                                <img 
-                                  src={storeSetup.logo_preview} 
-                                  alt="Logo" 
-                                  className="w-full h-full object-contain"
-                                />
+                    {/* Media Section - use _preview (data URLs) or _url (R2 URLs) as fallback */}
+                    {(() => {
+                      const logoSrc = storeSetup.logo_preview || storeSetup.logo_url;
+                      const bannerSrc = storeSetup.banner_preview || storeSetup.banner_url;
+                      const galleryUrls = Array.isArray(storeSetup.gallery_previews) && storeSetup.gallery_previews.length > 0
+                        ? storeSetup.gallery_previews
+                        : (Array.isArray(storeSetup.gallery_image_urls) ? storeSetup.gallery_image_urls : []);
+                      const hasMedia = !!(logoSrc || bannerSrc || galleryUrls.length > 0);
+                      if (!hasMedia) return null;
+                      return (
+                        <div className="min-w-0">
+                          <h3 className="text-xs sm:text-sm font-semibold text-slate-700 mb-2">Media Assets</h3>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
+                            {logoSrc && (
+                              <div className="space-y-1">
+                                <label className="text-[10px] sm:text-xs font-medium text-slate-500">Logo</label>
+                                <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-lg border-2 border-slate-200 overflow-hidden bg-white p-1">
+                                  <img
+                                    src={logoSrc}
+                                    alt="Logo"
+                                    className="w-full h-full object-contain"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                </div>
                               </div>
-                            </div>
-                          )}
-                          {storeSetup.banner_preview && (
-                            <div className="space-y-1">
-                              <label className="text-[10px] sm:text-xs font-medium text-slate-500">Banner</label>
-                              <div className="h-16 sm:h-20 rounded-lg border-2 border-slate-200 overflow-hidden">
-                                <img 
-                                  src={storeSetup.banner_preview} 
-                                  alt="Banner" 
-                                  className="w-full h-full object-cover"
-                                />
+                            )}
+                            {bannerSrc && (
+                              <div className="space-y-1">
+                                <label className="text-[10px] sm:text-xs font-medium text-slate-500">Banner</label>
+                                <div className="h-16 sm:h-20 rounded-lg border-2 border-slate-200 overflow-hidden">
+                                  <img
+                                    src={bannerSrc}
+                                    alt="Banner"
+                                    className="w-full h-full object-cover"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                </div>
                               </div>
-                            </div>
-                          )}
-                          {storeSetup.gallery_previews && storeSetup.gallery_previews.length > 0 && (
-                            <div className="space-y-1">
-                              <label className="text-[10px] sm:text-xs font-medium text-slate-500">Gallery ({storeSetup.gallery_previews.length})</label>
-                              <div className="flex flex-wrap gap-1">
-                                {storeSetup.gallery_previews.slice(0, 2).map((src: string, idx: number) => (
-                                  <div key={idx} className="w-16 h-16 sm:w-20 sm:h-20 rounded-lg border-2 border-slate-200 overflow-hidden">
-                                    <img 
-                                      src={src} 
-                                      alt={`Gallery ${idx+1}`} 
-                                      className="w-full h-full object-cover"
-                                    />
-                                  </div>
-                                ))}
-                                {storeSetup.gallery_previews.length > 2 && (
-                                  <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-lg border-2 border-slate-200 bg-slate-100 flex items-center justify-center">
-                                    <span className="text-xs font-semibold text-slate-600">+{storeSetup.gallery_previews.length - 2}</span>
-                                  </div>
-                                )}
+                            )}
+                            {galleryUrls.length > 0 && (
+                              <div className="space-y-1">
+                                <label className="text-[10px] sm:text-xs font-medium text-slate-500">Gallery ({galleryUrls.length})</label>
+                                <div className="flex flex-wrap gap-1">
+                                  {galleryUrls.slice(0, 2).map((src: string, idx: number) => (
+                                    <div key={idx} className="w-16 h-16 sm:w-20 sm:h-20 rounded-lg border-2 border-slate-200 overflow-hidden">
+                                      <img
+                                        src={src}
+                                        alt={`Gallery ${idx + 1}`}
+                                        className="w-full h-full object-cover"
+                                        referrerPolicy="no-referrer"
+                                      />
+                                    </div>
+                                  ))}
+                                  {galleryUrls.length > 2 && (
+                                    <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-lg border-2 border-slate-200 bg-slate-100 flex items-center justify-center">
+                                      <span className="text-xs font-semibold text-slate-600">+{galleryUrls.length - 2}</span>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
-                            </div>
-                          )}
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
 
                     {/* Store Details Grid */}
                     <div className="min-w-0">
@@ -346,6 +358,16 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                         <div className="flex-1 min-w-0">
                           <p className="text-[10px] sm:text-xs font-medium text-slate-500">PAN Number</p>
                           <p className="text-slate-900 font-mono text-xs sm:text-sm truncate">{documents.pan_number}</p>
+                          {(documents.pan_holder_name || documents.pan_image_url) && (
+                            <div className="flex items-center gap-2 mt-1">
+                              {documents.pan_holder_name && <span className="text-[10px] sm:text-xs text-slate-600">{documents.pan_holder_name}</span>}
+                              {documents.pan_image_url && (
+                                <a href={documents.pan_image_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline">
+                                  <ExternalLink className="w-3 h-3" /> View attachment
+                                </a>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}
@@ -357,6 +379,21 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                         <div className="flex-1 min-w-0 overflow-hidden">
                           <p className="text-[10px] sm:text-xs font-medium text-slate-500">Aadhar Number</p>
                           <p className="text-slate-900 font-mono text-xs sm:text-sm truncate">{documents.aadhar_number}</p>
+                          {(documents.aadhar_holder_name || documents.aadhar_front_url || documents.aadhar_back_url) && (
+                            <div className="flex flex-wrap items-center gap-2 mt-1">
+                              {documents.aadhar_holder_name && <span className="text-[10px] sm:text-xs text-slate-600">{documents.aadhar_holder_name}</span>}
+                              {documents.aadhar_front_url && (
+                                <a href={documents.aadhar_front_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline">
+                                  <ExternalLink className="w-3 h-3" /> View front
+                                </a>
+                              )}
+                              {documents.aadhar_back_url && (
+                                <a href={documents.aadhar_back_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline">
+                                  <ExternalLink className="w-3 h-3" /> View back
+                                </a>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}
@@ -368,6 +405,11 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                         <div className="flex-1 min-w-0 overflow-hidden">
                           <p className="text-[10px] sm:text-xs font-medium text-slate-500">FSSAI Number</p>
                           <p className="text-slate-900 font-mono text-xs sm:text-sm truncate">{documents.fssai_number}</p>
+                          {documents.fssai_image_url && (
+                            <a href={documents.fssai_image_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline mt-1">
+                              <ExternalLink className="w-3 h-3" /> View attachment
+                            </a>
+                          )}
                         </div>
                       </div>
                     )}
@@ -379,6 +421,11 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                         <div className="flex-1 min-w-0 overflow-hidden">
                           <p className="text-[10px] sm:text-xs font-medium text-slate-500">GST Number</p>
                           <p className="text-slate-900 font-mono text-xs sm:text-sm truncate">{documents.gst_number}</p>
+                          {documents.gst_image_url && (
+                            <a href={documents.gst_image_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline mt-1">
+                              <ExternalLink className="w-3 h-3" /> View attachment
+                            </a>
+                          )}
                         </div>
                       </div>
                     )}
@@ -390,6 +437,11 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                         <div className="flex-1 min-w-0 overflow-hidden">
                           <p className="text-[10px] sm:text-xs font-medium text-slate-500">Drug License</p>
                           <p className="text-slate-900 font-mono text-xs sm:text-sm truncate">{documents.drug_license_number}</p>
+                          {documents.drug_license_image_url && (
+                            <a href={documents.drug_license_image_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline mt-1">
+                              <ExternalLink className="w-3 h-3" /> View attachment
+                            </a>
+                          )}
                         </div>
                       </div>
                     )}
@@ -401,6 +453,18 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                         <div className="flex-1 min-w-0 overflow-hidden">
                           <p className="text-[10px] sm:text-xs font-medium text-slate-500">Pharmacist Registration</p>
                           <p className="text-slate-900 font-mono text-xs sm:text-sm truncate">{documents.pharmacist_registration_number}</p>
+                          <div className="flex flex-wrap gap-2 mt-1">
+                            {documents.pharmacist_certificate_url && (
+                              <a href={documents.pharmacist_certificate_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline">
+                                <ExternalLink className="w-3 h-3" /> View certificate
+                              </a>
+                            )}
+                            {documents.pharmacy_council_registration_url && (
+                              <a href={documents.pharmacy_council_registration_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline">
+                                <ExternalLink className="w-3 h-3" /> View council reg
+                              </a>
+                            )}
+                          </div>
                         </div>
                       </div>
                     )}
@@ -465,6 +529,31 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                           <p className="font-medium text-slate-900 text-xs sm:text-sm truncate">{documents.bank.upi_id || "-"}</p>
                         </div>
                       )}
+                      {/* Bank / UPI Attachments */}
+                      <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-200 mt-2">
+                        {(documents.bank as any)?.bank_proof_file_url && (
+                          <a
+                            href={(documents.bank as any).bank_proof_file_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-[10px] sm:text-xs text-indigo-600 hover:underline font-medium"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            View bank proof
+                          </a>
+                        )}
+                        {(documents.bank as any)?.upi_qr_screenshot_url && (
+                          <a
+                            href={(documents.bank as any).upi_qr_screenshot_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-[10px] sm:text-xs text-indigo-600 hover:underline font-medium"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            View UPI QR
+                          </a>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>

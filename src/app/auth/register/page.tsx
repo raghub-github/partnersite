@@ -82,8 +82,8 @@ export default function RegisterPage() {
     e.preventDefault();
     setError("");
     const em = email.trim().toLowerCase();
-    if (!em || emailOtp.trim().length < 4) {
-      setError("Enter the code sent to your email (6–8 digits).");
+    if (!em || emailOtp.trim().length < 8) {
+      setError("Enter the 8-digit code sent to your email.");
       return;
     }
     setLoading(true);
@@ -178,7 +178,7 @@ export default function RegisterPage() {
     e.preventDefault();
     setError("");
     const ten = normalizePhone(mobile);
-    if (ten.length !== 10 || mobileOtp.trim().length < 4) {
+    if (ten.length !== 10 || mobileOtp.trim().length < 6) {
       setError("Enter the 6-digit OTP sent to your mobile.");
       return;
     }
@@ -288,31 +288,42 @@ export default function RegisterPage() {
     setStoreLogoPreview(URL.createObjectURL(file));
   };
 
+  const isOtpError = error && /otp|code|invalid|expired|failed to send/i.test(error);
+  const isSmsError = error && /sms|provider|configured|dlt/i.test(error);
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 flex items-center justify-center p-4 sm:p-6">
-      <div className="w-full max-w-md md:max-w-xl bg-white/95 backdrop-blur rounded-2xl shadow-xl border border-slate-200 p-6 sm:p-8">
-        <div className="text-center mb-6">
-          <div className="inline-flex p-3 rounded-full bg-blue-100 mb-4">
-            <Store className="w-8 h-8 text-blue-600" />
-          </div>
-          <h1 className="text-2xl font-bold text-slate-900">Merchant Registration</h1>
-          <p className="text-slate-600 text-sm mt-1">
-            {ENABLE_PHONE_OTP_REGISTER
-              ? "Verify email and mobile with OTP, then add your details"
-              : "Verify email with OTP, add your mobile, then your details"}
-          </p>
-          <div className="flex justify-center gap-2 mt-3">
-            {[1, 2, 3].map((s) => (
-              <div
-                key={s}
-                className={`w-2 h-2 rounded-full ${step >= s ? "bg-blue-600" : "bg-slate-200"}`}
-              />
-            ))}
+    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 bg-[#f0f4f8]">
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(59,130,246,0.12),transparent)]" />
+      <div className="relative w-full max-w-md md:max-w-xl rounded-2xl bg-white shadow-[0_4px_24px_rgba(0,0,0,0.06)] border border-slate-200/80 overflow-hidden">
+        <div className="px-6 pt-6 pb-2 flex items-start justify-between gap-4">
+          <div className="flex-1">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-900">
+                <Store className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold text-slate-900 tracking-tight">Merchant Registration</h1>
+                <p className="text-slate-500 text-sm">
+                  {ENABLE_PHONE_OTP_REGISTER
+                    ? "Email & mobile OTP, then details"
+                    : "Email OTP, mobile, then details"}
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2 mt-2">
+              {[1, 2, 3].map((s) => (
+                <div
+                  key={s}
+                  className={`h-1 flex-1 rounded-full transition-colors ${step >= s ? "bg-blue-600" : "bg-slate-200"}`}
+                />
+              ))}
+            </div>
           </div>
         </div>
 
+        <div className="px-6 pb-6 pt-4">
         {error && (
-          <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm">
+          <div className="mb-4 p-3.5 rounded-xl bg-red-50 border border-red-200/80 text-red-800 text-sm">
             {error}
           </div>
         )}
@@ -335,7 +346,7 @@ export default function RegisterPage() {
                       className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                     />
                   </div>
-                  <p className="text-xs text-slate-500 mt-1">We’ll send a verification code (6 or 8 digits) to your email.</p>
+                  <p className="text-xs text-slate-500 mt-1">We’ll send an 8-digit verification code to your email.</p>
                 </div>
                 <button
                   type="submit"
@@ -348,7 +359,7 @@ export default function RegisterPage() {
             ) : (
               <form onSubmit={handleVerifyEmailOtp} className="space-y-4">
                 <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-700">
-                  Code sent to <strong>{email.trim().toLowerCase()}</strong>. Enter the code from your email (6 or 8 digits).
+                  Code sent to <strong>{email.trim().toLowerCase()}</strong>. Enter the 8-digit code from your email.
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Email verification code</label>
@@ -373,7 +384,7 @@ export default function RegisterPage() {
                   </button>
                   <button
                     type="submit"
-                    disabled={loading || emailOtp.length < 4}
+                    disabled={loading || emailOtp.length < 8}
                     className="flex-1 py-3 rounded-xl font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Verify & continue"}
@@ -442,11 +453,21 @@ export default function RegisterPage() {
                 >
                   {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Send OTP to mobile"}
                 </button>
+                <p className="text-xs text-slate-500 text-center">
+                  OTP requires DLT. Can&apos;t receive SMS?{" "}
+                  <button
+                    type="button"
+                    onClick={(e) => { e.preventDefault(); handleMobileContinueWithoutOtp({ preventDefault: () => {} } as React.FormEvent); }}
+                    className="text-blue-600 hover:underline font-medium"
+                  >
+                    Skip mobile verification
+                  </button>
+                </p>
               </form>
             ) : (
               <form onSubmit={handleVerifyMobileOtp} className="space-y-4">
                 <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-700">
-                  OTP sent to <strong>+91 {mobile.replace(/\D/g, "").slice(-10)}</strong>. Enter the code.
+                  OTP sent to <strong>+91 {mobile.replace(/\D/g, "").slice(-10)}</strong>. Enter the 6-digit code.
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Mobile OTP</label>
@@ -455,9 +476,9 @@ export default function RegisterPage() {
                     inputMode="numeric"
                     autoComplete="one-time-code"
                     value={mobileOtp}
-                    onChange={(e) => setMobileOtp(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                    onChange={(e) => setMobileOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
                     placeholder="000000"
-                    maxLength={8}
+                    maxLength={6}
                     className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-center text-lg tracking-widest focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -471,12 +492,22 @@ export default function RegisterPage() {
                   </button>
                   <button
                     type="submit"
-                    disabled={loading || mobileOtp.length < 4}
+                    disabled={loading || mobileOtp.length < 6}
                     className="flex-1 py-3 rounded-xl font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Verify & continue"}
                   </button>
                 </div>
+                <p className="text-xs text-slate-500 text-center">
+                  Didn&apos;t receive OTP?{" "}
+                  <button
+                    type="button"
+                    onClick={(e) => { e.preventDefault(); handleMobileContinueWithoutOtp({ preventDefault: () => {} } as React.FormEvent); }}
+                    className="text-blue-600 hover:underline font-medium"
+                  >
+                    Skip mobile verification
+                  </button>
+                </p>
               </form>
             )}
             <button
@@ -689,13 +720,14 @@ export default function RegisterPage() {
 
         <p className="mt-6 text-center text-sm text-slate-600">
           Already registered?{" "}
-          <Link href="/auth/login" className="font-medium text-blue-600 hover:text-blue-700">
+          <Link href="/auth/login" className="font-medium text-blue-600 hover:text-blue-700 hover:underline">
             Login
           </Link>
         </p>
         <p className="mt-2 text-center text-sm text-slate-500">
-          <Link href="/auth" className="text-blue-600 hover:underline">Back to home</Link>
+          <Link href="/auth" className="text-slate-500 hover:text-slate-700 hover:underline">Back to home</Link>
         </p>
+        </div>
       </div>
     </div>
   );

@@ -299,7 +299,12 @@ export default function AgreementContractPage({
           doc.addImage(logoSrc, "PNG", margin, y, 35, 12);
           y += 16;
         } catch {
-          y += 2;
+          try {
+            doc.addImage(logoSrc, "JPEG", margin, y, 35, 12);
+            y += 16;
+          } catch {
+            y += 2;
+          }
         }
       }
 

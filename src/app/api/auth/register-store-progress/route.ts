@@ -3,7 +3,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { validateMerchantFromSession } from "@/lib/auth/validate-merchant";
 import { createClient } from "@supabase/supabase-js";
 import { logAuthError, shouldClearSession } from "@/lib/auth/auth-error-handler";
-import { getR2SignedUrl, extractR2KeyFromUrl } from "@/lib/r2";
+import { getR2SignedUrl, extractR2KeyFromUrl, deleteFromR2 } from "@/lib/r2";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -24,6 +24,14 @@ async function toFreshSignedUrl(storedUrlOrKey: string | null | undefined): Prom
   } catch {
     return storedUrlOrKey;
   }
+}
+
+/** Returns proxy URL for menu files (no expiry; works for private R2). */
+function toMenuProxyUrl(storedUrlOrKey: string | null | undefined): string | null {
+  if (!storedUrlOrKey || typeof storedUrlOrKey !== "string") return null;
+  const key = extractR2KeyFromUrl(storedUrlOrKey) || (storedUrlOrKey.includes("://") ? null : storedUrlOrKey.replace(/^\/+/, ""));
+  if (!key) return storedUrlOrKey;
+  return `/api/attachments/proxy?key=${encodeURIComponent(key)}`;
 }
 
 function toEnumStoreType(raw: string | undefined): string | null {
@@ -248,14 +256,23 @@ async function upsertStoreDraft(db: ReturnType<typeof getSupabaseAdmin>, params:
   };
 
   if (existingStoreDbId) {
-    const { data, error } = await db
+    const { data: storeExists } = await db
       .from("merchant_stores")
-      .update(draftPayload)
+      .select("id")
       .eq("id", existingStoreDbId)
-      .select("id, store_id")
-      .single();
-    if (error) throw new Error(error.message);
-    return { storeDbId: data.id as number, storePublicId: data.store_id as string };
+      .maybeSingle();
+    if (!storeExists) {
+      // Store was deleted (e.g. manually); fall through to create new or reuse DRAFT
+    } else {
+      const { data, error } = await db
+        .from("merchant_stores")
+        .update(draftPayload)
+        .eq("id", existingStoreDbId)
+        .select("id, store_id")
+        .single();
+      if (error) throw new Error(error.message);
+      return { storeDbId: data.id as number, storePublicId: data.store_id as string };
+    }
   }
 
   // Ensure only one DRAFT store per parent: reuse existing DRAFT if any (avoids multiple stores from race/double-save)
@@ -340,6 +357,12 @@ export async function GET(req: NextRequest) {
 
     const db = getSupabaseAdmin();
     const storePublicId = req.nextUrl.searchParams.get("storePublicId");
+    const forceNew = req.nextUrl.searchParams.get("forceNew") === "1";
+
+    if (forceNew) {
+      return NextResponse.json({ success: true, progress: null });
+    }
+
     let progress: ProgressRow | null = null;
     let err: { message?: string } | null = null;
 
@@ -416,9 +439,22 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: true, progress: null });
     }
 
-    // Merge merchant_store_documents into form_data.step4 so UI shows saved doc URLs after refresh
     const stepStore = (progress.form_data as any)?.step_store;
-    const storeDbId = stepStore?.storeDbId ? Number(stepStore.storeDbId) : null;
+    const progressStoreDbId = stepStore?.storeDbId ? Number(stepStore.storeDbId) : null;
+    const progressStorePublicId = stepStore?.storePublicId;
+    if (progressStoreDbId) {
+      const { data: storeExists } = await db
+        .from("merchant_stores")
+        .select("id")
+        .eq("id", progressStoreDbId)
+        .maybeSingle();
+      if (!storeExists) {
+        return NextResponse.json({ success: true, progress: null });
+      }
+    }
+
+    // Merge merchant_store_documents into form_data.step4 so UI shows saved doc URLs after refresh
+    const storeDbId = progressStoreDbId;
     if (storeDbId) {
       const { data: docRow } = await db
         .from("merchant_store_documents")
@@ -485,8 +521,81 @@ export async function GET(req: NextRequest) {
           other_document_file_url: other_document_file_url ?? rawOther,
           other_document_expiry_date: docRow.other_expiry_date ?? step4.other_document_expiry_date,
         };
+        // Sign bank/UPI attachment URLs (R2 private URLs require signed URLs for viewing)
+        const bankData = (step4.bank || {}) as Record<string, unknown>;
+        const rawBankProof = bankData.bank_proof_file_url;
+        const rawUpiQr = bankData.upi_qr_screenshot_url;
+        const [signedBankProof, signedUpiQr] = await Promise.all([
+          toFreshSignedUrl(typeof rawBankProof === "string" ? rawBankProof : null),
+          toFreshSignedUrl(typeof rawUpiQr === "string" ? rawUpiQr : null),
+        ]);
+        if (Object.keys(bankData).length > 0) {
+          (mergedStep4 as Record<string, unknown>).bank = {
+            ...bankData,
+            bank_proof_file_url: signedBankProof ?? rawBankProof,
+            upi_qr_screenshot_url: signedUpiQr ?? rawUpiQr,
+          };
+        }
         progress = { ...progress, form_data: { ...formData, step4: mergedStep4 } } as ProgressRow;
       }
+      const { data: menuMedia } = await db
+        .from("merchant_store_media_files")
+        .select("public_url, r2_key, source_entity")
+        .eq("store_id", storeDbId)
+        .eq("media_scope", "MENU_REFERENCE")
+        .eq("is_active", true);
+      if (menuMedia && menuMedia.length > 0) {
+        const formData = (progress.form_data || {}) as Record<string, unknown>;
+        const step3 = (formData.step3 || {}) as Record<string, unknown>;
+        const sheetRow = menuMedia.find((m: any) => m.source_entity === "ONBOARDING_MENU_SHEET");
+        const imageRows = menuMedia.filter((m: any) => m.source_entity === "ONBOARDING_MENU_IMAGE");
+        const rawSheetUrl = (sheetRow?.public_url || sheetRow?.r2_key || step3.menuSpreadsheetUrl) as string | null;
+        const rawImageUrls = imageRows.length > 0
+          ? imageRows.map((r: any) => r.public_url || r.r2_key).filter(Boolean)
+          : (Array.isArray(step3.menuImageUrls) ? step3.menuImageUrls : []);
+        const signedSheetUrl = toMenuProxyUrl(rawSheetUrl);
+        const signedImageUrls = (rawImageUrls as string[]).map((u) => toMenuProxyUrl(u)).filter((u): u is string => !!u);
+        const mergedStep3 = {
+          ...step3,
+          menuSpreadsheetUrl: signedSheetUrl ?? rawSheetUrl ?? step3.menuSpreadsheetUrl,
+          menuImageUrls: signedImageUrls.filter(Boolean).length > 0 ? signedImageUrls : (step3.menuImageUrls ?? []),
+        };
+        progress = { ...progress, form_data: { ...formData, step3: mergedStep3 } } as ProgressRow;
+      }
+    }
+
+    const step3 = (progress.form_data as any)?.step3;
+    if (step3 && (step3.menuSpreadsheetUrl || (Array.isArray(step3.menuImageUrls) && step3.menuImageUrls.length > 0))) {
+      const signedSheet = toMenuProxyUrl(step3.menuSpreadsheetUrl || null);
+      const signedImages = (Array.isArray(step3.menuImageUrls) ? step3.menuImageUrls : [])
+        .map((u: string) => toMenuProxyUrl(u))
+        .filter((u): u is string => !!u);
+      const formData = (progress.form_data || {}) as Record<string, unknown>;
+      const mergedStep3 = {
+        ...step3,
+        menuSpreadsheetUrl: signedSheet ?? step3.menuSpreadsheetUrl,
+        menuImageUrls: signedImages.filter(Boolean).length > 0 ? signedImages : step3.menuImageUrls,
+      };
+      progress = { ...progress, form_data: { ...formData, step3: mergedStep3 } } as ProgressRow;
+    }
+
+    // Sign bank/UPI URLs whenever step4.bank exists (R2 private URLs require signed URLs for viewing)
+    const step4ForBank = (progress.form_data as any)?.step4;
+    if (step4ForBank?.bank) {
+      const bankData = step4ForBank.bank as Record<string, unknown>;
+      const rawBankProof = bankData.bank_proof_file_url;
+      const rawUpiQr = bankData.upi_qr_screenshot_url;
+      const [signedBankProof, signedUpiQr] = await Promise.all([
+        toFreshSignedUrl(typeof rawBankProof === "string" ? rawBankProof : null),
+        toFreshSignedUrl(typeof rawUpiQr === "string" ? rawUpiQr : null),
+      ]);
+      const formData = (progress.form_data || {}) as Record<string, unknown>;
+      const step4 = { ...(formData.step4 as Record<string, unknown>), bank: {
+        ...bankData,
+        bank_proof_file_url: signedBankProof ?? rawBankProof,
+        upi_qr_screenshot_url: signedUpiQr ?? rawUpiQr,
+      } };
+      progress = { ...progress, form_data: { ...formData, step4 } } as ProgressRow;
     }
 
     // Reconcile stale counters/flags for already-saved rows.
@@ -692,20 +801,24 @@ export async function PUT(req: NextRequest) {
     }
 
     if (stepStore?.storeDbId && mergedFormData?.step3) {
-      const imageUrls: string[] = Array.isArray(mergedFormData.step3.menuImageUrls)
+      const menuMode = (mergedFormData.step3 as { menuUploadMode?: string }).menuUploadMode as "IMAGE" | "CSV" | undefined;
+      const imageUrls: string[] = menuMode === "CSV" ? [] : (Array.isArray(mergedFormData.step3.menuImageUrls)
         ? mergedFormData.step3.menuImageUrls.filter(Boolean)
-        : [];
-      const spreadsheetUrl: string | null = mergedFormData.step3.menuSpreadsheetUrl || null;
+        : []);
+      const spreadsheetUrl: string | null = menuMode === "IMAGE" ? null : (mergedFormData.step3.menuSpreadsheetUrl || null);
       const mediaCandidates = [
-        ...imageUrls.map((url) => ({
-          store_id: stepStore!.storeDbId,
-          media_scope: "MENU_REFERENCE",
-          source_entity: "ONBOARDING_MENU_IMAGE",
-          public_url: url,
-          r2_key: typeof url === "string" ? url.split("/").slice(3).join("/") || url : null,
+        ...imageUrls.map((url) => {
+          const key = typeof url === "string" ? (extractR2KeyFromUrl(url) || (url.includes("://") ? null : url.replace(/^\/+/, "")) || url) : null;
+          return {
+            store_id: stepStore!.storeDbId,
+            media_scope: "MENU_REFERENCE",
+            source_entity: "ONBOARDING_MENU_IMAGE",
+            public_url: url,
+            r2_key: key,
           mime_type: "image/*",
           is_active: true,
-        })),
+        };
+        }),
         ...(spreadsheetUrl
           ? [
               {
@@ -713,7 +826,7 @@ export async function PUT(req: NextRequest) {
                 media_scope: "MENU_REFERENCE",
                 source_entity: "ONBOARDING_MENU_SHEET",
                 public_url: spreadsheetUrl,
-                r2_key: spreadsheetUrl.split("/").slice(3).join("/") || spreadsheetUrl,
+                r2_key: extractR2KeyFromUrl(spreadsheetUrl) || (spreadsheetUrl.includes("://") ? null : spreadsheetUrl.replace(/^\/+/, "")) || spreadsheetUrl,
                 mime_type: "application/octet-stream",
                 is_active: true,
               },
@@ -722,18 +835,27 @@ export async function PUT(req: NextRequest) {
       ];
       if (mediaCandidates.length > 0) {
         try {
-          const { data: existingMedia } = await db
+          const { data: existingRows } = await db
             .from("merchant_store_media_files")
-            .select("public_url, r2_key")
+            .select("id, r2_key, public_url")
             .eq("store_id", stepStore.storeDbId)
             .eq("media_scope", "MENU_REFERENCE");
-          const existingUrls = new Set((existingMedia || []).map((row: any) => row.public_url).filter(Boolean));
-          const existingR2Keys = new Set((existingMedia || []).map((row: any) => row.r2_key).filter(Boolean));
-          // Filter out duplicates by both public_url and r2_key
-          const toInsert = mediaCandidates.filter(
-            (row) => !existingUrls.has(row.public_url) && !existingR2Keys.has(row.r2_key)
-          );
-          if (toInsert.length > 0) await db.from("merchant_store_media_files").insert(toInsert);
+          for (const row of existingRows || []) {
+            const key = row.r2_key || extractR2KeyFromUrl(row.public_url || "");
+            if (key && typeof key === "string") {
+              try {
+                await deleteFromR2(key);
+              } catch (e) {
+                console.warn("[register-store-progress] R2 delete failed for key:", key, e);
+              }
+            }
+          }
+          await db
+            .from("merchant_store_media_files")
+            .delete()
+            .eq("store_id", stepStore.storeDbId)
+            .eq("media_scope", "MENU_REFERENCE");
+          await db.from("merchant_store_media_files").insert(mediaCandidates);
         } catch (mediaError: any) {
           console.warn("[register-store-progress] media insert skipped:", mediaError.message);
           // Optional table in rollout phase.

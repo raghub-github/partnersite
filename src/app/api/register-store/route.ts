@@ -21,8 +21,7 @@ export async function POST(req: NextRequest) {
               if (!doc.number) errors.pan_number = 'PAN number is required.';
               if (!doc.file && !doc.url) errors.pan_image = 'PAN image is required.';
             } else if (docType === 'AADHAAR' || docType === 'AADHAR_FRONT' || docType === 'AADHAR_BACK') {
-              if (!doc.number) errors.aadhar_number = 'Aadhaar number is required.';
-              if (!doc.file && !doc.url) errors.aadhar_image = 'Aadhaar image is required.';
+              // Aadhaar optional for child registration; if provided, images optional
             } else if (docType === 'GST' || docType === 'GST_IMAGE') {
               if (!doc.number) errors.gst_number = 'GST number is required.';
               if (!doc.file && !doc.url) errors.gst_image = 'GST image is required.';
@@ -43,7 +42,7 @@ export async function POST(req: NextRequest) {
           return { valid: Object.keys(errors).length === 0, errors };
         }
   // Import R2 helpers
-  const { uploadToR2 } = await import('@/lib/r2');
+  const { uploadToR2, deleteFromR2, extractR2KeyFromUrl } = await import('@/lib/r2');
   // Define document types and folders
   const docFolders = {
     PAN: 'PAN',
@@ -247,26 +246,28 @@ export async function POST(req: NextRequest) {
     if (menuImageUrls.length > 0 || menuSpreadsheetUrl) {
       const mediaRows: any[] = [];
       menuImageUrls.forEach((url, idx) => {
+        const key = typeof url === 'string' ? (extractR2KeyFromUrl(url) || (url.includes('://') ? null : url.replace(/^\/+/, '')) || url) : null;
         mediaRows.push({
           store_id: storeData.id,
           media_scope: 'MENU_REFERENCE',
           source_entity: 'ONBOARDING_MENU_IMAGE',
           source_entity_id: null,
           original_file_name: `menu_image_${idx + 1}`,
-          r2_key: typeof url === 'string' ? url.split('/').slice(3).join('/') || url : null,
+          r2_key: key,
           public_url: url,
           mime_type: 'image/*',
           is_active: true,
         });
       });
       if (menuSpreadsheetUrl) {
+        const sheetKey = typeof menuSpreadsheetUrl === 'string' ? (extractR2KeyFromUrl(menuSpreadsheetUrl) || (menuSpreadsheetUrl.includes('://') ? null : menuSpreadsheetUrl.replace(/^\/+/, '')) || menuSpreadsheetUrl) : null;
         mediaRows.push({
           store_id: storeData.id,
           media_scope: 'MENU_REFERENCE',
           source_entity: 'ONBOARDING_MENU_SHEET',
           source_entity_id: null,
           original_file_name: 'menu_spreadsheet',
-          r2_key: typeof menuSpreadsheetUrl === 'string' ? menuSpreadsheetUrl.split('/').slice(3).join('/') || menuSpreadsheetUrl : null,
+          r2_key: sheetKey,
           public_url: menuSpreadsheetUrl,
           mime_type: 'application/octet-stream',
           is_active: true,
@@ -274,23 +275,31 @@ export async function POST(req: NextRequest) {
       }
       if (mediaRows.length > 0) {
         try {
-          // Check for existing media files to avoid duplicates
-          const { data: existingMedia } = await db
+          const { data: existingRows } = await db
             .from('merchant_store_media_files')
-            .select('r2_key')
+            .select('id, r2_key, public_url')
             .eq('store_id', storeData.id)
             .eq('media_scope', 'MENU_REFERENCE');
-          
-          const existingR2Keys = new Set((existingMedia || []).map((row: any) => row.r2_key).filter(Boolean));
-          const toInsert = mediaRows.filter((row: any) => !existingR2Keys.has(row.r2_key));
-          
-          if (toInsert.length > 0) {
-            const { error: mediaInsertError } = await db
-              .from('merchant_store_media_files')
-              .insert(toInsert);
-            if (mediaInsertError) {
-              console.warn('merchant_store_media_files insert skipped:', mediaInsertError.message);
+          for (const row of existingRows || []) {
+            const key = row.r2_key || extractR2KeyFromUrl(row.public_url || '');
+            if (key && typeof key === 'string') {
+              try {
+                await deleteFromR2(key);
+              } catch (e) {
+                console.warn('merchant_store_media_files R2 delete failed for key:', key, e);
+              }
             }
+          }
+          await db
+            .from('merchant_store_media_files')
+            .delete()
+            .eq('store_id', storeData.id)
+            .eq('media_scope', 'MENU_REFERENCE');
+          const { error: mediaInsertError } = await db
+            .from('merchant_store_media_files')
+            .insert(mediaRows);
+          if (mediaInsertError) {
+            console.warn('merchant_store_media_files insert skipped:', mediaInsertError.message);
           }
         } catch (mediaError: any) {
           console.warn('merchant_store_media_files insert skipped:', mediaError.message);

@@ -206,7 +206,7 @@ const StoreRegistrationForm = () => {
     min_order_amount: 0,
     delivery_radius_km: 5,
     is_pure_veg: false,
-    accepts_online_payment: false,
+    accepts_online_payment: true,
     accepts_cash: false,
     store_hours: {
       monday: { closed: false, slot1_open: "09:00", slot1_close: "22:00", slot2_open: "", slot2_close: "" },
@@ -405,9 +405,18 @@ const StoreRegistrationForm = () => {
   useEffect(() => {
     const hydrateProgress = async () => {
       try {
-        // Always fetch progress from database so that after refresh we show saved data (DB is source of truth).
-        const storeId = selectedStorePublicId || (typeof window !== 'undefined' ? localStorage.getItem('registerStoreCurrentStepStoreId') : null) || '';
-        const url = storeId ? `/api/auth/register-store-progress?storePublicId=${encodeURIComponent(storeId)}` : '/api/auth/register-store-progress';
+        if (forceNewOnboarding && typeof window !== 'undefined') {
+          localStorage.removeItem('registerStoreCurrentStepStoreId');
+          localStorage.removeItem('registerStoreCurrentStep');
+          localStorage.removeItem('registerStoreStep');
+          localStorage.removeItem('registerStoreSection');
+          localStorage.removeItem('registerStoreCuisineSelection');
+        }
+        const storeId = forceNewOnboarding ? '' : (selectedStorePublicId || (typeof window !== 'undefined' ? localStorage.getItem('registerStoreCurrentStepStoreId') : null) || '');
+        const progressParams = new URLSearchParams();
+        if (forceNewOnboarding) progressParams.set('forceNew', '1');
+        else if (storeId) progressParams.set('storePublicId', storeId);
+        const url = `/api/auth/register-store-progress?${progressParams.toString()}`;
         const res = await fetch(url);
         const payload = await res.json();
         
@@ -629,25 +638,39 @@ const StoreRegistrationForm = () => {
               }));
             }
             
-            // Load Step 3 menu data
-            const { data: menuMedia } = await supabase
-              .from('merchant_store_media_files')
-              .select('public_url, r2_key, source_entity')
-              .eq('store_id', existingStore.id)
-              .eq('media_scope', 'MENU_REFERENCE')
-              .eq('is_active', true);
-            
-            if (menuMedia && menuMedia.length > 0) {
-              const menuImages = menuMedia.filter(m => m.source_entity === 'ONBOARDING_MENU_IMAGE').map(m => m.public_url).filter(Boolean);
-              const menuSheet = menuMedia.find(m => m.source_entity === 'ONBOARDING_MENU_SHEET')?.public_url;
-              
-              if (menuImages.length > 0) {
-                setMenuUploadedImageUrls(menuImages as string[]);
-                setMenuUploadMode('IMAGE');
+            // Load Step 3 menu data (use signed-URL API so CSV/image links open correctly)
+            try {
+              const menuRes = await fetch(`/api/auth/store-menu-media-signed?storeDbId=${existingStore.id}`);
+              const menuData = menuRes.ok ? await menuRes.json() : null;
+              if (menuData?.success) {
+                if (Array.isArray(menuData.menuImageUrls) && menuData.menuImageUrls.length > 0) {
+                  setMenuUploadedImageUrls(menuData.menuImageUrls);
+                  setMenuUploadMode('IMAGE');
+                }
+                if (menuData.menuSpreadsheetUrl) {
+                  setMenuUploadedSpreadsheetUrl(menuData.menuSpreadsheetUrl);
+                  setMenuUploadMode('CSV');
+                }
               }
-              if (menuSheet) {
-                setMenuUploadedSpreadsheetUrl(menuSheet);
-                setMenuUploadMode('CSV');
+            } catch {
+              // Fallback: load from Supabase (raw URLs may not open for private R2)
+              const { data: menuMedia } = await supabase
+                .from('merchant_store_media_files')
+                .select('public_url, r2_key, source_entity')
+                .eq('store_id', existingStore.id)
+                .eq('media_scope', 'MENU_REFERENCE')
+                .eq('is_active', true);
+              if (menuMedia && menuMedia.length > 0) {
+                const menuImages = menuMedia.filter(m => m.source_entity === 'ONBOARDING_MENU_IMAGE').map(m => m.public_url).filter(Boolean);
+                const menuSheet = menuMedia.find(m => m.source_entity === 'ONBOARDING_MENU_SHEET')?.public_url;
+                if (menuImages.length > 0) {
+                  setMenuUploadedImageUrls(menuImages as string[]);
+                  setMenuUploadMode('IMAGE');
+                }
+                if (menuSheet) {
+                  setMenuUploadedSpreadsheetUrl(menuSheet);
+                  setMenuUploadMode('CSV');
+                }
               }
             }
             
@@ -1638,6 +1661,7 @@ const StoreRegistrationForm = () => {
 
   const handleDocumentUploadComplete = async (docs: DocumentData) => {
     setDocuments(docs);
+    setActionLoading(true);
     setUploadLoading(true);
     try {
       const docsPatch = await buildDocumentStep4Patch(docs);
@@ -1650,6 +1674,7 @@ const StoreRegistrationForm = () => {
     } catch (err: any) {
       alert(err?.message || 'Failed to upload document files. Please try again.');
     } finally {
+      setActionLoading(false);
       setUploadLoading(false);
     }
   };
@@ -1690,6 +1715,7 @@ const StoreRegistrationForm = () => {
 
   const handleStoreSetupComplete = async (setup: StoreSetupData) => {
     setStoreSetup(setup);
+    setActionLoading(true);
 
     const hasFilesToUpload =
       (typeof File !== 'undefined' && setup.logo instanceof File) ||
@@ -1702,25 +1728,37 @@ const StoreRegistrationForm = () => {
       try {
         const folderBase = (parentInfo?.parent_merchant_id || searchParams?.get('parent_id') || 'merchant') as string;
         step5Patch = { ...sanitizeForProgress(setup) } as Record<string, unknown>;
+        let uploadedLogoUrl: string | undefined;
+        let uploadedBannerUrl: string | undefined;
+        let uploadedGalleryUrls: string[] = [];
         if (typeof File !== 'undefined' && setup.logo instanceof File) {
-          (step5Patch as any).logo_url = await uploadToR2(setup.logo, `${folderBase}/onboarding/store-media`, `logo_${Date.now()}`);
+          uploadedLogoUrl = await uploadToR2(setup.logo, `${folderBase}/onboarding/store-media`, `logo_${Date.now()}`);
+          (step5Patch as any).logo_url = uploadedLogoUrl;
         }
         if (typeof File !== 'undefined' && setup.banner instanceof File) {
-          (step5Patch as any).banner_url = await uploadToR2(setup.banner, `${folderBase}/onboarding/store-media`, `banner_${Date.now()}`);
+          uploadedBannerUrl = await uploadToR2(setup.banner, `${folderBase}/onboarding/store-media`, `banner_${Date.now()}`);
+          (step5Patch as any).banner_url = uploadedBannerUrl;
         }
-        const galleryUrls: string[] = [];
         for (let i = 0; i < (setup.gallery_images || []).length; i++) {
           const file = setup.gallery_images[i];
           if (typeof File !== 'undefined' && file instanceof File) {
             const url = await uploadToR2(file, `${folderBase}/onboarding/store-media/gallery`, `gallery_${Date.now()}_${i + 1}`);
-            galleryUrls.push(url);
+            uploadedGalleryUrls.push(url);
           }
         }
-        if (galleryUrls.length > 0) {
-          (step5Patch as any).gallery_image_urls = galleryUrls;
+        if (uploadedGalleryUrls.length > 0) {
+          (step5Patch as any).gallery_image_urls = uploadedGalleryUrls;
         }
+        // Update storeSetup with uploaded URLs so preview can display them
+        setStoreSetup((prev) => ({
+          ...prev,
+          ...(uploadedLogoUrl && { logo_url: uploadedLogoUrl, logo_preview: prev.logo_preview || uploadedLogoUrl }),
+          ...(uploadedBannerUrl && { banner_url: uploadedBannerUrl, banner_preview: prev.banner_preview || uploadedBannerUrl }),
+          ...(uploadedGalleryUrls.length > 0 && { gallery_image_urls: uploadedGalleryUrls, gallery_previews: prev.gallery_previews?.length ? prev.gallery_previews : uploadedGalleryUrls }),
+        }));
       } catch (err: any) {
         setUploadLoading(false);
+        setActionLoading(false);
         alert(err?.message || 'Failed to upload store media. Please try again.');
         return;
       } finally {
@@ -1733,6 +1771,7 @@ const StoreRegistrationForm = () => {
     try {
       const result = await saveStepData(5, true, { step5: step5Patch }, true);
       if (!result.success) {
+        setActionLoading(false);
         alert(result.error || 'Failed to save Store Configuration. Please try again.');
         return;
       }
@@ -1741,6 +1780,8 @@ const StoreRegistrationForm = () => {
     } catch (err: any) {
       console.error('Store setup save failed:', err);
       alert(err?.message || 'Failed to save Store Configuration. Please try again.');
+    } finally {
+      setActionLoading(false);
     }
   };
 
@@ -1818,7 +1859,7 @@ const StoreRegistrationForm = () => {
       min_order_amount: 0,
       delivery_radius_km: 5,
       is_pure_veg: false,
-      accepts_online_payment: false,
+      accepts_online_payment: true,
       accepts_cash: false,
       store_hours: {
         monday: { closed: false, slot1_open: "09:00", slot1_close: "22:00", slot2_open: "", slot2_close: "" },
@@ -2937,8 +2978,13 @@ const StoreRegistrationForm = () => {
                     ))}
                     {menuImageFiles.length === 0 && menuUploadedImageUrls.map((url, idx) => (
                       <div key={`${url}-${idx}`} className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 bg-white">
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex items-center gap-2">
                           <p className="text-sm text-slate-700 truncate">{menuUploadedImageNames[idx] || `Image ${idx + 1}`}</p>
+                          {url && (
+                            <a href={url} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline flex-shrink-0">
+                              View
+                            </a>
+                          )}
                         </div>
                         <button
                           type="button"
@@ -2965,14 +3011,21 @@ const StoreRegistrationForm = () => {
                 )}
                 {menuUploadMode === 'CSV' && (menuSpreadsheetFile || menuUploadedSpreadsheetUrl) && (
                   <div className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 bg-white">
-                    <div className="min-w-0">
-                      <p className="text-sm text-slate-700 truncate">
-                        {menuSpreadsheetFile?.name ?? menuUploadedSpreadsheetFileName ?? 'Spreadsheet file'}
-                      </p>
-                      {menuSpreadsheetFile && (
-                        <p className="text-xs text-slate-500">
-                          {(menuSpreadsheetFile.size / (1024 * 1024)).toFixed(2)} MB
+                    <div className="min-w-0 flex items-center gap-2">
+                      <div>
+                        <p className="text-sm text-slate-700 truncate">
+                          {menuSpreadsheetFile?.name ?? menuUploadedSpreadsheetFileName ?? 'Spreadsheet file'}
                         </p>
+                        {menuSpreadsheetFile && (
+                          <p className="text-xs text-slate-500">
+                            {(menuSpreadsheetFile.size / (1024 * 1024)).toFixed(2)} MB
+                          </p>
+                        )}
+                      </div>
+                      {menuUploadedSpreadsheetUrl && (
+                        <a href={menuUploadedSpreadsheetUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline flex-shrink-0">
+                          View
+                        </a>
                       )}
                     </div>
                     <button
@@ -3203,6 +3256,7 @@ const StoreRegistrationForm = () => {
               agreementTemplate={agreementTemplate}
               defaultAgreementText={agreementTemplate?.content_markdown || MERCHANT_PARTNERSHIP_TERMS}
               contractTextForPdf={contractTextForSignature}
+              logoUrl={typeof process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL === "string" ? process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL : undefined}
               onBack={() => {
                 setStep(8);
                 saveProgress({ currentStep: 9, nextStep: 8, markStepComplete: false, formDataPatch: {} }).catch(err => {

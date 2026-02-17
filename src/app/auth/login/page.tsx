@@ -95,7 +95,7 @@ function LoginPageContent() {
       if (!result.success) {
         const msg = result.error || "Failed to send OTP.";
         if (msg.toLowerCase().includes("unsupported phone provider") || msg.toLowerCase().includes("phone provider")) {
-          setError("SMS is not configured. Please sign in with Google or email & password, or contact support.");
+          setError("SMS is not configured. Please sign in with Google or contact support.");
         } else {
           setError(msg);
         }
@@ -113,8 +113,8 @@ function LoginPageContent() {
     e.preventDefault();
     setError("");
     const p = normalizePhone(phone);
-    if (!p || otp.trim().length < 4) {
-      setError("Enter the OTP you received.");
+    if (!p || otp.trim().length < 6) {
+      setError("Enter the 6-digit OTP you received.");
       return;
     }
     setLoading(true);
@@ -139,28 +139,39 @@ function LoginPageContent() {
     }
   };
 
+  const isOtpError = error && /otp|code|invalid|expired|failed to send/i.test(error);
+  const isSmsError = error && /sms|provider|configured/i.test(error);
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-white/95 backdrop-blur rounded-2xl shadow-xl border border-slate-200 p-6 sm:p-8">
-        <div className="text-center mb-6">
-          <div className="inline-flex p-3 mb-4">
-            <img src="/logo.png" alt="GatiMitra" className="h-12 w-auto object-contain" />
+    <div className="min-h-screen flex items-center justify-center p-4 bg-[#f0f4f8]">
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(59,130,246,0.15),transparent)]" />
+      <div className="relative w-full max-w-[420px] rounded-2xl bg-white shadow-[0_4px_24px_rgba(0,0,0,0.06)] border border-slate-200/80 overflow-hidden">
+        <div className="px-6 pt-6 pb-2 flex items-start justify-between gap-4">
+          <div className="flex-1">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-100 ring-1 ring-slate-200/60">
+                <img src="/logo.png" alt="GatiMitra" className="h-7 w-auto object-contain" />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold text-slate-900 tracking-tight">Merchant Login</h1>
+                <p className="text-slate-500 text-sm">
+                  {ENABLE_PHONE_OTP_LOGIN ? "Google or mobile OTP" : "Continue with Google"}
+                </p>
+              </div>
+            </div>
           </div>
-          <h1 className="text-2xl font-bold text-slate-900">Merchant Login</h1>
-          <p className="text-slate-600 text-sm mt-1">
-            {ENABLE_PHONE_OTP_LOGIN ? "Sign in with Google or mobile OTP" : "Sign in with Google"}
-          </p>
         </div>
 
+        <div className="px-6 pb-6 pt-2">
         {registered === "1" && (
-          <div className="mb-4 p-3 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm">
-            Registration successful. You can sign in with Google below.
+          <div className="mb-4 p-3.5 rounded-xl bg-emerald-50 border border-emerald-200/80 text-emerald-800 text-sm font-medium">
+            Registration successful. Sign in below.
           </div>
         )}
 
         {error && (
-          <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-sm">
-            {error}
+          <div className="mb-4 p-3.5 rounded-xl bg-red-50 border border-red-200/80 text-red-800 text-sm flex items-start justify-between gap-3">
+            <span className="flex-1">{error}</span>
           </div>
         )}
 
@@ -171,7 +182,7 @@ function LoginPageContent() {
               type="button"
               onClick={handleGoogleLogin}
               disabled={loading || googleLoading}
-              className="group relative flex w-full items-center justify-center gap-3 rounded-xl border-2 border-slate-200 bg-white px-5 py-3.5 text-sm font-semibold text-slate-700 shadow-sm transition-all hover:border-blue-300 hover:bg-blue-50 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 sm:px-6 sm:py-4"
+              className="group relative flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-3.5 text-sm font-semibold text-slate-700 transition-all hover:border-slate-300 hover:bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50"
             >
               {googleLoading ? (
                 <>
@@ -192,7 +203,7 @@ function LoginPageContent() {
               )}
             </button>
 
-            {/* Mobile OTP – shown only when ENABLE_PHONE_OTP_LOGIN is true (MSG91 configured) */}
+            {/* Mobile OTP – alternative to Google */}
             {ENABLE_PHONE_OTP_LOGIN && (
               <>
                 <div className="relative">
@@ -218,20 +229,20 @@ function LoginPageContent() {
                           className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         />
                       </div>
-                      <p className="text-xs text-slate-500 mt-1">10-digit number. We’ll send an OTP via SMS (MSG91).</p>
+                      <p className="text-xs text-slate-500 mt-1">10-digit number. We’ll send a 6-digit OTP via SMS.</p>
                     </div>
-                    <button
-                      type="submit"
-                      disabled={loading || phone.replace(/\D/g, "").length !== 10}
-                      className="w-full py-3 rounded-xl font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
-                    >
+                <button
+                  type="submit"
+                  disabled={loading || phone.replace(/\D/g, "").length !== 10}
+                  className="w-full py-3.5 rounded-xl font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2 transition-colors"
+                >
                       {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Send OTP"}
                     </button>
                   </form>
                 ) : (
                   <form onSubmit={handleVerifyPhoneOtp} className="space-y-4">
                     <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-700">
-                      OTP sent to <strong>+91 {phone.replace(/\D/g, "").slice(-10)}</strong>. Enter the code below.
+                      OTP sent to <strong>+91 {phone.replace(/\D/g, "").slice(-10)}</strong>. Enter the 6-digit code.
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Enter OTP</label>
@@ -240,9 +251,9 @@ function LoginPageContent() {
                         inputMode="numeric"
                         autoComplete="one-time-code"
                         value={otp}
-                        onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                        onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
                         placeholder="000000"
-                        maxLength={8}
+                        maxLength={6}
                         className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-center text-lg tracking-widest focus:ring-2 focus:ring-blue-500"
                       />
                     </div>
@@ -256,7 +267,7 @@ function LoginPageContent() {
                       </button>
                       <button
                         type="submit"
-                        disabled={loading || otp.length < 4}
+                        disabled={loading || otp.length < 6}
                         className="flex-1 py-3 rounded-xl font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
                       >
                         {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Verify & sign in"}
@@ -271,13 +282,14 @@ function LoginPageContent() {
 
         <p className="mt-6 text-center text-sm text-slate-600">
           Not registered?{" "}
-          <Link href="/auth/register" className="font-medium text-blue-600 hover:text-blue-700">
+          <Link href="/auth/register" className="font-medium text-blue-600 hover:text-blue-700 hover:underline">
             Register first
           </Link>
         </p>
         <p className="mt-2 text-center text-sm text-slate-500">
-          <Link href="/auth" className="text-blue-600 hover:underline">Back to home</Link>
+          <Link href="/auth" className="text-slate-500 hover:text-slate-700 hover:underline">Back to home</Link>
         </p>
+        </div>
       </div>
     </div>
   );

@@ -198,7 +198,7 @@ export async function GET(req: NextRequest) {
       const { data: storeRecheck } = await db.from('merchant_stores').select('operational_status').eq('id', storeInternalId).single();
       if ((storeRecheck?.operational_status as string) === 'OPEN') {
         effectiveStatus = 'OPEN';
-        const { data: availRecheck } = await db.from('merchant_store_availability').select('last_toggled_by_email, last_toggled_by_name, last_toggled_by_id, last_toggle_type, last_toggled_at').eq('store_id', storeInternalId).single();
+        const { data: availRecheck } = await db.from('merchant_store_availability').select('manual_close_until, auto_open_from_schedule, block_auto_open, restriction_type, last_toggled_by_email, last_toggled_by_name, last_toggled_by_id, last_toggle_type, last_toggled_at').eq('store_id', storeInternalId).single();
         if (availRecheck) availFinal = availRecheck;
       } else {
         await db.from('merchant_stores').update({

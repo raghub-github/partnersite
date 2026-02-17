@@ -109,6 +109,17 @@ export function extractR2KeyFromUrl(imageUrl: string): string | null {
   try {
     const normalizedImageUrl = imageUrl.trim();
 
+    // If it's our proxy URL, extract key from query param
+    if (normalizedImageUrl.includes('/api/attachments/proxy') && normalizedImageUrl.includes('key=')) {
+      try {
+        const u = new URL(normalizedImageUrl, 'http://dummy');
+        const k = u.searchParams.get('key');
+        return (k && decodeURIComponent(k)) || null;
+      } catch {
+        return null;
+      }
+    }
+
     // If it's a full URL (http:// or https://), extract pathname
     if (normalizedImageUrl.startsWith('http://') || normalizedImageUrl.startsWith('https://')) {
       try {

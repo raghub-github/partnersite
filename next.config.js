@@ -4,8 +4,8 @@ const path = require("path");
 const nextConfig = {
   reactCompiler: true,
   turbopack: {
-    // Use monorepo root so Turbopack can resolve hoisted next package
-    root: path.resolve(__dirname, ".."),
+    // Explicitly set root to current directory to avoid resolving from parent
+    root: __dirname,
   },
   images: {
     remotePatterns: [

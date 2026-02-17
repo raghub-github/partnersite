@@ -14,6 +14,7 @@ interface SignatureStepPageProps {
   agreementTemplate: { id?: number; template_key: string; title: string; version: string; content_markdown: string; pdf_url: string | null } | null;
   defaultAgreementText: string;
   contractTextForPdf: string;
+  logoUrl?: string | null;
   onBack: () => void;
   onSuccess: (storeId: string) => void;
   actionLoading?: boolean;
@@ -29,6 +30,7 @@ export default function SignatureStepPage({
   agreementTemplate,
   defaultAgreementText,
   contractTextForPdf,
+  logoUrl: logoUrlProp,
   onBack,
   onSuccess,
   actionLoading = false,
@@ -255,20 +257,28 @@ export default function SignatureStepPage({
         }
       };
 
-      const logoUrl = typeof process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL === "string" ? process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL : "";
-      const logoSrc = logoUrl && (logoUrl.startsWith("http") || logoUrl.startsWith("data:") || logoUrl.startsWith("/"))
-        ? logoUrl.startsWith("http") || logoUrl.startsWith("data:")
-          ? logoUrl
-          : typeof window !== "undefined"
-            ? window.location.origin + (logoUrl.startsWith("/") ? logoUrl : "/" + logoUrl)
-            : ""
-        : "";
+      const logoUrl = typeof logoUrlProp === "string" && logoUrlProp.trim()
+        ? logoUrlProp
+        : (typeof process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL === "string" ? process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL : "");
+      let logoSrc = "";
+      if (logoUrl) {
+        if (logoUrl.startsWith("http") || logoUrl.startsWith("data:")) {
+          logoSrc = logoUrl;
+        } else if (typeof window !== "undefined") {
+          logoSrc = window.location.origin + (logoUrl.startsWith("/") ? logoUrl : "/" + logoUrl);
+        }
+      }
       if (logoSrc) {
         try {
           doc.addImage(logoSrc, "PNG", margin, y, 35, 12);
           y += 16;
         } catch {
-          y += 2;
+          try {
+            doc.addImage(logoSrc, "JPEG", margin, y, 35, 12);
+            y += 16;
+          } catch {
+            y += 2;
+          }
         }
       }
 
@@ -454,7 +464,7 @@ export default function SignatureStepPage({
       console.error("PDF generation failed:", err);
       throw new Error("Could not generate PDF. Please try again.");
     }
-  }, [signatureDataUrl, signerName, step1, step2, documents, parentInfo, agreementTemplate?.content_markdown, defaultAgreementText, contractDataForPdf]);
+  }, [signatureDataUrl, signerName, step1, step2, documents, parentInfo, agreementTemplate?.content_markdown, defaultAgreementText, contractDataForPdf, logoUrlProp]);
 
   const downloadPdf = useCallback(async () => {
     const pdfData = await generatePdfBlob();

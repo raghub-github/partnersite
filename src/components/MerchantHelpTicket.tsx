@@ -59,13 +59,14 @@ export default function MerchantHelpTicket({ pageContext, className = "", hideTr
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // When modal is open (e.g. from sidebar Help), always render so the modal can show.
-  // When closed and not authenticated, render nothing (no trigger when hideTrigger).
-  if (!session?.isAuthenticated && !open) {
+  // When modal is open, always render so the modal can show.
+  // On login/register/auth pages, always show Help button so MX can raise concerns even before signing in.
+  const isAuthPage = pageContext === "login" || pageContext === "register" || pageContext === "auth";
+  if (!session?.isAuthenticated && !open && !isAuthPage) {
     return null;
   }
 
-  // On store-onboarding / register user is already in authenticated flow (reached page after login). Show form; API will validate on submit.
+  // Show ticket form when user has session (API requires auth) or is in store-onboarding/register flow (may have partial session from Google).
   const showTicketForm = session?.isAuthenticated || pageContext === "store-onboarding" || pageContext === "register";
 
   const allowedTitles = TITLES_BY_CONTEXT[pageContext] || TITLES_BY_CONTEXT.auth;

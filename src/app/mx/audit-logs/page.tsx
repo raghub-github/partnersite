@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { MXLayoutWhite } from '@/components/MXLayoutWhite';
@@ -17,7 +17,7 @@ interface AuditEntry {
   created_at: string;
 }
 
-export default function AuditLogsPage() {
+function AuditLogsContent() {
   const searchParams = useSearchParams();
   const [storeId, setStoreId] = useState<string | null>(null);
   const [logs, setLogs] = useState<AuditEntry[]>([]);
@@ -108,5 +108,19 @@ export default function AuditLogsPage() {
         </div>
       </div>
     </MXLayoutWhite>
+  );
+}
+
+export default function AuditLogsPage() {
+  return (
+    <Suspense fallback={
+      <MXLayoutWhite restaurantName="Audit logs" restaurantId={DEMO_STORE_ID}>
+        <div className="flex-1 flex items-center justify-center bg-[#f8fafc]">
+          <Loader2 size={24} className="animate-spin text-orange-500" />
+        </div>
+      </MXLayoutWhite>
+    }>
+      <AuditLogsContent />
+    </Suspense>
   );
 }

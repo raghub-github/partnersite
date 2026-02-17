@@ -113,7 +113,7 @@ const defaultStoreSetupData: StoreSetupData = {
   min_order_amount: 0,
   delivery_radius_km: 5,
   is_pure_veg: false,
-  accepts_online_payment: false,
+  accepts_online_payment: true,
   accepts_cash: false,
   store_hours: {
     monday: { closed: false, slot1_open: "09:00", slot1_close: "22:00", slot2_open: "", slot2_close: "" },
@@ -518,11 +518,15 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
 
   const validateDocumentSection = () => {
     if (activeSection === 'pan') {
+      // PAN: holder name + number + image required
       const panOk = documents.pan_holder_name?.trim() && documents.pan_number && hasDocFileOrUrl('pan_image');
       const panFormatOk = !documents.pan_number || !documentFormatValidators.pan(documents.pan_number);
       return !!(panOk && panFormatOk);
     } else if (activeSection === 'aadhar') {
-      const aadharOk = documents.aadhar_holder_name?.trim() && documents.aadhar_number && hasDocFileOrUrl('aadhar_front') && hasDocFileOrUrl('aadhar_back');
+      // Aadhaar: entirely optional; if filled, validate format; images optional
+      const hasAadhar = documents.aadhar_holder_name?.trim() || documents.aadhar_number;
+      if (!hasAadhar) return true; // Skip - section is optional
+      const aadharOk = documents.aadhar_holder_name?.trim() && documents.aadhar_number;
       const aadharFormatOk = !documents.aadhar_number || !documentFormatValidators.aadhar(documents.aadhar_number.replace(/\s/g, ''));
       return !!(aadharOk && aadharFormatOk);
     } else if (activeSection === 'optional') {
@@ -1264,15 +1268,15 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
             </svg>
           </div>
           <div>
-            <p className="text-sm font-semibold text-indigo-900">Aadhar Card (Mandatory)</p>
-            <p className="text-xs text-indigo-700 mt-0.5">Identity verification. Both front and back required.</p>
+            <p className="text-sm font-semibold text-indigo-900">Aadhaar Card <span className="text-slate-500 text-xs font-normal">(Optional)</span></p>
+            <p className="text-xs text-indigo-700 mt-0.5">Identity verification. Images are optional—number and name sufficient.</p>
           </div>
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1.5">
-            Name as on Aadhaar <span className="text-rose-500">*</span>
+            Name as on Aadhaar <span className="text-slate-500 text-xs font-normal">(if providing)</span>
           </label>
           <input
             type="text"
@@ -1286,7 +1290,7 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
         </div>
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1.5">
-            Aadhar Number <span className="text-rose-500">*</span>
+            Aadhaar Number <span className="text-slate-500 text-xs font-normal">(if providing)</span>
           </label>
           <input
             type="text"
@@ -1295,7 +1299,6 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
             onChange={handleDocumentInputChange}
             placeholder="1234 5678 9012"
             className="w-full px-4 py-3 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
-            required
             maxLength={12}
             pattern="[0-9]{12}"
             title="12-digit Aadhar number"
@@ -1307,7 +1310,7 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              Front Side <span className="text-rose-500">*</span>
+              Front Side <span className="text-slate-500 text-xs font-normal">(optional)</span>
             </label>
             <input type="file" ref={fileInputRefs.aadharFront} onChange={(e) => handleFileChange(e, 'aadhar_front')} accept=".jpg,.jpeg,.png,.pdf" className="hidden" />
             {!hasDocFileOrUrl('aadhar_front') ? (
@@ -1338,7 +1341,7 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              Back Side <span className="text-rose-500">*</span>
+              Back Side <span className="text-slate-500 text-xs font-normal">(optional)</span>
             </label>
             <input type="file" ref={fileInputRefs.aadharBack} onChange={(e) => handleFileChange(e, 'aadhar_back')} accept=".jpg,.jpeg,.png,.pdf" className="hidden" />
             {!hasDocFileOrUrl('aadhar_back') ? (
@@ -2084,7 +2087,7 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
                   )}
-                  {actionLoading || documentSaving ? 'Saving...' : (activeSection === 'other' || (activeSection === 'bank' && !showOtherDocs) ? 'Complete Documents' : 'Save & Continue')}
+                  {actionLoading || documentSaving ? 'Saving...' : activeSection === 'aadhar' && !documents.aadhar_holder_name?.trim() && !documents.aadhar_number?.trim() ? 'Skip Aadhaar & Continue' : (activeSection === 'other' || (activeSection === 'bank' && !showOtherDocs) ? 'Complete Documents' : 'Save & Continue')}
                 </button>
               </div>
             </div>
@@ -2558,12 +2561,14 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
             <button
               type="button"
               onClick={handleStoreSetupSaveAndContinue}
-              disabled={false}
+              disabled={actionLoading}
               className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs sm:text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
             >
-              <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-              </svg>
+              {actionLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" /> : (
+                <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              )}
               Save & Continue
             </button>
           </div>
