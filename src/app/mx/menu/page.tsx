@@ -37,14 +37,12 @@ interface MenuItem {
   serves?: number;
   allergens?: string[];
   customizations?: Customization[];
+  variants?: Variant[];
   food_type?: string;
   spice_level?: string;
   cuisine_type?: string;
-  display_order?: number;
   is_active?: boolean;
   store_id?: number;
-  item_metadata?: any;
-  nutritional_info?: any;
 }
 
 interface Customization {
@@ -88,25 +86,28 @@ interface Variant {
 }
 
 import React, { useState, useEffect, Suspense } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams } from 'next/navigation'
 import { Toaster, toast } from 'sonner'
-import { Plus, Edit2, Trash2, X, Upload, Package, ChevronDown, ChevronUp, Image as ImageIcon } from 'lucide-react'
+import { Plus, Edit2, Trash2, X, Upload, Package, ChevronDown, ChevronUp, Image as ImageIcon, Info, Search } from 'lucide-react'
 import { MXLayoutWhite } from '@/components/MXLayoutWhite'
+import { MobileHamburgerButton } from '@/components/MobileHamburgerButton'
 import { 
   fetchStoreById, 
   fetchStoreByName, 
-  fetchMenuItems, 
-  createMenuItem, 
-  updateMenuItem, 
-  updateMenuItemStock, 
+  fetchMenuItems,
   deleteMenuItem, 
   getImageUploadStatus, 
   fetchMenuCategories, 
   createMenuCategory, 
   updateMenuCategory, 
-  deleteMenuCategory
+  deleteMenuCategory,
+  fetchCustomizationsForMenuItem,
+  fetchAddonsForCustomization,
+  fetchVariantsForMenuItem,
 } from '@/lib/database'
 import { MenuItemsGridSkeleton } from '@/components/PageSkeleton'
+import { R2Image } from '@/components/R2Image'
 
 // --- Menu Category interface ---
 type MerchantStore = {
@@ -120,11 +121,48 @@ interface MenuCategory {
   category_name: string;
   category_description?: string;
   category_image_url?: string;
-  display_order?: number;
   is_active?: boolean;
-  category_metadata?: any;
   created_at?: string;
   updated_at?: string;
+}
+
+const CUSTOMIZATION_VARIANT_LIMIT = 10;
+
+// Menu item image upload rules (production)
+const MENU_ITEM_IMAGE = {
+  MAX_SIZE_BYTES: 1 * 1024 * 1024, // 1 MB
+  ACCEPT_TYPES: ['image/png', 'image/jpeg', 'image/jpg'] as const,
+  IDEAL_MIN_KB: 200,
+  IDEAL_MAX_KB: 500,
+  RECOMMENDED_PX: 800,
+} as const;
+
+function validateMenuItemImage(file: File): Promise<{ valid: true } | { valid: false; error: string }> {
+  const type = file.type?.toLowerCase();
+  const allowed = ['image/png', 'image/jpeg', 'image/jpg'];
+  if (!type || !allowed.includes(type)) {
+    return Promise.resolve({ valid: false, error: 'Only PNG and JPG/JPEG images are allowed.' });
+  }
+  if (file.size > MENU_ITEM_IMAGE.MAX_SIZE_BYTES) {
+    return Promise.resolve({ valid: false, error: 'Image must be 1 MB or smaller.' });
+  }
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      if (img.naturalWidth !== img.naturalHeight) {
+        resolve({ valid: false, error: 'Please upload a square image (1:1 ratio).' });
+      } else {
+        resolve({ valid: true });
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve({ valid: false, error: 'Could not read image. Use a valid PNG or JPG file.' });
+    };
+    img.src = url;
+  });
 }
 
 interface ItemFormProps {
@@ -134,13 +172,30 @@ interface ItemFormProps {
   imagePreview: string;
   setImagePreview: (url: string) => void;
   onProcessImage: (file: File, isEdit: boolean) => void;
-  onSubmit: () => void;
+  /** Called when main tab "Save and Next" is clicked - save item then switch to options tab */
+  onSaveAndNext?: () => Promise<void>;
+  /** Called when customization tab "Submit" is clicked - save options and close */
+  onSubmitOptions?: () => Promise<void>;
+  /** Legacy: single submit (used when onSaveAndNext/onSubmitOptions not provided) */
+  onSubmit?: () => void;
   onCancel: () => void;
   isSaving: boolean;
   error: string;
   title: string;
   categories: MenuCategory[];
   currentItemId?: string;
+  imageUploadAllowed?: boolean;
+  imageLimitReached?: boolean;
+  imageUsed?: number;
+  imageLimit?: number | null;
+  /** Slots left (limit - used). Shown on button when not at limit. */
+  imageSlotsLeft?: number | null;
+  /** Max cuisines selectable per item (from plan). Null = no limit. */
+  maxCuisinesPerItem?: number | null;
+  /** Shown under image box; blocks submit when set */
+  imageValidationError?: string;
+  /** True while aspect-ratio/size validation is in progress */
+  imageValidating?: boolean;
 }
 
 export const dynamic = 'force-dynamic'
@@ -154,7 +209,10 @@ const globalStyles = `
 // Food type options
 const FOOD_TYPES = ['Vegetarian', 'Non-Vegetarian', 'Vegan', 'Eggitarian'];
 const SPICE_LEVELS = ['Mild', 'Medium', 'Hot', 'Very Hot'];
-const CUISINE_TYPES = ['Indian', 'Chinese', 'Italian', 'Mexican', 'Continental', 'Thai', 'Japanese', 'American', 'Other'];
+const CUISINE_TYPES = [
+  'North Indian', 'Chinese', 'Fast Food', 'South Indian', 'Biryani', 'Pizza', 'Bakery', 'Street Food', 'Burger', 'Mughlai', 'Momos', 'Sandwich', 'Mithai', 'Rolls', 'Beverages', 'Desserts', 'Cafe', 'Healthy Food', 'Maharashtrian', 'Tea', 'Bengali', 'Ice Cream', 'Juices', 'Shake', 'Shawarma', 'Gujarati', 'Italian', 'Continental', 'Lebanese', 'Salad', 'Andhra', 'Waffle', 'Coffee', 'Kebab', 'Arabian', 'Kerala', 'Asian', 'Seafood', 'Pasta', 'BBQ', 'Rajasthani', 'Wraps', 'Paan', 'Hyderabadi', 'Mexican', 'Bihari', 'Goan', 'Assamese', 'American', 'Mandi', 'Chettinad', 'Mishti', 'Bar Food', 'Malwani', 'Odia', 'Roast Chicken', 'Tamil', 'Japanese', 'Finger Food', 'Korean', 'North Eastern', 'Thai', 'Kathiyawadi', 'Bubble Tea', 'Mangalorean', 'Burmese', 'Sushi', 'Lucknowi', 'Modern Indian', 'Tibetan', 'Afghan', 'Oriental', 'Pancake', 'Kashmiri', 'Middle Eastern', 'Grocery', 'Konkan', 'European', 'Awadhi', 'Hot dogs', 'Sindhi', 'Turkish', 'Naga', 'Mediterranean', 'Nepalese', 'Cuisine Varies', 'Saoji', 'Charcoal Chicken', 'Steak', 'Frozen Yogurt', 'Panini', 'Parsi', 'Sichuan', 'Iranian', 'Grilled Chicken', 'French', 'Raw Meats', 'Drinks Only', 'Vietnamese', 'Liquor', 'Greek', 'Himachali', 'Bohri', 'Garhwali', 'Cantonese', 'Malaysian', 'Belgian', 'British', 'African', 'Spanish', 'Manipuri', 'Egyptian', 'Sri Lankan', 'Relief fund', 'Bangladeshi', 'Indonesian', 'Tex-Mex', 'Irish', 'Singaporean', 'South American', 'Mongolian', 'German', 'Russian', 'Brazilian', 'Pakistani', 'Australian', 'Moroccan', 'Filipino', 'Hot Pot', 'Retail Products', 'Mizo', 'Portuguese', 'Indian', 'Tripuri', 'Delight Goodies', 'Meghalayan', 'Sikkimese', 'Armenian', 'Afghani',
+];
+const CUISINE_TOP_COUNT = 7;
 
 // Customization types
 const CUSTOMIZATION_TYPES = ['Radio', 'Checkbox', 'Dropdown', 'Text'];
@@ -167,14 +225,40 @@ function ItemForm(props: ItemFormProps) {
     imagePreview,
     setImagePreview,
     onProcessImage,
+    onSaveAndNext,
+    onSubmitOptions,
     onSubmit,
     onCancel,
     isSaving,
     error,
     title,
     categories,
-    currentItemId
+    currentItemId,
+    imageUploadAllowed = true,
+    imageLimitReached = false,
+    imageUsed = 0,
+    imageLimit = null,
+    imageSlotsLeft = null,
+    maxCuisinesPerItem = null,
+    imageValidationError,
+    imageValidating = false,
   } = props;
+
+  const selectedCuisines: string[] = formData.cuisine_type
+    ? String(formData.cuisine_type).split(',').map((s: string) => s.trim()).filter(Boolean)
+    : [];
+  const cuisineLimit = maxCuisinesPerItem ?? 10;
+  const cuisineAtLimit = selectedCuisines.length >= cuisineLimit;
+  const toggleCuisine = (cuisine: string) => {
+    const next = selectedCuisines.includes(cuisine)
+      ? selectedCuisines.filter((c: string) => c !== cuisine)
+      : cuisineAtLimit
+        ? selectedCuisines
+        : [...selectedCuisines, cuisine];
+    setFormData({ ...formData, cuisine_type: next.length ? next.join(', ') : '' });
+  };
+
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   // Auto-calculate Selling Price
   useEffect(() => {
@@ -191,9 +275,14 @@ function ItemForm(props: ItemFormProps) {
     }
   }, [formData.base_price, formData.discount_percentage, formData.tax_percentage, setFormData]);
 
-  const [activeTab, setActiveTab] = useState<'basic' | 'pricing' | 'customization' | 'advanced'>('basic');
+  const [activeSection, setActiveSection] = useState<'main' | 'customization'>('main');
   const [showFoodDropdown, setShowFoodDropdown] = useState(false);
+  const [cuisineSearch, setCuisineSearch] = useState('');
+  const [cuisineViewMore, setCuisineViewMore] = useState(false);
   const [customizations, setCustomizations] = useState<Customization[]>(formData.customizations || []);
+  useEffect(() => {
+    setCustomizations(formData.customizations || []);
+  }, [formData.customizations?.length, currentItemId]);
   const [newCustomization, setNewCustomization] = useState({
     customization_title: '',
     customization_type: 'Checkbox',
@@ -218,14 +307,28 @@ function ItemForm(props: ItemFormProps) {
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (file) {
       onProcessImage(file, isEdit);
     }
   };
 
+  const openFilePicker = () => {
+    if (imageLimitReached) return;
+    if (!imageUploadAllowed) return;
+    fileInputRef.current?.click();
+  };
+
+  const totalOptionsCount = (formData.customizations?.length || 0) + (formData.variants?.length || 0);
+  const atOptionsLimit = totalOptionsCount >= CUSTOMIZATION_VARIANT_LIMIT;
+
   const handleAddCustomization = () => {
     if (!newCustomization.customization_title.trim()) {
       toast.error('Customization title is required');
+      return;
+    }
+    if (totalOptionsCount >= CUSTOMIZATION_VARIANT_LIMIT) {
+      toast.error(`Max ${CUSTOMIZATION_VARIANT_LIMIT} customizations & variants allowed.`);
       return;
     }
 
@@ -333,698 +436,474 @@ function ItemForm(props: ItemFormProps) {
   const isSellingPriceInvalid = formData.selling_price !== '' && (isNaN(sellingPriceNum) || sellingPriceNum <= 0);
 
   return (
-    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl mx-2 md:mx-0 p-0 border border-gray-100">
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+    <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl mx-2 md:mx-0 border border-gray-100">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100">
         <div>
-          <h2 className="text-lg md:text-xl font-bold text-gray-900">{title}</h2>
-          <p className="text-xs md:text-sm text-gray-500 mt-0.5">
-            {isEdit ? `Editing: ${currentItemId}` : 'Enter details for the menu item'}
-          </p>
+          <h2 className="text-base font-bold text-gray-900">{title}</h2>
+          <p className="text-xs text-gray-500">{isEdit ? `Editing: ${currentItemId}` : 'Enter details for the menu item'}</p>
         </div>
-        <button
-          onClick={onCancel}
-          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-          tabIndex={0}
-          aria-label="Close"
-        >
-          <X size={20} className="text-gray-600" />
+        <button type="button" onClick={onCancel} className="p-1.5 hover:bg-gray-100 rounded-lg" aria-label="Close">
+          <X size={18} className="text-gray-600" />
         </button>
       </div>
 
-      {/* Tabs */}
-      <div className="border-b border-gray-200">
-        <div className="flex px-5 overflow-x-auto">
-          <button
-            type="button"
-            onClick={() => setActiveTab('basic')}
-            className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === 'basic' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-          >
-            Basic Info
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('pricing')}
-            className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === 'pricing' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-          >
-            Pricing & Stock
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('customization')}
-            className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === 'customization' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-          >
-            Customizations
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('advanced')}
-            className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === 'advanced' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-          >
-            Advanced
-          </button>
-        </div>
+      <div className="flex border-b border-gray-200">
+        <button
+          type="button"
+          onClick={() => setActiveSection('main')}
+          className={`px-3 py-2 text-xs font-medium border-b-2 ${activeSection === 'main' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500'}`}
+        >
+          Item & pricing
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSection('customization')}
+          className={`px-3 py-2 text-xs font-medium border-b-2 ${activeSection === 'customization' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500'}`}
+        >
+          Customizations & variants
+        </button>
       </div>
 
-      {/* Form Content */}
-      <form 
-        className="px-5 py-4 max-h-[70vh] overflow-y-auto" 
-        autoComplete="off" 
-        onSubmit={(e) => { e.preventDefault(); onSubmit(); }}
+      <form
+        className="px-4 py-3 max-h-[70vh] overflow-y-auto"
+        autoComplete="off"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (activeSection === 'main') {
+            if (onSaveAndNext) {
+              try {
+                await onSaveAndNext();
+                setActiveSection('customization');
+              } catch (_) {}
+            } else if (onSubmit) onSubmit();
+          } else {
+            if (onSubmitOptions) {
+              try {
+                await onSubmitOptions();
+              } catch (_) {}
+            } else if (onSubmit) onSubmit();
+          }
+        }}
       >
-        {activeTab === 'basic' && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Item Name */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-gray-700">Item Name *</label>
+        {activeSection === 'main' && (
+          <div className="space-y-3">
+            {/* Row 1: Name, Category */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs font-medium text-gray-600">Item name *</label>
+                <input type="text" placeholder="Name" className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.item_name} onChange={e => setFormData({ ...formData, item_name: e.target.value })} required />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600">Category *</label>
+                <select className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.category_id ?? ''} onChange={e => setFormData({ ...formData, category_id: e.target.value ? Number(e.target.value) : null })} required>
+                  <option value="">Select</option>
+                  {categories.map((cat: MenuCategory) => <option key={cat.id} value={cat.id}>{cat.category_name}</option>)}
+                </select>
+              </div>
+            </div>
+            {/* Row 2: Food type, Spice */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs font-medium text-gray-600">Food type</label>
+                <select className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.food_type || ''} onChange={e => setFormData({ ...formData, food_type: e.target.value })}>
+                  <option value="">—</option>
+                  {FOOD_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600">Spice</label>
+                <select className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.spice_level || ''} onChange={e => setFormData({ ...formData, spice_level: e.target.value })}>
+                  <option value="">—</option>
+                  {SPICE_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+                </select>
+              </div>
+            </div>
+            {/* Cuisine: selected chips, show less at top, search, list, view more */}
+            <div>
+              <label className="text-xs font-medium text-gray-600">
+                Cuisine {maxCuisinesPerItem != null && (
+                  <span className="text-gray-500 font-normal">(max {maxCuisinesPerItem})</span>
+                )}
+              </label>
+              {cuisineViewMore && CUISINE_TYPES.length > CUISINE_TOP_COUNT && (
+                <div className="mt-1">
+                  <button
+                    type="button"
+                    onClick={() => setCuisineViewMore(false)}
+                    className="text-xs text-orange-600 hover:text-orange-700 font-medium"
+                  >
+                    Show less
+                  </button>
+                </div>
+              )}
+              {selectedCuisines.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  <span className="text-[10px] text-gray-500 self-center mr-0.5">Added:</span>
+                  {selectedCuisines.map((c) => (
+                    <span
+                      key={c}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium bg-orange-100 border border-orange-300 text-orange-800"
+                    >
+                      {c}
+                      <button
+                        type="button"
+                        onClick={() => toggleCuisine(c)}
+                        className="p-0.5 rounded hover:bg-orange-200 text-orange-600"
+                        aria-label={`Remove ${c}`}
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="relative mt-1">
+                <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
-                  placeholder="Enter item name"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-md focus:border-orange-400 focus:ring-1 focus:ring-orange-100 text-sm text-gray-900"
-                  value={formData.item_name}
-                  onChange={e => setFormData({ ...formData, item_name: e.target.value })}
-                  required
+                  placeholder="Search cuisines..."
+                  value={cuisineSearch}
+                  onChange={(e) => setCuisineSearch(e.target.value)}
+                  className="w-full pl-8 pr-2 py-1.5 border border-gray-200 rounded text-sm"
                 />
               </div>
-              
-              {/* Category (dropdown, required) */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-gray-700">Category *</label>
-                <select
-                  className="w-full px-3 py-2 border border-gray-200 rounded-md focus:border-orange-400 focus:ring-1 focus:ring-orange-100 text-sm text-gray-900"
-                  value={formData.category_id ?? ''}
-                  onChange={e => setFormData({ ...formData, category_id: e.target.value ? Number(e.target.value) : null })}
-                  required
-                >
-                  <option value="">Select category</option>
-                  {categories.map((cat: MenuCategory) => (
-                    <option key={cat.id} value={cat.id}>{cat.category_name}</option>
-                  ))}
-                </select>
-              </div>
-              
-              {/* Food Type */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-gray-700">Food Type</label>
-                <select
-                  className="w-full px-3 py-2 border border-gray-200 rounded-md focus:border-orange-400 focus:ring-1 focus:ring-orange-100 text-sm text-gray-900"
-                  value={formData.food_type || ''}
-                  onChange={e => setFormData({ ...formData, food_type: e.target.value })}
-                >
-                  <option value="">Select food type</option>
-                  {FOOD_TYPES.map(type => (
-                    <option key={type} value={type}>{type}</option>
-                  ))}
-                </select>
-              </div>
-              
-              {/* Spice Level */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-gray-700">Spice Level</label>
-                <select
-                  className="w-full px-3 py-2 border border-gray-200 rounded-md focus:border-orange-400 focus:ring-1 focus:ring-orange-100 text-sm text-gray-900"
-                  value={formData.spice_level || ''}
-                  onChange={e => setFormData({ ...formData, spice_level: e.target.value })}
-                >
-                  <option value="">Select spice level</option>
-                  {SPICE_LEVELS.map(level => (
-                    <option key={level} value={level}>{level}</option>
-                  ))}
-                </select>
-              </div>
-              
-              {/* Cuisine Type */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-gray-700">Cuisine Type</label>
-                <select
-                  className="w-full px-3 py-2 border border-gray-200 rounded-md focus:border-orange-400 focus:ring-1 focus:ring-orange-100 text-sm text-gray-900"
-                  value={formData.cuisine_type || ''}
-                  onChange={e => setFormData({ ...formData, cuisine_type: e.target.value })}
-                >
-                  <option value="">Select cuisine type</option>
-                  {CUISINE_TYPES.map(cuisine => (
-                    <option key={cuisine} value={cuisine}>{cuisine}</option>
-                  ))}
-                </select>
-              </div>
-              
-              {/* Display Order */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-gray-700">Display Order</label>
-                <input
-                  type="number"
-                  min="0"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-md focus:border-orange-400 focus:ring-1 focus:ring-orange-100 text-sm text-gray-900"
-                  value={formData.display_order || 0}
-                  onChange={e => setFormData({ ...formData, display_order: Number(e.target.value) })}
-                />
-              </div>
+              {(() => {
+                const q = cuisineSearch.trim().toLowerCase();
+                const filtered = q
+                  ? CUISINE_TYPES.filter((c) => c.toLowerCase().includes(q))
+                  : CUISINE_TYPES;
+                const topCuisines = CUISINE_TYPES.slice(0, CUISINE_TOP_COUNT);
+                const showAsTop = !cuisineViewMore && !q ? topCuisines : filtered;
+                const hasMore = !cuisineViewMore && !q && CUISINE_TYPES.length > CUISINE_TOP_COUNT;
+                const customAdd = q && !CUISINE_TYPES.some((c) => c.toLowerCase() === q) && !selectedCuisines.some((c) => c.toLowerCase() === q);
+                return (
+                  <>
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {showAsTop.map((c) => {
+                        const checked = selectedCuisines.includes(c);
+                        const disabled = !checked && cuisineAtLimit;
+                        return (
+                          <label
+                            key={c}
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs border cursor-pointer transition-colors ${
+                              disabled ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed' : checked ? 'bg-orange-100 border-orange-300 text-orange-800' : 'bg-white border-gray-200 text-gray-700 hover:border-orange-200'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={disabled}
+                              onChange={() => toggleCuisine(c)}
+                              className="sr-only"
+                            />
+                            <span>{c}</span>
+                          </label>
+                        );
+                      })}
+                      {customAdd && (
+                        <button
+                          type="button"
+                          disabled={cuisineAtLimit}
+                          onClick={() => {
+                            if (cuisineAtLimit) return;
+                            const value = cuisineSearch.trim();
+                            if (!value) return;
+                            const next = [...selectedCuisines, value];
+                            setFormData({ ...formData, cuisine_type: next.join(', ') });
+                            setCuisineSearch('');
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs border border-dashed border-orange-300 bg-orange-50 text-orange-700 hover:bg-orange-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Add &quot;{cuisineSearch.trim()}&quot;
+                        </button>
+                      )}
+                    </div>
+                    {hasMore && (
+                      <button
+                        type="button"
+                        onClick={() => setCuisineViewMore(true)}
+                        className="mt-1.5 text-xs text-orange-600 hover:text-orange-700 font-medium"
+                      >
+                        View more cuisines ({CUISINE_TYPES.length - CUISINE_TOP_COUNT} more)
+                      </button>
+                    )}
+                  </>
+                );
+              })()}
+              {maxCuisinesPerItem != null && (
+                <p className="text-[10px] text-gray-500 mt-0.5">{selectedCuisines.length}/{maxCuisinesPerItem} selected</p>
+              )}
             </div>
-            
-            {/* Image Upload */}
-            <div className="flex flex-col gap-2 mt-4">
-              <label className="text-xs font-semibold text-gray-700">Item Image (Optional)</label>
-              <div className="flex items-center gap-4">
-                <div className="w-24 h-24 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center overflow-hidden">
-                  {imagePreview ? (
-                    <img 
-                      src={imagePreview} 
-                      alt="Preview" 
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <ImageIcon size={32} className="text-gray-400" />
-                  )}
-                </div>
-                <div className="flex-1">
-                  <label className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 cursor-pointer transition-colors">
-                    <Upload size={16} />
-                    <span className="text-sm font-medium">{imagePreview ? 'Change Image' : 'Upload Image'}</span>
+            {/* Image + Description row */}
+            <div className="flex gap-3 items-start">
+              <div className="flex-shrink-0">
+                <label className="text-xs font-medium text-gray-600 block mb-1">Image</label>
+                {imageLimitReached && (
+                  <div className="flex justify-end mb-0.5">
+                    <span
+                      className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-100 text-amber-600 hover:bg-amber-200 cursor-help"
+                      title="Subscribe to the plan for more uploads"
+                    >
+                      <Info size={12} />
+                    </span>
+                  </div>
+                )}
+                {!imageUploadAllowed ? (
+                  <div className="w-16 h-16 rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-700 text-xs px-1 text-center">Images not in plan</div>
+                ) : imageLimitReached ? (
+                  <div className="w-20 rounded-lg bg-gray-100 border border-red-200 flex flex-col items-center justify-center text-gray-600 text-xs px-1 text-center py-2">
+                    {imagePreview ? (
+                      imagePreview.startsWith('blob:') || imagePreview.startsWith('data:') ? (
+                        <img src={imagePreview} alt="" className="w-16 h-16 object-cover rounded" />
+                      ) : (
+                        <R2Image src={imagePreview} alt="" className="w-16 h-16 object-cover rounded" />
+                      )
+                    ) : (
+                      <ImageIcon size={20} className="text-gray-400 mb-0.5" />
+                    )}
+                    <span className="font-medium mt-0.5">{imageLimit != null ? `${imageLimit}/${imageLimit}` : 'Limit'}</span>
+                    <span className="mt-0.5 text-[10px] font-semibold text-red-600">Limit Exceeded</span>
+                  </div>
+                ) : (
+                  <>
                     <input
+                      ref={fileInputRef}
                       type="file"
-                      accept="image/*"
+                      accept="image/png,image/jpeg,image/jpg"
                       className="hidden"
                       onChange={handleImageChange}
+                      disabled={false}
                     />
-                  </label>
-                  <p className="text-xs text-gray-500 mt-2">Recommended: 1:1 ratio, max 2MB</p>
-                </div>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={openFilePicker}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openFilePicker(); } }}
+                      className="w-20 rounded-lg border overflow-hidden flex flex-col items-center justify-center bg-gray-50 transition-colors cursor-pointer border-gray-200 hover:border-orange-300 hover:bg-orange-50/50"
+                      aria-label="Upload menu item image"
+                    >
+                      <div className="w-16 h-16 flex items-center justify-center relative">
+                        {imageValidating ? (
+                          <span className="inline-block w-6 h-6 border-2 border-orange-400 border-t-transparent rounded-full animate-spin" aria-hidden />
+                        ) : imagePreview ? (
+                          imagePreview.startsWith('blob:') || imagePreview.startsWith('data:') ? (
+                            <img src={imagePreview} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            <R2Image src={imagePreview} alt="" className="w-full h-full object-cover" />
+                          )
+                        ) : (
+                          <ImageIcon size={20} className="text-gray-400" />
+                        )}
+                      </div>
+                      {imageLimit != null && (
+                        <p className="text-[10px] text-gray-500 mt-0.5 text-center">
+                          {imageUsed}/{imageLimit} · {imageSlotsLeft != null ? `${imageSlotsLeft} left` : '—'}
+                        </p>
+                      )}
+                      <span className="mt-1 flex items-center justify-center gap-1 px-2 py-1 rounded text-xs text-gray-700">
+                        <Upload size={12} />
+                        <span>Upload</span>
+                      </span>
+                    </div>
+                    {imageValidationError && (
+                      <p className="text-xs text-red-600 mt-1 max-w-[10rem]" role="alert">{imageValidationError}</p>
+                    )}
+                  </>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <label className="text-xs font-medium text-gray-600">Description</label>
+                <textarea className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm resize-none" rows={2} placeholder="Optional" value={formData.item_description || ''} onChange={e => setFormData({ ...formData, item_description: e.target.value })} />
+                <label className="text-xs font-medium text-gray-600 mt-1 block">Allergens (comma)</label>
+                <input type="text" placeholder="e.g. Nuts, Dairy" className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.allergens || ''} onChange={e => setFormData({ ...formData, allergens: e.target.value })} />
               </div>
             </div>
-            
-            {/* Item Description */}
-            <div className="flex flex-col gap-2 mt-4">
-              <label className="text-xs font-semibold text-gray-700">Item Description</label>
-              <textarea
-                className="w-full px-3 py-2 border border-gray-200 rounded-md focus:border-orange-400 focus:ring-1 focus:ring-orange-100 text-sm text-gray-900"
-                value={formData.item_description || ''}
-                onChange={e => setFormData({ ...formData, item_description: e.target.value })}
-                placeholder="Enter item description (optional)"
-                rows={3}
-              />
+            {/* Pricing row: base, selling, discount%, tax% */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div>
+                <label className="text-xs font-medium text-gray-600">Base price (₹) *</label>
+                <input type="number" min="0" step="0.01" className={`w-full px-2.5 py-1.5 border rounded text-sm ${isBasePriceInvalid ? 'border-red-300' : 'border-gray-200'}`} value={formData.base_price} onChange={e => setFormData({ ...formData, base_price: e.target.value })} required />
+                {isBasePriceInvalid && <span className="text-xs text-red-500">&gt; 0</span>}
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600">Selling (₹) *</label>
+                <input type="number" min="0" step="0.01" readOnly className={`w-full px-2.5 py-1.5 border rounded text-sm bg-gray-50 ${isSellingPriceInvalid ? 'border-red-300' : 'border-gray-200'}`} value={formData.selling_price} required />
+                {isSellingPriceInvalid && <span className="text-xs text-red-500">&gt; 0</span>}
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600">Discount %</label>
+                <input type="number" min="0" max="100" step="0.01" className={`w-full px-2.5 py-1.5 border rounded text-sm ${isOfferPercentInvalid ? 'border-red-300' : 'border-gray-200'}`} value={formData.discount_percentage} onChange={e => setFormData({ ...formData, discount_percentage: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600">Tax %</label>
+                <input type="number" min="0" max="100" step="0.01" className={`w-full px-2.5 py-1.5 border rounded text-sm ${isTaxPercentInvalid ? 'border-red-300' : 'border-gray-200'}`} value={formData.tax_percentage} onChange={e => setFormData({ ...formData, tax_percentage: e.target.value })} />
+              </div>
             </div>
-            
-            {/* Allergens */}
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-semibold text-gray-700">Allergens (comma separated)</label>
-              <input
-                type="text"
-                placeholder="e.g., Nuts, Dairy, Gluten"
-                className="w-full px-3 py-2 border border-gray-200 rounded-md focus:border-orange-400 focus:ring-1 focus:ring-orange-100 text-sm text-gray-900"
-                value={formData.allergens || ''}
-                onChange={e => setFormData({ ...formData, allergens: e.target.value })}
-              />
+            {/* Stock & prep */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className="flex items-center gap-2">
+                <input type="checkbox" checked={formData.in_stock} onChange={e => setFormData({ ...formData, in_stock: e.target.checked })} className="h-4 w-4 text-orange-500 rounded" />
+                <span className="text-xs font-medium text-gray-700">In stock</span>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600">Avail. qty</label>
+                <input type="number" min="0" className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.available_quantity || ''} onChange={e => setFormData({ ...formData, available_quantity: e.target.value || '' })} placeholder="—" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600">Low stock at</label>
+                <input type="number" min="0" className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.low_stock_threshold || ''} onChange={e => setFormData({ ...formData, low_stock_threshold: e.target.value || '' })} placeholder="—" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600">Prep (min)</label>
+                <input type="number" min="0" className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.preparation_time_minutes ?? 15} onChange={e => setFormData({ ...formData, preparation_time_minutes: Number(e.target.value) || 15 })} />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-600">Serves</label>
+                <input type="number" min="1" className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.serves ?? 1} onChange={e => setFormData({ ...formData, serves: Number(e.target.value) || 1 })} />
+              </div>
+            </div>
+            {/* Flags: popular, recommended, customizations, variants, active */}
+            <div className="flex flex-wrap gap-4 pt-1 border-t border-gray-100">
+              <label className="flex items-center gap-1.5"><input type="checkbox" checked={formData.is_popular} onChange={e => setFormData({ ...formData, is_popular: e.target.checked })} className="h-3.5 w-3.5 text-orange-500 rounded" /><span className="text-xs text-gray-700">Popular</span></label>
+              <label className="flex items-center gap-1.5"><input type="checkbox" checked={formData.is_recommended} onChange={e => setFormData({ ...formData, is_recommended: e.target.checked })} className="h-3.5 w-3.5 text-orange-500 rounded" /><span className="text-xs text-gray-700">Recommended</span></label>
+              <label className="flex items-center gap-1.5"><input type="checkbox" checked={formData.has_customizations} onChange={e => setFormData({ ...formData, has_customizations: e.target.checked })} className="h-3.5 w-3.5 text-orange-500 rounded" /><span className="text-xs text-gray-700">Customizations</span></label>
+              <label className="flex items-center gap-1.5"><input type="checkbox" checked={formData.has_variants} onChange={e => setFormData({ ...formData, has_variants: e.target.checked })} className="h-3.5 w-3.5 text-orange-500 rounded" /><span className="text-xs text-gray-700">Variants</span></label>
+              <label className="flex items-center gap-1.5"><input type="checkbox" checked={formData.is_active} onChange={e => setFormData({ ...formData, is_active: e.target.checked })} className="h-3.5 w-3.5 text-orange-500 rounded" /><span className="text-xs text-gray-700">Active</span></label>
             </div>
           </div>
         )}
 
-        {activeTab === 'pricing' && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Base Price */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-gray-700">Base Price (₹) *</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  className={`w-full px-3 py-2 border rounded-md focus:ring-1 text-sm ${
-                    isBasePriceInvalid 
-                      ? 'border-red-300 focus:border-red-400 focus:ring-red-100' 
-                      : 'border-gray-200 focus:border-orange-400 focus:ring-orange-100'
-                  }`}
-                  value={formData.base_price}
-                  onChange={e => setFormData({ ...formData, base_price: e.target.value })}
-                  required
-                />
-                {isBasePriceInvalid && (
-                  <span className="text-xs text-red-500">Base price must be greater than 0</span>
-                )}
-              </div>
-              
-              {/* Selling Price */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-gray-700">Selling Price (₹) *</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  className={`w-full px-3 py-2 border rounded-md focus:ring-1 text-sm ${
-                    isSellingPriceInvalid 
-                      ? 'border-red-300 focus:border-red-400 focus:ring-red-100' 
-                      : 'border-gray-200 focus:border-orange-400 focus:ring-orange-100'
-                  }`}
-                  value={formData.selling_price}
-                  readOnly
-                  required
-                />
-                {isSellingPriceInvalid && (
-                  <span className="text-xs text-red-500">Selling price must be greater than 0</span>
-                )}
-              </div>
-              
-              {/* Discount Percentage */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-gray-700">Discount (%)</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.01"
-                  className={`w-full px-3 py-2 border rounded-md focus:ring-1 text-sm ${
-                    isOfferPercentInvalid 
-                      ? 'border-red-300 focus:border-red-400 focus:ring-red-100' 
-                      : 'border-gray-200 focus:border-orange-400 focus:ring-orange-100'
-                  }`}
-                  value={formData.discount_percentage}
-                  onChange={e => setFormData({ ...formData, discount_percentage: e.target.value })}
-                />
-                {isOfferPercentInvalid && (
-                  <span className="text-xs text-red-500">Enter a valid discount percentage (0-100)</span>
-                )}
-              </div>
-              
-              {/* Tax Percentage */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-gray-700">Tax (%)</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.01"
-                  className={`w-full px-3 py-2 border rounded-md focus:ring-1 text-sm ${
-                    isTaxPercentInvalid 
-                      ? 'border-red-300 focus:border-red-400 focus:ring-red-100' 
-                      : 'border-gray-200 focus:border-orange-400 focus:ring-orange-100'
-                  }`}
-                  value={formData.tax_percentage}
-                  onChange={e => setFormData({ ...formData, tax_percentage: e.target.value })}
-                />
-                {isTaxPercentInvalid && (
-                  <span className="text-xs text-red-500">Enter a valid tax percentage (0-100)</span>
-                )}
-              </div>
-              
-              {/* Available Quantity */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-gray-700">Available Quantity</label>
-                <input
-                  type="number"
-                  min="0"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-md focus:border-orange-400 focus:ring-1 focus:ring-orange-100 text-sm text-gray-900"
-                  value={formData.available_quantity || ''}
-                  onChange={e => setFormData({ ...formData, available_quantity: e.target.value ? Number(e.target.value) : null })}
-                />
-              </div>
-              
-              {/* Low Stock Threshold */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-gray-700">Low Stock Threshold</label>
-                <input
-                  type="number"
-                  min="0"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-md focus:border-orange-400 focus:ring-1 focus:ring-orange-100 text-sm text-gray-900"
-                  value={formData.low_stock_threshold || ''}
-                  onChange={e => setFormData({ ...formData, low_stock_threshold: e.target.value ? Number(e.target.value) : null })}
-                />
-              </div>
-              
-              {/* Preparation Time */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-gray-700">Preparation Time (minutes)</label>
-                <input
-                  type="number"
-                  min="0"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-md focus:border-orange-400 focus:ring-1 focus:ring-orange-100 text-sm text-gray-900"
-                  value={formData.preparation_time_minutes || 15}
-                  onChange={e => setFormData({ ...formData, preparation_time_minutes: Number(e.target.value) })}
-                />
-              </div>
-              
-              {/* Serves */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-gray-700">Serves (persons)</label>
-                <input
-                  type="number"
-                  min="1"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-md focus:border-orange-400 focus:ring-1 focus:ring-orange-100 text-sm text-gray-900"
-                  value={formData.serves || 1}
-                  onChange={e => setFormData({ ...formData, serves: Number(e.target.value) })}
-                />
-              </div>
-            </div>
-            
-            {/* In Stock Toggle */}
-            <div className="flex items-center gap-3 mt-4">
-              <label className="inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={formData.in_stock}
-                  onChange={e => setFormData({ ...formData, in_stock: e.target.checked })}
-                  className="sr-only peer"
-                />
-                <div className={`w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-green-500 transition-all relative`}>
-                  <div className={`absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full shadow-md transition-transform ${formData.in_stock ? 'translate-x-5' : ''}`}></div>
-                </div>
-              </label>
-              <span className="text-sm font-medium text-gray-700">In Stock</span>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'customization' && (
-          <div className="space-y-6">
-            {/* Add/Edit Customization Form */}
-            <div className="bg-gray-50 p-4 rounded-lg">
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                {editingCustomizationIndex !== null ? 'Edit Customization' : 'Add New Customization'}
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-semibold text-gray-700">Title *</label>
-                  <input
-                    type="text"
-                    className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm"
-                    value={newCustomization.customization_title}
-                    onChange={e => setNewCustomization({...newCustomization, customization_title: e.target.value})}
-                    placeholder="e.g., Choose Size, Select Toppings"
-                  />
+        {activeSection === 'customization' && (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-500">Max {CUSTOMIZATION_VARIANT_LIMIT} customizations & variants total. Current: {totalOptionsCount}/{CUSTOMIZATION_VARIANT_LIMIT}</p>
+            <div className="bg-gray-50 p-3 rounded-lg">
+              <h3 className="text-xs font-semibold text-gray-700 mb-2">{editingCustomizationIndex !== null ? 'Edit' : 'Add'} customization</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="sm:col-span-2">
+                  <label className="text-xs text-gray-600">Title *</label>
+                  <input type="text" className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value={newCustomization.customization_title} onChange={e => setNewCustomization({...newCustomization, customization_title: e.target.value})} placeholder="e.g. Choose Size" />
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-gray-700">Type</label>
-                  <select
-                    className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm"
-                    value={newCustomization.customization_type}
-                    onChange={e => setNewCustomization({...newCustomization, customization_type: e.target.value})}
-                  >
-                    {CUSTOMIZATION_TYPES.map(type => (
-                      <option key={type} value={type}>{type}</option>
-                    ))}
+                  <label className="text-xs text-gray-600">Type</label>
+                  <select className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value={newCustomization.customization_type} onChange={e => setNewCustomization({...newCustomization, customization_type: e.target.value})}>
+                    {CUSTOMIZATION_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-gray-700">Min Selection</label>
-                  <input
-                    type="number"
-                    min="0"
-                    className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm"
-                    value={newCustomization.min_selection}
-                    onChange={e => setNewCustomization({...newCustomization, min_selection: Number(e.target.value)})}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-gray-700">Max Selection</label>
-                  <input
-                    type="number"
-                    min="1"
-                    className="w-full px-3 py-2 border border-gray-200 rounded-md text-sm"
-                    value={newCustomization.max_selection}
-                    onChange={e => setNewCustomization({...newCustomization, max_selection: Number(e.target.value)})}
-                  />
-                </div>
-                <div className="md:col-span-2">
-                  <div className="flex items-center gap-4">
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={newCustomization.is_required}
-                        onChange={e => setNewCustomization({...newCustomization, is_required: e.target.checked})}
-                        className="h-4 w-4"
-                      />
-                      <span className="text-sm text-gray-700">Required</span>
-                    </label>
-                    <div>
-                      <label className="text-xs font-semibold text-gray-700">Display Order</label>
-                      <input
-                        type="number"
-                        min="0"
-                        className="w-20 px-3 py-2 border border-gray-200 rounded-md text-sm"
-                        value={newCustomization.display_order}
-                        onChange={e => setNewCustomization({...newCustomization, display_order: Number(e.target.value)})}
-                      />
-                    </div>
+                  <label className="text-xs text-gray-600">Min / Max</label>
+                  <div className="flex gap-1">
+                    <input type="number" min="0" className="w-12 px-2 py-1.5 border border-gray-200 rounded text-sm" value={newCustomization.min_selection} onChange={e => setNewCustomization({...newCustomization, min_selection: Number(e.target.value)})} />
+                    <input type="number" min="1" className="w-12 px-2 py-1.5 border border-gray-200 rounded text-sm" value={newCustomization.max_selection} onChange={e => setNewCustomization({...newCustomization, max_selection: Number(e.target.value)})} />
                   </div>
                 </div>
-              </div>
-              <div className="flex gap-2 mt-3">
-                <button
-                  type="button"
-                  onClick={handleAddCustomization}
-                  className="px-4 py-2 bg-orange-500 text-white rounded-md text-sm font-medium hover:bg-orange-600"
-                >
-                  {editingCustomizationIndex !== null ? 'Update' : 'Add'} Customization
-                </button>
-                {editingCustomizationIndex !== null && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNewCustomization({
-                        customization_title: '',
-                        customization_type: 'Checkbox',
-                        is_required: false,
-                        min_selection: 0,
-                        max_selection: 1,
-                        display_order: customizations.length
-                      });
-                      setEditingCustomizationIndex(null);
-                    }}
-                    className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-300"
-                  >
-                    Cancel Edit
+                <div className="col-span-2 sm:col-span-4 flex items-center gap-3">
+                  <label className="flex items-center gap-1.5"><input type="checkbox" checked={newCustomization.is_required} onChange={e => setNewCustomization({...newCustomization, is_required: e.target.checked})} className="h-3.5 w-3.5" /><span className="text-xs text-gray-700">Required</span></label>
+                  <button type="button" onClick={handleAddCustomization} disabled={atOptionsLimit && editingCustomizationIndex === null} className="px-3 py-1.5 bg-orange-500 text-white rounded text-xs font-medium hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed">
+                    {editingCustomizationIndex !== null ? 'Update' : 'Add'}
                   </button>
-                )}
+                  {editingCustomizationIndex !== null && (
+                    <button type="button" onClick={() => { setNewCustomization({ customization_title: '', customization_type: 'Checkbox', is_required: false, min_selection: 0, max_selection: 1, display_order: customizations.length }); setEditingCustomizationIndex(null); }} className="px-3 py-1.5 bg-gray-200 text-gray-700 rounded text-xs hover:bg-gray-300">Cancel</button>
+                  )}
+                </div>
               </div>
             </div>
 
-            {/* Customizations List */}
             {customizations.length > 0 ? (
-              <div className="space-y-4">
+              <div className="space-y-2">
                 {customizations.map((cust, custIndex) => (
-                  <div key={custIndex} className="border border-gray-200 rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <div>
-                        <h4 className="font-medium text-gray-900">{cust.customization_title}</h4>
-                        <div className="flex items-center gap-3 mt-1">
-                          <span className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded">
-                            {cust.customization_type}
-                          </span>
-                          {cust.is_required && (
-                            <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded">
-                              Required
-                            </span>
-                          )}
-                          <span className="text-xs text-gray-500">
-                            Select: {cust.min_selection}-{cust.max_selection}
-                          </span>
-                        </div>
+                  <div key={custIndex} className="border border-gray-200 rounded-lg p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <span className="text-sm font-medium text-gray-900">{cust.customization_title}</span>
+                        <span className="text-xs text-gray-500 ml-2">{cust.customization_type}</span>
+                        {cust.is_required && <span className="text-xs text-red-600 ml-1">Required</span>}
+                        <span className="text-xs text-gray-400 ml-1">{cust.min_selection}-{cust.max_selection}</span>
                       </div>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleEditCustomization(custIndex)}
-                          className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"
-                        >
-                          <Edit2 size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteCustomization(custIndex)}
-                          className="p-1.5 text-red-600 hover:bg-red-50 rounded"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                      <div className="flex gap-1 flex-shrink-0">
+                        <button type="button" onClick={() => handleEditCustomization(custIndex)} className="p-1 text-blue-600 hover:bg-blue-50 rounded"><Edit2 size={12} /></button>
+                        <button type="button" onClick={() => handleDeleteCustomization(custIndex)} className="p-1 text-red-600 hover:bg-red-50 rounded"><Trash2 size={12} /></button>
+                        <button type="button" onClick={() => handleAddAddon(custIndex)} className="text-xs text-orange-600 font-medium px-1.5 py-0.5">+ Addon</button>
                       </div>
                     </div>
-
-                    {/* Addons for this customization */}
-                    <div className="border-t pt-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <h5 className="text-sm font-medium text-gray-700">Addons</h5>
-                        <button
-                          type="button"
-                          onClick={() => handleAddAddon(custIndex)}
-                          className="text-xs text-orange-600 hover:text-orange-700 font-medium"
-                        >
-                          + Add Addon
-                        </button>
+                    {cust.addons && cust.addons.length > 0 && (
+                      <div className="mt-2 pl-2 border-l border-gray-200 space-y-1">
+                        {cust.addons.map((addon, addonIndex) => (
+                          <div key={addonIndex} className="flex items-center gap-2">
+                            <input type="text" className="flex-1 min-w-0 px-2 py-1 border border-gray-200 rounded text-xs" value={addon.addon_name} onChange={e => handleUpdateAddon(custIndex, addonIndex, 'addon_name', e.target.value)} placeholder="Name" />
+                            <span className="text-gray-500 text-xs">₹</span>
+                            <input type="number" min="0" step="0.01" className="w-14 px-2 py-1 border border-gray-200 rounded text-xs" value={addon.addon_price} onChange={e => handleUpdateAddon(custIndex, addonIndex, 'addon_price', Number(e.target.value))} />
+                            <button type="button" onClick={() => handleDeleteAddon(custIndex, addonIndex)} className="p-0.5 text-red-500"><Trash2 size={12} /></button>
+                          </div>
+                        ))}
                       </div>
-                      {cust.addons && cust.addons.length > 0 ? (
-                        <div className="space-y-2">
-                          {cust.addons.map((addon, addonIndex) => (
-                            <div key={addonIndex} className="flex items-center justify-between bg-white border rounded-md p-2">
-                              <div className="flex-1">
-                                <input
-                                  type="text"
-                                  className="w-full px-2 py-1 border-0 focus:ring-0 text-sm"
-                                  value={addon.addon_name}
-                                  onChange={e => handleUpdateAddon(custIndex, addonIndex, 'addon_name', e.target.value)}
-                                  placeholder="Addon name"
-                                />
-                              </div>
-                              <div className="flex items-center gap-3">
-                                <div className="flex items-center">
-                                  <span className="text-sm text-gray-500 mr-1">₹</span>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    step="0.01"
-                                    className="w-20 px-2 py-1 border rounded text-sm"
-                                    value={addon.addon_price}
-                                    onChange={e => handleUpdateAddon(custIndex, addonIndex, 'addon_price', Number(e.target.value))}
-                                  />
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteAddon(custIndex, addonIndex)}
-                                  className="p-1 text-red-500 hover:text-red-700"
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-sm text-gray-500 italic">No addons added yet</p>
-                      )}
-                    </div>
+                    )}
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="text-center py-8 text-gray-500">
-                <p>No customizations added yet.</p>
-                <p className="text-sm mt-1">Add customizations like sizes, toppings, or addons.</p>
-              </div>
+              <p className="text-xs text-gray-500 py-2">No customizations. Add sizes, toppings, or addons.</p>
             )}
-          </div>
-        )}
 
-        {activeTab === 'advanced' && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Popular & Recommended Toggles */}
-              <div className="space-y-3">
-                <label className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={formData.is_popular}
-                    onChange={e => setFormData({ ...formData, is_popular: e.target.checked })}
-                    className="h-4 w-4 text-orange-500 rounded"
-                  />
-                  <span className="text-sm font-medium text-gray-700">Mark as Popular</span>
-                </label>
-                <label className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={formData.is_recommended}
-                    onChange={e => setFormData({ ...formData, is_recommended: e.target.checked })}
-                    className="h-4 w-4 text-orange-500 rounded"
-                  />
-                  <span className="text-sm font-medium text-gray-700">Mark as Recommended</span>
-                </label>
-                <label className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={formData.has_customizations}
-                    onChange={e => setFormData({ ...formData, has_customizations: e.target.checked })}
-                    className="h-4 w-4 text-orange-500 rounded"
-                  />
-                  <span className="text-sm font-medium text-gray-700">Has Customizations</span>
-                </label>
-                <label className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={formData.has_variants}
-                    onChange={e => setFormData({ ...formData, has_variants: e.target.checked })}
-                    className="h-4 w-4 text-orange-500 rounded"
-                  />
-                  <span className="text-sm font-medium text-gray-700">Has Variants</span>
-                </label>
-                <label className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={formData.is_active}
-                    onChange={e => setFormData({ ...formData, is_active: e.target.checked })}
-                    className="h-4 w-4 text-orange-500 rounded"
-                  />
-                  <span className="text-sm font-medium text-gray-700">Active (Visible to customers)</span>
-                </label>
-              </div>
-              
-              {/* Metadata JSON (optional) */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-gray-700">Item Metadata (JSON)</label>
-                <textarea
-                  className="w-full px-3 py-2 border border-gray-200 rounded-md focus:border-orange-400 focus:ring-1 focus:ring-orange-100 text-sm font-mono"
-                  value={formData.item_metadata ? JSON.stringify(formData.item_metadata, null, 2) : ''}
-                  onChange={e => {
-                    try {
-                      const value = e.target.value.trim();
-                      const metadata = value ? JSON.parse(value) : null;
-                      setFormData({ ...formData, item_metadata: metadata });
-                    } catch {
-                      // Keep as is if invalid JSON
-                    }
-                  }}
-                  placeholder='{"key": "value"}'
-                  rows={6}
-                />
-                <p className="text-xs text-gray-500">Optional JSON metadata for extended properties</p>
-              </div>
-            </div>
-            
-            {/* Nutritional Info JSON (optional) */}
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-semibold text-gray-700">Nutritional Information (JSON)</label>
-              <textarea
-                className="w-full px-3 py-2 border border-gray-200 rounded-md focus:border-orange-400 focus:ring-1 focus:ring-orange-100 text-sm font-mono"
-                value={formData.nutritional_info ? JSON.stringify(formData.nutritional_info, null, 2) : ''}
-                onChange={e => {
-                  try {
-                    const value = e.target.value.trim();
-                    const nutritional = value ? JSON.parse(value) : null;
-                    setFormData({ ...formData, nutritional_info: nutritional });
-                  } catch {
-                    // Keep as is if invalid JSON
-                  }
+            <div className="border-t border-gray-200 pt-3">
+              <h3 className="text-xs font-semibold text-gray-700 mb-2">
+                Variants (optional)
+                {(formData.customizations?.length || 0) + (formData.variants?.length || 0) >= CUSTOMIZATION_VARIANT_LIMIT && (
+                  <span className="text-amber-600 font-normal ml-1">— Max {CUSTOMIZATION_VARIANT_LIMIT} total</span>
+                )}
+              </h3>
+              {(formData.variants || []).map((v, idx) => (
+                <div key={idx} className="flex flex-wrap items-end gap-3 mb-3 p-2.5 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className="min-w-[120px]">
+                    <label className="text-xs text-gray-600 block mb-0.5">Title *</label>
+                    <input type="text" className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value={v.variant_type ?? ''} onChange={e => { const vars = [...(formData.variants || [])]; vars[idx] = { ...vars[idx], variant_type: e.target.value }; setFormData({ ...formData, variants: vars }); }} placeholder="e.g. Choose Size" />
+                  </div>
+                  <div className="min-w-[100px]">
+                    <label className="text-xs text-gray-600 block mb-0.5">Name *</label>
+                    <input type="text" className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value={v.variant_name} onChange={e => { const vars = [...(formData.variants || [])]; vars[idx] = { ...vars[idx], variant_name: e.target.value }; setFormData({ ...formData, variants: vars }); }} placeholder="e.g. Medium" />
+                  </div>
+                  <div className="min-w-[80px]">
+                    <label className="text-xs text-gray-600 block mb-0.5">Price (₹) *</label>
+                    <input type="number" min="0" step="0.01" className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value={typeof v.variant_price === 'number' ? v.variant_price : ''} onChange={e => { const vars = [...(formData.variants || [])]; vars[idx] = { ...vars[idx], variant_price: Number(e.target.value) || 0 }; setFormData({ ...formData, variants: vars }); }} placeholder="0" />
+                  </div>
+                  <button type="button" onClick={() => { const vars = (formData.variants || []).filter((_, i) => i !== idx); setFormData({ ...formData, variants: vars, has_variants: vars.length > 0 }); }} className="p-1.5 text-red-600 hover:bg-red-50 rounded self-end"><Trash2 size={14} /></button>
+                </div>
+              ))}
+              <button
+                type="button"
+                disabled={(formData.customizations?.length || 0) + (formData.variants?.length || 0) >= CUSTOMIZATION_VARIANT_LIMIT}
+                onClick={() => {
+                  const vars = [...(formData.variants || []), { variant_name: '', variant_type: '', variant_price: 0, menu_item_id: 0 }];
+                  setFormData({ ...formData, variants: vars, has_variants: true });
                 }}
-                placeholder='{"calories": 500, "protein": "20g", "carbs": "60g"}'
-                rows={4}
-              />
-              <p className="text-xs text-gray-500">Optional nutritional information in JSON format</p>
+                className="mt-2 px-3 py-1.5 bg-gray-100 text-gray-700 rounded text-sm hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                + Add Variant
+              </button>
             </div>
           </div>
         )}
 
-        {/* Form Actions */}
-        <div className="flex justify-between items-center mt-6 pt-4 border-t border-gray-200">
-          <button
-            type="button"
-            className="px-4 py-2 rounded-lg font-bold text-gray-600 bg-white border border-gray-200 hover:bg-gray-100 transition-all"
-            onClick={onCancel}
-            disabled={isSaving}
-          >
-            Cancel
-          </button>
+        <div className="flex justify-between items-center mt-4 pt-3 border-t border-gray-200">
+          <button type="button" className="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-600 bg-white border border-gray-200 hover:bg-gray-100" onClick={onCancel} disabled={isSaving}>Cancel</button>
+          {activeSection === 'main' ? (
             <button
               type="submit"
-              className="px-6 py-2 rounded-lg font-bold text-white bg-orange-500 hover:bg-orange-600 transition-all disabled:opacity-60"
-              disabled={
-                isSaving ||
-                isOfferPercentInvalid ||
-                isTaxPercentInvalid ||
-                isBasePriceInvalid ||
-                isSellingPriceInvalid ||
-                !formData.base_price ||
-                !formData.discount_percentage ||
-                !formData.tax_percentage ||
-                !formData.selling_price
-              }
+              className="px-4 py-1.5 rounded-lg text-sm font-bold text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-60 flex items-center gap-2"
+              disabled={isSaving || !!imageValidationError || isOfferPercentInvalid || isTaxPercentInvalid || isBasePriceInvalid || isSellingPriceInvalid || !formData.base_price || !formData.discount_percentage || !formData.tax_percentage || !formData.selling_price}
             >
-              {isSaving ? (isEdit ? 'Saving...' : 'Adding...') : (isEdit ? 'Save Changes' : 'Add Item')}
+              {isSaving && <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+              {isSaving ? 'Saving...' : (onSaveAndNext ? 'Save and Next' : (isEdit ? 'Save' : 'Add Item'))}
             </button>
+          ) : (
+            <button
+              type="submit"
+              className="px-4 py-1.5 rounded-lg text-sm font-bold text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-60 flex items-center gap-2"
+              disabled={isSaving}
+            >
+              {isSaving && <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+              {isSaving ? 'Saving...' : 'Submit'}
+            </button>
+          )}
         </div>
         {error && <div className="text-red-500 text-xs mt-2">{error}</div>}
       </form>
@@ -1043,10 +922,13 @@ function MenuContent() {
   const [categoryForm, setCategoryForm] = useState<Partial<MenuCategory>>({ 
     category_name: '', 
     category_description: '', 
-    display_order: 0, 
+    category_image_url: '',
     is_active: true,
-    category_metadata: {}
   });
+  const [categoryImageFile, setCategoryImageFile] = useState<File | null>(null);
+  const [categoryImagePreview, setCategoryImagePreview] = useState<string>('');
+  const [categoryImageUploading, setCategoryImageUploading] = useState(false);
+  const [categoryImageValidationError, setCategoryImageValidationError] = useState('');
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [categoryError, setCategoryError] = useState<string | null>(null);
 
@@ -1062,6 +944,7 @@ function MenuContent() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showStockModal, setShowStockModal] = useState(false);
   const [viewCustModal, setViewCustModal] = useState<{ open: boolean; item: MenuItem | null }>({ open: false, item: null });
+  const [viewCustModalTab, setViewCustModalTab] = useState<'customizations' | 'variants'>('customizations');
 
   // Form states
   const [addForm, setAddForm] = useState({
@@ -1086,13 +969,11 @@ function MenuContent() {
     is_recommended: false,
     preparation_time_minutes: 15,
     serves: 1,
-    display_order: 0,
     is_active: true,
     allergens: '',
     category_id: null as number | null,
     customizations: [] as Customization[],
-    item_metadata: {},
-    nutritional_info: {}
+    variants: [] as Variant[],
   });
 
   const [editForm, setEditForm] = useState({
@@ -1117,21 +998,25 @@ function MenuContent() {
     is_recommended: false,
     preparation_time_minutes: 15,
     serves: 1,
-    display_order: 0,
     is_active: true,
     allergens: '',
     category_id: null as number | null,
     customizations: [] as Customization[],
-    item_metadata: {},
-    nutritional_info: {}
+    variants: [] as Variant[],
   });
 
   const [imagePreview, setImagePreview] = useState('');
   const [editImagePreview, setEditImagePreview] = useState('');
+  const [addImageValidationError, setAddImageValidationError] = useState('');
+  const [editImageValidationError, setEditImageValidationError] = useState('');
+  const [addImageValidating, setAddImageValidating] = useState(false);
+  const [editImageValidating, setEditImageValidating] = useState(false);
   const [addError, setAddError] = useState('');
   const [editError, setEditError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  /** After "Save and Next" we have created the item; Submit will sync options for this item */
+  const [addItemSaved, setAddItemSaved] = useState<{ item_id: string; id: number } | null>(null);
   const [deleteItemId, setDeleteItemId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [stockToggleItem, setStockToggleItem] = useState<{ item_id: string; newStatus: boolean } | null>(null);
@@ -1140,7 +1025,29 @@ function MenuContent() {
   const [editingMenuItemId, setEditingMenuItemId] = useState<number | null>(null);
 
   const [imageUploadStatus, setImageUploadStatus] = useState<any>(null);
+  const [storeImageCount, setStoreImageCount] = useState<{ totalUsed: number } | null>(null);
   const [storeError, setStoreError] = useState<string | null>(null);
+  const [planLimits, setPlanLimits] = useState<{
+    maxMenuItems: number | null;
+    maxMenuCategories: number | null;
+    imageUploadAllowed: boolean;
+    maxImageUploads: number | null;
+    maxCuisinesPerItem: number | null;
+    planName?: string;
+  } | null>(null);
+
+  const refetchImageCount = React.useCallback(async () => {
+    if (!storeId) return;
+    try {
+      const countRes = await fetch(`/api/merchant/store-image-count?storeId=${encodeURIComponent(storeId)}`);
+      if (countRes.ok) {
+        const countData = await countRes.json();
+        setStoreImageCount({ totalUsed: countData.totalUsed ?? 0 });
+      }
+    } catch {
+      // keep previous count
+    }
+  }, [storeId]);
 
   // Fetch store ID from params or localStorage
   useEffect(() => {
@@ -1187,11 +1094,47 @@ function MenuContent() {
         
         setStore(data);
         
-        const items = await fetchMenuItems(storeId);
-        setMenuItems(items);
+        const res = await fetch(`/api/merchant/menu-items?storeId=${encodeURIComponent(storeId)}`);
+        const items = res.ok ? await res.json() : [];
+        setMenuItems(Array.isArray(items) ? items : []);
 
         const status = await getImageUploadStatus(storeId);
         setImageUploadStatus(status);
+        const countRes = await fetch(`/api/merchant/store-image-count?storeId=${encodeURIComponent(storeId)}`);
+        if (countRes.ok) {
+          const countData = await countRes.json();
+          setStoreImageCount({ totalUsed: countData.totalUsed ?? 0 });
+        } else {
+          setStoreImageCount(null);
+        }
+
+        // Plan-driven limits: no hardcoding; works with any number of plans from DB
+        try {
+          const subRes = await fetch(`/api/merchant/subscription?storeId=${encodeURIComponent(storeId)}`);
+          if (subRes.ok) {
+            const subJson = await subRes.json();
+            const plan = subJson.plan ?? subJson.subscription?.merchant_plans ?? null;
+            if (plan && typeof plan === 'object') {
+              const maxImg = plan.max_image_uploads ?? null;
+              // Allow image upload if plan allows it OR has a positive limit (e.g. Free plan with 5 images)
+              const canUploadImages = plan.image_upload_allowed === true || (maxImg != null && maxImg > 0);
+              setPlanLimits({
+                maxMenuItems: plan.max_menu_items ?? null,
+                maxMenuCategories: plan.max_menu_categories ?? null,
+                imageUploadAllowed: canUploadImages,
+                maxImageUploads: maxImg,
+                maxCuisinesPerItem: plan.max_cuisines ?? null,
+                planName: plan.plan_name ?? undefined,
+              });
+            } else {
+              setPlanLimits(null); // No plan = no restrictions (allow all)
+            }
+          } else {
+            setPlanLimits(null);
+          }
+        } catch {
+          setPlanLimits(null);
+        }
       } catch (error) {
         console.error('Error loading menu:', error);
         setStoreError('Error loading store data. Please try again.');
@@ -1209,18 +1152,51 @@ function MenuContent() {
       setCategoryError('Category name is required');
       return;
     }
+    if (categoryModalMode === 'add' && planLimits?.maxMenuCategories != null && categories.length >= planLimits.maxMenuCategories) {
+      setCategoryError(`Category limit reached (${planLimits.maxMenuCategories}). Upgrade your plan to add more.`);
+      return;
+    }
+    if (categoryImageValidationError) return;
+    const currentImageUsed = storeImageCount?.totalUsed ?? imageUploadStatus?.totalUsed ?? 0;
+    if (categoryImageFile && planLimits && (!planLimits.imageUploadAllowed || (planLimits.maxImageUploads != null && currentImageUsed >= planLimits.maxImageUploads && !categoryForm.category_image_url))) {
+      setCategoryError(planLimits.imageUploadAllowed ? 'Image limit reached. Upgrade your plan to add more images.' : 'Image uploads are not included in your current plan.');
+      return;
+    }
     setCategoryLoading(true);
     try {
+      let imageUrl = categoryForm.category_image_url || '';
+      if (categoryImageFile) {
+        setCategoryImageUploading(true);
+        const formData = new FormData();
+        formData.append('file', categoryImageFile);
+        formData.append('parent', 'categories');
+        const uploadRes = await fetch('/api/upload/r2', { method: 'POST', body: formData });
+        if (uploadRes.ok) {
+          const data = await uploadRes.json();
+          imageUrl = data.key || data.url || '';
+        }
+        setCategoryImageUploading(false);
+      }
+      const payload = {
+        category_name: categoryForm.category_name.trim(),
+        category_description: categoryForm.category_description || null,
+        category_image_url: imageUrl || null,
+        is_active: categoryForm.is_active ?? true,
+      };
       if (categoryModalMode === 'add') {
-        const newCat = await createMenuCategory(storeId!, categoryForm);
+        const newCat = await createMenuCategory(storeId!, payload);
         if (newCat) setCategories((prev) => [...prev, newCat]);
       } else if (categoryModalMode === 'edit' && editingCategoryId) {
-        const updated = await updateMenuCategory(editingCategoryId, categoryForm);
+        const updated = await updateMenuCategory(editingCategoryId, payload);
         if (updated) setCategories((prev) => prev.map((cat) => cat.id === editingCategoryId ? updated : cat));
       }
       setShowCategoryModal(false);
-      setCategoryForm({ category_name: '', category_description: '', display_order: 0, is_active: true, category_metadata: {} });
+      setCategoryForm({ category_name: '', category_description: '', category_image_url: '', is_active: true });
+      setCategoryImageFile(null);
+      setCategoryImagePreview('');
+      setCategoryImageValidationError('');
       setEditingCategoryId(null);
+      await refetchImageCount();
     } catch (e) {
       setCategoryError('Error saving category');
     }
@@ -1243,6 +1219,7 @@ function MenuContent() {
       if (ok) {
         setCategories((prev) => prev.filter((cat) => cat.id !== id));
         if (selectedCategoryId === id) setSelectedCategoryId(null);
+        await refetchImageCount();
         toast.success('Category deleted successfully');
       }
     } catch {
@@ -1251,14 +1228,33 @@ function MenuContent() {
     setCategoryLoading(false);
   };
 
-  const processImageFile = (file: File, isEdit: boolean = false) => {
-    const canAddImage = !imageUploadStatus || imageUploadStatus.totalUsed < 10;
-    if (!canAddImage && !addForm.item_image_url) {
-      toast.error('Image upload limit reached. Please upgrade your subscription.');
+  const processImageFile = async (file: File, isEdit: boolean = false) => {
+    if (isEdit) {
+      setEditImageValidationError('');
+      setEditImageValidating(true);
+    } else {
+      setAddImageValidationError('');
+      setAddImageValidating(true);
+    }
+
+    const result = await validateMenuItemImage(file);
+    if (isEdit) {
+      setEditImageValidating(false);
+    } else {
+      setAddImageValidating(false);
+    }
+
+    if (!result.valid) {
+      if (isEdit) {
+        setEditImageValidationError(result.error);
+        setEditForm(prev => ({ ...prev, image: null }));
+      } else {
+        setAddImageValidationError(result.error);
+        setAddForm(prev => ({ ...prev, image: null }));
+      }
       return;
     }
 
-    // Show local preview immediately
     const reader = new FileReader();
     reader.onloadend = () => {
       const dataUrl = reader.result as string;
@@ -1270,11 +1266,20 @@ function MenuContent() {
     };
     reader.readAsDataURL(file);
 
-    // Save file for upload
     if (isEdit) {
       setEditForm(prev => ({ ...prev, image: file }));
     } else {
       setAddForm(prev => ({ ...prev, image: file }));
+    }
+
+    const used = imageUploadStatus?.totalUsed ?? 0;
+    const allowed = planLimits?.imageUploadAllowed === true;
+    const limit = planLimits?.maxImageUploads;
+    const atLimit = limit != null && used >= limit;
+    if (planLimits && !allowed) {
+      toast.error('Image uploads are not included in your current plan. Upgrade to add images.');
+    } else if (planLimits && atLimit && !(isEdit ? editForm.item_image_url : addForm.item_image_url)) {
+      toast.error(`Image limit reached (${limit} images). Upgrade your plan to add more.`);
     }
   };
 
@@ -1283,9 +1288,13 @@ function MenuContent() {
       toast.error('Please select a store first');
       return;
     }
-    
+    if (!canAddItem) {
+      toast.error('Menu item limit reached for your plan. Upgrade to add more items.');
+      return;
+    }
     setAddError("");
-    
+    if (addImageValidationError) return setAddError(addImageValidationError);
+
     // Validation
     if (!addForm.item_name.trim()) return setAddError("Name is required");
     if (!addForm.category_id) return setAddError("Category is required");
@@ -1321,7 +1330,7 @@ function MenuContent() {
         }
         
         const uploadData = await uploadRes.json();
-        itemImageUrl = uploadData.url;
+        itemImageUrl = uploadData.key || uploadData.url;
         setImagePreview(itemImageUrl);
       }
 
@@ -1368,22 +1377,28 @@ function MenuContent() {
         is_recommended: addForm.is_recommended,
         preparation_time_minutes: addForm.preparation_time_minutes,
         serves: addForm.serves,
-        display_order: addForm.display_order,
         is_active: addForm.is_active,
         allergens: allergensArray,
         category_id: addForm.category_id,
         customizations: addForm.customizations || [],
-        item_metadata: addForm.item_metadata,
-        nutritional_info: addForm.nutritional_info,
         restaurant_id: storeId,
       };
 
-      const result = await createMenuItem(newItem);
+      const res = await fetch('/api/merchant/menu-items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newItem),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error || 'Failed to create menu item');
+      }
+      const result = await res.json();
       if (result && result.item_id) {
+        // API already created customizations/addons/variants server-side (bypasses RLS)
         setMenuItems((prev) => [result, ...prev]);
         setShowAddModal(false);
-        
-        // Reset form
+        await refetchImageCount();
         setAddForm({
           item_name: '',
           item_description: '',
@@ -1406,13 +1421,11 @@ function MenuContent() {
           is_recommended: false,
           preparation_time_minutes: 15,
           serves: 1,
-          display_order: 0,
           is_active: true,
           allergens: '',
           category_id: null,
           customizations: [],
-          item_metadata: {},
-          nutritional_info: {}
+          variants: [],
         });
         setImagePreview('');
         toast.success('Item added successfully!');
@@ -1426,15 +1439,271 @@ function MenuContent() {
     setIsSaving(false);
   }
 
-  const handleOpenEditModal = (item: MenuItem) => {
+  async function handleAddSaveAndNext() {
+    if (!storeId) {
+      toast.error('Please select a store first');
+      return;
+    }
+    if (!canAddItem) {
+      toast.error('Menu item limit reached for your plan. Upgrade to add more items.');
+      return;
+    }
+    setAddError('');
+    if (!addForm.item_name.trim()) return setAddError('Name is required');
+    if (!addForm.category_id) return setAddError('Category is required');
+    if (!addForm.base_price || isNaN(Number(addForm.base_price)) || Number(addForm.base_price) <= 0)
+      return setAddError('Valid base price is required (greater than 0)');
+    if (!addForm.selling_price || isNaN(Number(addForm.selling_price)) || Number(addForm.selling_price) <= 0)
+      return setAddError('Valid selling price is required (greater than 0)');
+    if (addForm.discount_percentage && (isNaN(Number(addForm.discount_percentage)) || Number(addForm.discount_percentage) < 0 || Number(addForm.discount_percentage) > 100))
+      return setAddError('Discount % must be between 0 and 100');
+    if (addForm.tax_percentage && (isNaN(Number(addForm.tax_percentage)) || Number(addForm.tax_percentage) < 0 || Number(addForm.tax_percentage) > 100))
+      return setAddError('Tax % must be between 0 and 100');
+
+    setIsSaving(true);
+    try {
+      let itemImageUrl = addForm.item_image_url;
+      if (addForm.image) {
+        const formData = new FormData();
+        formData.append('file', addForm.image);
+        formData.append('parent', 'menuitems');
+        const uploadRes = await fetch('/api/upload/r2', { method: 'POST', body: formData });
+        if (!uploadRes.ok) {
+          setAddError('Image upload failed.');
+          setIsSaving(false);
+          return;
+        }
+        const uploadData = await uploadRes.json();
+        itemImageUrl = uploadData.key || uploadData.url;
+        setImagePreview(itemImageUrl);
+      }
+      const allergensArray = addForm.allergens
+        ? addForm.allergens.split(',').map((a: string) => a.trim()).filter(Boolean)
+        : [];
+      if (!addForm.category_id || !storeId) {
+        setAddError('Category and store are required.');
+        setIsSaving(false);
+        return;
+      }
+      const newItem = {
+        item_name: addForm.item_name,
+        item_description: addForm.item_description,
+        item_image_url: itemImageUrl,
+        food_type: addForm.food_type,
+        spice_level: addForm.spice_level,
+        cuisine_type: addForm.cuisine_type,
+        base_price: Number(addForm.base_price),
+        selling_price: Number(addForm.selling_price),
+        discount_percentage: addForm.discount_percentage ? Number(addForm.discount_percentage) : 0,
+        tax_percentage: addForm.tax_percentage ? Number(addForm.tax_percentage) : 0,
+        in_stock: addForm.in_stock,
+        available_quantity: addForm.available_quantity ? Number(addForm.available_quantity) : null,
+        low_stock_threshold: addForm.low_stock_threshold ? Number(addForm.low_stock_threshold) : null,
+        has_customizations: false,
+        has_addons: false,
+        has_variants: false,
+        is_popular: addForm.is_popular,
+        is_recommended: addForm.is_recommended,
+        preparation_time_minutes: addForm.preparation_time_minutes,
+        serves: addForm.serves,
+        is_active: addForm.is_active,
+        allergens: allergensArray,
+        category_id: addForm.category_id,
+        customizations: [],
+        restaurant_id: storeId,
+      };
+      const res = await fetch('/api/merchant/menu-items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newItem),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error || 'Failed to create menu item');
+      }
+      const result = await res.json();
+      if (result?.item_id) {
+        setAddItemSaved({ item_id: result.item_id, id: result.id });
+        setMenuItems((prev) => [result, ...prev]);
+        toast.success('Item saved. Add customizations/variants or click Submit.');
+      } else {
+        setAddError('Failed to save item.');
+      }
+    } catch (e) {
+      console.error('Error saving item:', e);
+      setAddError('Error saving item.');
+    }
+    setIsSaving(false);
+  }
+
+  async function handleAddSubmitOptions() {
+    if (!addItemSaved || !storeId) {
+      toast.error('Save the item first (Save and Next).');
+      return;
+    }
+    setIsSaving(true);
+    setAddError('');
+    try {
+      const custs = Array.isArray(addForm.customizations) ? addForm.customizations : [];
+      const vars = Array.isArray(addForm.variants) ? addForm.variants : [];
+      const res = await fetch('/api/merchant/menu-items', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          itemId: addItemSaved.item_id,
+          storeId,
+          customizations: custs,
+          variants: vars.map((v: any) => ({
+            variant_name: v.variant_name,
+            variant_type: v.variant_type ?? null,
+            variant_price: typeof v.variant_price === 'number' ? v.variant_price : Number(v.variant_price) || 0,
+          })),
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error || 'Failed to save options');
+      }
+      setShowAddModal(false);
+      setAddItemSaved(null);
+      setAddForm({
+        item_name: '',
+        item_description: '',
+        item_image_url: '',
+        image: null,
+        food_type: '',
+        spice_level: '',
+        cuisine_type: '',
+        base_price: '',
+        selling_price: '',
+        discount_percentage: '0',
+        tax_percentage: '0',
+        in_stock: true,
+        available_quantity: '',
+        low_stock_threshold: '',
+        has_customizations: false,
+        has_addons: false,
+        has_variants: false,
+        is_popular: false,
+        is_recommended: false,
+        preparation_time_minutes: 15,
+        serves: 1,
+        is_active: true,
+        allergens: '',
+        category_id: null,
+        customizations: [],
+        variants: [],
+      });
+      setImagePreview('');
+      toast.success('Item saved successfully!');
+      const refreshRes = await fetch(`/api/merchant/menu-items?storeId=${encodeURIComponent(storeId)}`);
+      const json = await refreshRes.json().catch(() => []);
+      setMenuItems(refreshRes.ok && Array.isArray(json) ? json : []);
+    } catch (e) {
+      console.error('Error saving options:', e);
+      setAddError('Error saving options.');
+    }
+    setIsSaving(false);
+  }
+
+  const handleOpenEditModal = async (item: MenuItem) => {
     setEditingId(item.item_id);
     setEditingMenuItemId(item.id);
     setEditImagePreview(item.item_image_url || '');
     
-    // Prepare allergens as comma-separated string
     const allergensString = Array.isArray(item.allergens) 
       ? item.allergens.join(', ') 
       : (typeof item.allergens === 'string' ? item.allergens : '');
+    
+    let customizationsWithAddons: Customization[] = [];
+    let variantsList: Variant[] = [];
+    // Use customizations/variants from GET response (enriched by API, bypasses RLS)
+    if (Array.isArray(item.customizations) && item.customizations.length > 0) {
+      customizationsWithAddons = item.customizations.map((c: any) => ({
+        id: c.id,
+        customization_id: c.customization_id ?? '',
+        menu_item_id: c.menu_item_id ?? item.id,
+        customization_title: c.customization_title ?? '',
+        customization_type: c.customization_type ?? undefined,
+        is_required: c.is_required ?? false,
+        min_selection: c.min_selection ?? 0,
+        max_selection: c.max_selection ?? 1,
+        display_order: c.display_order ?? 0,
+        addons: (c.addons ?? []).map((a: any) => ({
+          id: a.id,
+          addon_id: a.addon_id ?? '',
+          customization_id: a.customization_id ?? c.id,
+          addon_name: a.addon_name ?? '',
+          addon_price: a.addon_price ?? 0,
+          addon_image_url: a.addon_image_url,
+          in_stock: a.in_stock,
+          display_order: a.display_order ?? 0,
+        })),
+      }));
+    }
+    if (Array.isArray(item.variants) && item.variants.length > 0) {
+      variantsList = item.variants.map((v: any) => ({
+        id: v.id,
+        variant_id: v.variant_id ?? '',
+        menu_item_id: v.menu_item_id ?? item.id,
+        variant_name: v.variant_name ?? '',
+        variant_type: v.variant_type ?? '',
+        variant_price: v.variant_price ?? 0,
+        price_difference: v.price_difference,
+        in_stock: v.in_stock,
+        available_quantity: v.available_quantity,
+        display_order: v.display_order ?? 0,
+        is_default: v.is_default,
+      }));
+    }
+    // If not enriched (e.g. stale list), fetch from DB (may be empty if RLS blocks)
+    if (customizationsWithAddons.length === 0 && variantsList.length === 0) {
+      try {
+        const [customizations, variants] = await Promise.all([
+          fetchCustomizationsForMenuItem(item.id),
+          fetchVariantsForMenuItem(item.id),
+        ]);
+        for (const c of customizations) {
+          const addons = await fetchAddonsForCustomization(c.id);
+          customizationsWithAddons.push({
+            id: c.id,
+            customization_id: c.customization_id,
+            menu_item_id: c.menu_item_id,
+            customization_title: c.customization_title,
+            customization_type: c.customization_type ?? undefined,
+            is_required: c.is_required ?? false,
+            min_selection: c.min_selection ?? 0,
+            max_selection: c.max_selection ?? 1,
+            display_order: c.display_order ?? 0,
+            addons: addons.map((a: any) => ({
+              id: a.id,
+              addon_id: a.addon_id,
+              customization_id: a.customization_id,
+              addon_name: a.addon_name,
+              addon_price: a.addon_price ?? 0,
+              addon_image_url: a.addon_image_url,
+              in_stock: a.in_stock,
+              display_order: a.display_order ?? 0,
+            })),
+          });
+        }
+        variantsList = variants.map((v: any) => ({
+          id: v.id,
+          variant_id: v.variant_id,
+          menu_item_id: v.menu_item_id,
+          variant_name: v.variant_name,
+          variant_type: v.variant_type,
+          variant_price: v.variant_price,
+          price_difference: v.price_difference,
+          in_stock: v.in_stock,
+          available_quantity: v.available_quantity,
+          display_order: v.display_order,
+          is_default: v.is_default,
+        }));
+      } catch (e) {
+        console.error('Error loading item details:', e);
+      }
+    }
     
     setEditForm({
       item_name: item.item_name || '',
@@ -1451,84 +1720,73 @@ function MenuContent() {
       in_stock: item.in_stock ?? true,
       available_quantity: item.available_quantity?.toString() || '',
       low_stock_threshold: item.low_stock_threshold?.toString() || '',
-      has_customizations: item.has_customizations ?? false,
-      has_addons: item.has_addons ?? false,
-      has_variants: item.has_variants ?? false,
+      has_customizations: customizationsWithAddons.length > 0,
+      has_addons: customizationsWithAddons.some(c => (c.addons?.length ?? 0) > 0),
+      has_variants: variantsList.length > 0,
       is_popular: item.is_popular ?? false,
       is_recommended: item.is_recommended ?? false,
       preparation_time_minutes: item.preparation_time_minutes || 15,
       serves: item.serves || 1,
-      display_order: item.display_order || 0,
       is_active: item.is_active ?? true,
       allergens: allergensString,
       category_id: item.category_id ?? null,
-      customizations: item.customizations || [],
-      item_metadata: item.item_metadata || {},
-      nutritional_info: item.nutritional_info || {}
+      customizations: customizationsWithAddons,
+      variants: variantsList,
     });
     setShowEditModal(true);
   };
 
-  async function handleSaveEdit() {
-    setEditError("");
-    
-    if (!editingId || !editingMenuItemId) {
-      setEditError("No item selected for editing.");
+  function validateEditItemFields(): string | null {
+    if (editImageValidationError) return editImageValidationError;
+    if (!editingId || !editingMenuItemId) return 'No item selected for editing.';
+    const itemName = (editForm.item_name ?? '').toString().trim();
+    if (!itemName) return 'Name is required';
+    if (!editForm.category_id) return 'Category is required';
+    if (!editForm.base_price || isNaN(Number(editForm.base_price)) || Number(editForm.base_price) <= 0)
+      return 'Valid base price is required (greater than 0)';
+    if (!editForm.selling_price || isNaN(Number(editForm.selling_price)) || Number(editForm.selling_price) <= 0)
+      return 'Valid selling price is required (greater than 0)';
+    if (editForm.discount_percentage && (isNaN(Number(editForm.discount_percentage)) || Number(editForm.discount_percentage) < 0 || Number(editForm.discount_percentage) > 100))
+      return 'Discount % must be between 0 and 100';
+    if (editForm.tax_percentage && (isNaN(Number(editForm.tax_percentage)) || Number(editForm.tax_percentage) < 0 || Number(editForm.tax_percentage) > 100))
+      return 'Tax % must be between 0 and 100';
+    return null;
+  }
+
+  async function handleEditSaveAndNext() {
+    const err = validateEditItemFields();
+    if (err) {
+      setEditError(err);
       return;
     }
-
-    // Validation
-    const itemName = (editForm.item_name ?? "").toString().trim();
-    if (!itemName) return setEditError("Name is required");
-    if (!editForm.category_id) return setEditError("Category is required");
-    if (!editForm.base_price || isNaN(Number(editForm.base_price)) || Number(editForm.base_price) <= 0) 
-      return setEditError("Valid base price is required (greater than 0)");
-    if (!editForm.selling_price || isNaN(Number(editForm.selling_price)) || Number(editForm.selling_price) <= 0) 
-      return setEditError("Valid selling price is required (greater than 0)");
-    if (editForm.discount_percentage && (isNaN(Number(editForm.discount_percentage)) || Number(editForm.discount_percentage) < 0 || Number(editForm.discount_percentage) > 100)) {
-      return setEditError("Discount % must be between 0 and 100");
-    }
-    if (editForm.tax_percentage && (isNaN(Number(editForm.tax_percentage)) || Number(editForm.tax_percentage) < 0 || Number(editForm.tax_percentage) > 100)) {
-      return setEditError("Tax % must be between 0 and 100");
-    }
-
+    setEditError('');
     setIsSavingEdit(true);
     try {
       let itemImageUrl = editForm.item_image_url;
       if (editForm.image) {
-        // Upload new image
         const formData = new FormData();
-        formData.append("file", editForm.image);
-        formData.append("parent", "menuitems");
-        formData.append("menu_item_id", editingMenuItemId.toString());
-        
-        const uploadRes = await fetch("/api/upload/r2", {
-          method: "POST",
-          body: formData,
-        });
-        
+        formData.append('file', editForm.image);
+        formData.append('parent', 'menuitems');
+        formData.append('menu_item_id', editingMenuItemId!.toString());
+        const uploadRes = await fetch('/api/upload/r2', { method: 'POST', body: formData });
         if (!uploadRes.ok) {
-          setEditError("Image upload failed.");
+          setEditError('Image upload failed.');
           setIsSavingEdit(false);
           return;
         }
-        
         const uploadData = await uploadRes.json();
-        itemImageUrl = uploadData.url;
+        itemImageUrl = uploadData.key || uploadData.url;
         setEditImagePreview(itemImageUrl);
       }
-
-      // Prepare allergens as array
-      const allergensArray = editForm.allergens 
+      const allergensArray = editForm.allergens
         ? editForm.allergens.split(',').map((a: string) => a.trim()).filter(Boolean)
         : [];
-
       const hasCustomizations = Array.isArray(editForm.customizations) && editForm.customizations.length > 0;
-      const hasAddons = Array.isArray(editForm.customizations) && 
-        editForm.customizations.some((c: any) => Array.isArray(c.addons) && c.addons.length > 0);
-
-      const updatedItem = {
-        item_name: itemName,
+      const hasAddons = Array.isArray(editForm.customizations) && editForm.customizations.some((c: any) => Array.isArray(c.addons) && c.addons.length > 0);
+      const patchBody = {
+        itemId: editingId,
+        storeId,
+        item_name: (editForm.item_name ?? '').toString().trim(),
         item_description: editForm.item_description,
         item_image_url: itemImageUrl,
         food_type: editForm.food_type,
@@ -1548,65 +1806,172 @@ function MenuContent() {
         is_recommended: editForm.is_recommended,
         preparation_time_minutes: editForm.preparation_time_minutes,
         serves: editForm.serves,
-        display_order: editForm.display_order,
         is_active: editForm.is_active,
         allergens: allergensArray,
         category_id: editForm.category_id,
-        customizations: Array.isArray(editForm.customizations) ? editForm.customizations : [],
-        item_metadata: editForm.item_metadata,
-        nutritional_info: editForm.nutritional_info,
-        restaurant_id: storeId,
+        // Do NOT send customizations/variants - save item only, switch to options tab
       };
+      const res = await fetch('/api/merchant/menu-items', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patchBody),
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson?.error || 'Failed to update item');
+      }
+      toast.success('Item saved. Add or edit customizations/variants, then click Submit.');
+    } catch (e) {
+      console.error('Error updating item:', e);
+      setEditError('Error updating item.');
+    }
+    setIsSavingEdit(false);
+  }
 
-      const result = await updateMenuItem(editingId, updatedItem);
-      if (result && result.success !== false) {
-        // Fetch the updated item with customizations
-        const updatedMenuItem = await fetchMenuItems(storeId!).then(items => 
-          items.find(item => item.item_id === editingId)
-        );
+  async function handleEditSubmitOptions() {
+    if (!editingId || !storeId) {
+      toast.error('Item not loaded.');
+      return;
+    }
+    setIsSavingEdit(true);
+    setEditError('');
+    try {
+      const custs = Array.isArray(editForm.customizations) ? editForm.customizations : [];
+      const vars = Array.isArray(editForm.variants) ? editForm.variants : [];
+      const hasCustomizations = custs.length > 0;
+      const hasAddons = custs.some((c: any) => Array.isArray(c.addons) && c.addons.length > 0);
+      const res = await fetch('/api/merchant/menu-items', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          itemId: editingId,
+          storeId,
+          base_price: Number(editForm.base_price),
+          has_customizations: hasCustomizations,
+          has_addons: hasAddons,
+          has_variants: vars.length > 0,
+          customizations: custs,
+          variants: vars.map((v: any) => ({
+            variant_name: v.variant_name,
+            variant_type: v.variant_type ?? null,
+            variant_price: typeof v.variant_price === 'number' ? v.variant_price : Number(v.variant_price) || 0,
+          })),
+        }),
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson?.error || 'Failed to save options');
+      }
+      const listRes = await fetch(`/api/merchant/menu-items?storeId=${encodeURIComponent(storeId)}`);
+      const listJson = await listRes.json().catch(() => []);
+      const itemsList = listRes.ok && Array.isArray(listJson) ? listJson : [];
+      const updatedMenuItem = itemsList.find((item: any) => item.item_id === editingId);
+      if (updatedMenuItem) {
+        setMenuItems((prev) => prev.map((item) => (item.item_id === editingId ? { ...item, ...updatedMenuItem } : item)));
+      }
+      setShowEditModal(false);
+      await refetchImageCount();
+      toast.success('Item updated successfully!');
+    } catch (e) {
+      console.error('Error saving options:', e);
+      setEditError('Error saving options.');
+    }
+    setIsSavingEdit(false);
+  }
 
-        if (updatedMenuItem) {
-          setMenuItems((prev) =>
-            prev.map((item) =>
-              item.item_id === editingId
-                ? updatedMenuItem
-                : item
-            )
-          );
-        } else {
-          // Fallback to updating with current data
-          setMenuItems((prev) =>
-            prev.map((item) =>
-              item.item_id === editingId
-                ? {
-                    ...item,
-                    ...updatedItem,
-                    item_image_url: itemImageUrl,
-                    base_price: Number(updatedItem.base_price),
-                    selling_price: Number(updatedItem.selling_price),
-                    discount_percentage: Number(updatedItem.discount_percentage),
-                    tax_percentage: Number(updatedItem.tax_percentage),
-                    available_quantity: updatedItem.available_quantity !== null && updatedItem.available_quantity !== undefined ? Number(updatedItem.available_quantity) : undefined,
-                    low_stock_threshold: updatedItem.low_stock_threshold !== null && updatedItem.low_stock_threshold !== undefined ? Number(updatedItem.low_stock_threshold) : undefined,
-                    preparation_time_minutes: updatedItem.preparation_time_minutes,
-                    serves: updatedItem.serves,
-                    allergens: allergensArray,
-                    display_order: updatedItem.display_order,
-                    customizations: updatedItem.customizations
-                  } as MenuItem
-                : item
-            )
-          );
+  async function handleSaveEdit() {
+    const err = validateEditItemFields();
+    if (err) {
+      setEditError(err);
+      return;
+    }
+    setEditError('');
+    setIsSavingEdit(true);
+    try {
+      let itemImageUrl = editForm.item_image_url;
+      if (editForm.image) {
+        const formData = new FormData();
+        formData.append('file', editForm.image);
+        formData.append('parent', 'menuitems');
+        formData.append('menu_item_id', editingMenuItemId!.toString());
+        const uploadRes = await fetch('/api/upload/r2', { method: 'POST', body: formData });
+        if (!uploadRes.ok) {
+          setEditError('Image upload failed.');
+          setIsSavingEdit(false);
+          return;
         }
-        
+        const uploadData = await uploadRes.json();
+        itemImageUrl = uploadData.key || uploadData.url;
+        setEditImagePreview(itemImageUrl);
+      }
+      const allergensArray = editForm.allergens
+        ? editForm.allergens.split(',').map((a: string) => a.trim()).filter(Boolean)
+        : [];
+      const hasCustomizations = Array.isArray(editForm.customizations) && editForm.customizations.length > 0;
+      const hasAddons = Array.isArray(editForm.customizations) && editForm.customizations.some((c: any) => Array.isArray(c.addons) && c.addons.length > 0);
+      const custs = Array.isArray(editForm.customizations) ? editForm.customizations : [];
+      const vars = Array.isArray(editForm.variants) ? editForm.variants : [];
+      const res = await fetch('/api/merchant/menu-items', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          itemId: editingId,
+          storeId,
+          item_name: (editForm.item_name ?? '').toString().trim(),
+          item_description: editForm.item_description,
+          item_image_url: itemImageUrl,
+          food_type: editForm.food_type,
+          spice_level: editForm.spice_level,
+          cuisine_type: editForm.cuisine_type,
+          base_price: Number(editForm.base_price),
+          selling_price: Number(editForm.selling_price),
+          discount_percentage: editForm.discount_percentage ? Number(editForm.discount_percentage) : 0,
+          tax_percentage: editForm.tax_percentage ? Number(editForm.tax_percentage) : 0,
+          in_stock: editForm.in_stock,
+          available_quantity: editForm.available_quantity ? Number(editForm.available_quantity) : null,
+          low_stock_threshold: editForm.low_stock_threshold ? Number(editForm.low_stock_threshold) : null,
+          has_customizations: hasCustomizations,
+          has_addons: hasAddons,
+          has_variants: editForm.has_variants,
+          is_popular: editForm.is_popular,
+          is_recommended: editForm.is_recommended,
+          preparation_time_minutes: editForm.preparation_time_minutes,
+          serves: editForm.serves,
+          is_active: editForm.is_active,
+          allergens: allergensArray,
+          category_id: editForm.category_id,
+          customizations: custs,
+          variants: vars.map((v: any) => ({
+            variant_name: v.variant_name,
+            variant_type: v.variant_type ?? null,
+            variant_price: typeof v.variant_price === 'number' ? v.variant_price : Number(v.variant_price) || 0,
+          })),
+        }),
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson?.error || 'Failed to update menu item');
+      }
+      const result = await res.json();
+      if (result?.item_id) {
+        const listRes = await fetch(`/api/merchant/menu-items?storeId=${encodeURIComponent(storeId!)}`);
+        const listJson = await listRes.json().catch(() => []);
+        const itemsList = listRes.ok && Array.isArray(listJson) ? listJson : [];
+        const updatedMenuItem = itemsList.find((item: any) => item.item_id === editingId);
+        if (updatedMenuItem) {
+          setMenuItems((prev) => prev.map((item) => (item.item_id === editingId ? { ...item, ...updatedMenuItem } : item)));
+        } else {
+          setMenuItems((prev) => prev.map((item) => (item.item_id === editingId ? { ...item, ...result, item_image_url: itemImageUrl } : item)));
+        }
         setShowEditModal(false);
-        toast.success("Item updated successfully!");
+        await refetchImageCount();
+        toast.success('Item updated successfully!');
       } else {
-        setEditError("Failed to update item. Please try again.");
+        setEditError('Failed to update item. Please try again.');
       }
     } catch (e) {
-      console.error("Error updating item:", e);
-      setEditError("Error updating item.");
+      console.error('Error updating item:', e);
+      setEditError('Error updating item.');
     }
     setIsSavingEdit(false);
   }
@@ -1621,6 +1986,7 @@ function MenuContent() {
         setMenuItems(prev => prev.filter(item => item.item_id !== deleteItemId));
         setShowDeleteModal(false);
         setDeleteItemId(null);
+        await refetchImageCount();
         toast.success('Item deleted successfully!');
       } else {
         toast.error('Failed to delete item.');
@@ -1633,25 +1999,36 @@ function MenuContent() {
   }
 
   async function handleStockToggle() {
-    if (!stockToggleItem) return;
-    
+    if (!stockToggleItem || !storeId) return;
+
     setIsTogglingStock(true);
     try {
-      const result = await updateMenuItemStock(stockToggleItem.item_id, stockToggleItem.newStatus);
-      if (result) {
-        setMenuItems(prev => prev.map(item =>
+      const res = await fetch('/api/merchant/menu-items', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          item_id: stockToggleItem.item_id,
+          storeId,
+          in_stock: stockToggleItem.newStatus,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error || 'Failed to update stock');
+      }
+      setMenuItems((prev) =>
+        prev.map((item) =>
           item.item_id === stockToggleItem.item_id
             ? { ...item, in_stock: stockToggleItem.newStatus }
             : item
-        ));
-        setShowStockModal(false);
-        setStockToggleItem(null);
-        toast.success(`Item marked as ${stockToggleItem.newStatus ? 'In Stock' : 'Out of Stock'}!`);
-      } else {
-        toast.error('Failed to update stock status.');
-      }
-    } catch (error) {
-      toast.error('Error updating stock status.');
+        )
+      );
+      setShowStockModal(false);
+      setStockToggleItem(null);
+      toast.success(`Item marked as ${stockToggleItem.newStatus ? 'In Stock' : 'Out of Stock'}!`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Error updating stock status.';
+      toast.error(message);
     } finally {
       setIsTogglingStock(false);
     }
@@ -1674,6 +2051,16 @@ function MenuContent() {
         (item.item_description && item.item_description.toLowerCase().includes(searchTerm.toLowerCase()))
       )
     : filteredItems;
+
+  // Plan-driven: no hardcoding. When planLimits is null (no plan) = no restrictions
+  const canAddItem = planLimits == null || planLimits.maxMenuItems == null || menuItems.length < planLimits.maxMenuItems;
+  const canAddCategory = planLimits == null || planLimits.maxMenuCategories == null || categories.length < planLimits.maxMenuCategories;
+  // Image count from server-side API (accurate); fallback to client status for backward compat
+  const imageUsed = storeImageCount?.totalUsed ?? imageUploadStatus?.totalUsed ?? 0;
+  const imageLimit = planLimits?.maxImageUploads ?? null;
+  const imageUploadAllowed = planLimits == null || planLimits.imageUploadAllowed === true;
+  const imageLimitReached = planLimits != null && imageLimit != null && imageUsed >= imageLimit;
+  const imageSlotsLeft = imageLimit != null ? Math.max(0, imageLimit - imageUsed) : null;
 
   // Show error if no store is selected
   if (storeError) {
@@ -1701,113 +2088,140 @@ function MenuContent() {
 
   return (
     <MXLayoutWhite restaurantName={store?.store_name || "Loading..."} restaurantId={storeId || "No ID"}>
-      <Toaster richColors position="top-right" />
+      <Toaster richColors position="top-right" style={{ zIndex: 100002 }} />
       <style>{globalStyles}</style>
       
-      {/* Header */}
-      <div className="sticky top-0 z-40 bg-white border-b border-gray-200">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between px-6 py-4 gap-4">
-          {/* Spacer for hamburger menu on left (mobile) */}
-          <div className="md:hidden w-12"></div>
-          {/* Heading on right for mobile, left for desktop */}
-          <div className="ml-auto md:ml-0">
-            <h1 className="text-xl md:text-2xl font-bold text-gray-900">Menu Management</h1>
-            <p className="text-gray-600 text-sm mt-1">Manage your menu items and categories</p>
-            {store && (
-              <p className="text-sm text-gray-500 mt-1">Store: {store.store_name}</p>
-            )}
-          </div>
-          
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => {
-                setCategoryModalMode('add');
-                setCategoryForm({ 
-                  category_name: '', 
-                  category_description: '', 
-                  display_order: 0, 
-                  is_active: true,
-                  category_metadata: {}
-                });
-                setShowCategoryModal(true);
-              }}
-              className="flex items-center gap-2 px-4 py-2.5 bg-white text-orange-600 font-bold border border-orange-600 rounded-lg hover:bg-orange-50 transition-colors"
-            >
-              <Plus size={18} />
-              Add Category
-            </button>
-            
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="flex items-center gap-2 px-4 py-2.5 bg-orange-500 text-white font-bold rounded-lg hover:bg-orange-600 transition-colors"
-            >
-              <Plus size={18} />
-              Add Menu Item
-            </button>
-          </div>
-        </div>
-        
-        {/* Stats */}
-        <div className="flex flex-wrap gap-4 px-6 pb-4">
-          <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 min-w-[180px]">
-            <div className="text-gray-500 text-sm font-medium">Total Items</div>
-            <div className="text-2xl font-bold text-gray-900 mt-1">{menuItems.length}</div>
-          </div>
-          <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 min-w-[180px]">
-            <div className="text-gray-500 text-sm font-medium">In Stock</div>
-            <div className="text-2xl font-bold text-green-600 mt-1">{inStock}</div>
-          </div>
-          <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 min-w-[180px]">
-            <div className="text-gray-500 text-sm font-medium">Out of Stock</div>
-            <div className="text-2xl font-bold text-red-600 mt-1">{outStock} ({outStockPercent}%)</div>
-          </div>
-          <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 min-w-[180px]">
-            <div className="text-gray-500 text-sm font-medium">Categories</div>
-            <div className="text-2xl font-bold text-blue-600 mt-1">{categories.length}</div>
-          </div>
-        </div>
-        
-        {/* Search and Categories */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 px-6 pb-4">
-          <div className="flex-1 max-w-md">
-            <div className="relative">
-              <input
-                type="text"
-                placeholder="Search menu items..."
-                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:border-orange-400 focus:ring-1 focus:ring-orange-100 text-gray-900"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-              <div className="absolute right-3 top-3 text-gray-400">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
-                </svg>
-              </div>
+      {/* Header - compact */}
+      <div className="sticky top-0 z-40 bg-white border-b border-gray-200 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between px-3 sm:px-4 py-2 gap-2">
+          <div className="flex items-center gap-2 w-full sm:w-auto min-w-0">
+            <MobileHamburgerButton />
+            <div className="min-w-0">
+              <h1 className="text-base sm:text-lg font-bold text-gray-900">Menu Management</h1>
+              <p className="text-gray-500 text-xs mt-0 flex items-center gap-2 flex-wrap">
+                <span>Manage your menu items and categories</span>
+                {planLimits?.planName != null && planLimits.planName !== '' && (
+                  <span className="text-gray-400">· Plan: {planLimits.planName}</span>
+                )}
+              </p>
             </div>
           </div>
-          
-          <div className="flex flex-wrap gap-2">
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={() => {
+                if (!canAddCategory) return;
+                setCategoryModalMode('add');
+                setCategoryForm({
+                  category_name: '',
+                  category_description: '',
+                  category_image_url: '',
+                  is_active: true,
+                });
+                setCategoryImageFile(null);
+                setCategoryImagePreview('');
+                setShowCategoryModal(true);
+              }}
+              disabled={!canAddCategory}
+              title={!canAddCategory ? `Category limit reached (${planLimits?.maxMenuCategories ?? 0})` : undefined}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg transition-colors ${canAddCategory ? 'bg-white text-orange-600 border border-orange-600 hover:bg-orange-50' : 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed'}`}
+            >
+              <Plus size={16} />
+              Add Category
+              {planLimits?.maxMenuCategories != null && (
+                <span className="text-xs opacity-80">({categories.length}/{planLimits.maxMenuCategories})</span>
+              )}
+            </button>
+            <button
+              onClick={() => {
+                if (canAddItem) {
+                  setAddItemSaved(null);
+                  refetchImageCount();
+                  setShowAddModal(true);
+                }
+              }}
+              disabled={!canAddItem}
+              title={!canAddItem ? `Menu item limit reached (${planLimits?.maxMenuItems ?? 0})` : undefined}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg transition-colors ${canAddItem ? 'bg-orange-500 text-white hover:bg-orange-600' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
+            >
+              <Plus size={16} />
+              Add Menu Item
+              {planLimits?.maxMenuItems != null && (
+                <span className="text-xs opacity-90">({menuItems.length}/{planLimits.maxMenuItems})</span>
+              )}
+            </button>
+          </div>
+        </div>
+        {/* Stats - compact row */}
+        <div className="flex flex-wrap gap-2 px-3 sm:px-4 pb-2">
+          <div className="bg-gray-50 border border-gray-200 rounded-md px-3 py-2 min-w-[100px]">
+            <div className="text-gray-500 text-xs font-medium">
+              Total Items
+              {planLimits?.maxMenuItems != null && (
+                <span className="ml-1 text-gray-400">/ {planLimits.maxMenuItems}</span>
+              )}
+            </div>
+            <div className="text-lg font-bold text-gray-900 leading-tight">{menuItems.length}</div>
+          </div>
+          <div className="bg-gray-50 border border-gray-200 rounded-md px-3 py-2 min-w-[100px]">
+            <div className="text-gray-500 text-xs font-medium">In Stock</div>
+            <div className="text-lg font-bold text-green-600 leading-tight">{inStock}</div>
+          </div>
+          <div className="bg-gray-50 border border-gray-200 rounded-md px-3 py-2 min-w-[100px]">
+            <div className="text-gray-500 text-xs font-medium">Out of Stock</div>
+            <div className="text-lg font-bold text-red-600 leading-tight">{outStock} ({outStockPercent}%)</div>
+          </div>
+          <div className="bg-gray-50 border border-gray-200 rounded-md px-3 py-2 min-w-[100px]">
+            <div className="text-gray-500 text-xs font-medium">
+              Categories
+              {planLimits?.maxMenuCategories != null && (
+                <span className="ml-1 text-gray-400">/ {planLimits.maxMenuCategories}</span>
+              )}
+            </div>
+            <div className="text-lg font-bold text-blue-600 leading-tight">{categories.length}</div>
+          </div>
+        </div>
+        {/* Search and Categories - single row, sticky All + horizontal scroll */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-3 sm:px-4 pb-3">
+          <div className="flex-1 max-w-sm min-w-0 order-2 sm:order-1">
+            <input
+              type="text"
+              placeholder="Search menu items..."
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:border-orange-400 focus:ring-1 focus:ring-orange-100 text-gray-900"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+          <div className="flex-1 min-w-0 order-1 sm:order-2 flex items-center gap-1.5 overflow-hidden">
             <button
               onClick={() => setSelectedCategoryId(null)}
-              className={`px-4 py-2 rounded-lg font-medium text-sm ${selectedCategoryId === null ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+              className={`flex-shrink-0 px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap ${selectedCategoryId === null ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-200'}`}
             >
               All Categories
             </button>
-            {categories.map((category) => (
-              <button
-                key={category.id}
-                onClick={() => setSelectedCategoryId(category.id)}
-                className={`px-4 py-2 rounded-lg font-medium text-sm ${selectedCategoryId === category.id ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
-              >
-                {category.category_name}
-              </button>
-            ))}
+            <div className="relative flex-1 min-w-0 flex items-center overflow-hidden">
+              <div className="flex-1 min-w-0 overflow-x-auto overflow-y-hidden scrollbar-hide scroll-smooth touch-pan-x py-0.5">
+                <div className="flex items-center gap-1.5 flex-nowrap">
+                  {categories.map((category) => (
+                    <button
+                      key={category.id}
+                      onClick={() => setSelectedCategoryId(category.id)}
+                      className={`flex-shrink-0 px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap ${selectedCategoryId === category.id ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+                    >
+                      {category.category_name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {categories.length > 5 && (
+                <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-6 bg-gradient-to-l from-white to-transparent sm:w-8" aria-hidden />
+              )}
+            </div>
           </div>
         </div>
       </div>
 
       {/* Menu Items Grid */}
-      <div className="px-6 py-4 relative">
+      <div className="px-3 sm:px-4 py-3 relative">
         {isLoading ? (
           <MenuItemsGridSkeleton />
         ) : (searchedItems.length === 0 ? (
@@ -1829,26 +2243,27 @@ function MenuContent() {
               const hasDiscount = discount > 0;
               
               return (
-                <div key={item.item_id} className="bg-white rounded-xl border border-gray-300 shadow-sm hover:shadow-md transition-shadow min-h-[160px]">
-                  <div className="flex p-3 h-full">
-                    <div className="w-16 h-16 flex-shrink-0 mr-3">
-                      <img 
-                        src={item.item_image_url && item.item_image_url !== '' ? item.item_image_url : '/placeholder.png'} 
-                        alt={item.item_name} 
-                        className="w-full h-full object-cover rounded-lg border border-gray-200" 
+                <div key={item.item_id} className="bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all overflow-hidden">
+                  <div className="flex p-2.5 h-full gap-2.5">
+                    <div className="w-14 h-14 flex-shrink-0">
+                      <R2Image
+                        src={item.item_image_url}
+                        alt={item.item_name}
+                        className="w-full h-full object-cover rounded-lg border border-gray-200"
+                        fallbackSrc="/placeholder.png"
                       />
                     </div>
-                    <div className="flex-1 flex flex-col min-w-0">
-                      <div className="flex items-start justify-between mb-1">
+                    <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+                      <div className="flex items-start justify-between gap-1 mb-0.5">
                         <div className="flex-1 min-w-0">
                           <div className="font-bold text-sm text-gray-900 truncate">
                             {item.item_name}
                           </div>
-                          <div className="text-xs text-gray-500 font-bold uppercase tracking-wide mt-0.5">
+                          <div className="text-[10px] text-gray-500 font-semibold uppercase tracking-wide">
                             {category?.category_name || 'Uncategorized'}
                           </div>
                         </div>
-                        <label className="inline-flex items-center cursor-pointer ml-2 flex-shrink-0">
+                        <label className="inline-flex items-center cursor-pointer flex-shrink-0">
                           <input
                             type="checkbox"
                             checked={item.in_stock}
@@ -1858,85 +2273,86 @@ function MenuContent() {
                             }}
                             className="sr-only peer"
                           />
-                          <div className={`w-8 h-4.5 bg-gray-200 rounded-full peer peer-checked:bg-green-500 transition-all relative`}>
-                            <div className={`absolute left-0.5 top-0.5 w-3.5 h-3.5 bg-white rounded-full shadow-md transition-transform ${item.in_stock ? 'translate-x-4' : ''}`}></div>
+                          <div className={`w-7 h-4 bg-gray-200 rounded-full peer peer-checked:bg-green-500 transition-all relative`}>
+                            <div className={`absolute left-0.5 top-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform ${item.in_stock ? 'translate-x-3' : ''}`}></div>
                           </div>
                         </label>
                       </div>
-                      <div className="flex items-center gap-1.5 mb-2">
+                      <div className="flex items-center gap-1 mb-1">
                         {hasDiscount ? (
                           <>
-                            <span className="text-base font-bold text-orange-700">₹{item.selling_price}</span>
-                            <span className="text-sm font-semibold text-gray-500 line-through">₹{item.base_price}</span>
-                            <span className="ml-1 px-1.5 py-0.5 rounded bg-green-100 text-green-700 text-xs font-bold">
+                            <span className="text-sm font-bold text-orange-600">₹{item.selling_price}</span>
+                            <span className="text-xs font-medium text-gray-500 line-through">₹{item.base_price}</span>
+                            <span className="px-1 py-0.5 rounded bg-green-100 text-green-700 text-[10px] font-bold">
                               {discount}% OFF
                             </span>
                           </>
                         ) : (
-                          <span className="text-base font-bold text-orange-700">₹{item.selling_price}</span>
+                          <span className="text-sm font-bold text-orange-600">₹{item.selling_price}</span>
                         )}
                       </div>
                       {item.item_description && (
-                        <p className="text-xs text-gray-600 line-clamp-2 mb-3 flex-grow">
+                        <p className="text-[11px] text-gray-600 line-clamp-2 mb-1.5 flex-grow leading-tight">
                           {item.item_description}
                         </p>
                       )}
-                      
+
                       {/* Indicators for item properties */}
-                      <div className="flex flex-wrap gap-1 mb-2">
+                      <div className="flex flex-wrap gap-1 mb-1.5">
                         {item.is_popular && (
-                          <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 text-xs font-semibold rounded">
+                          <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 text-[10px] font-semibold rounded">
                             Popular
                           </span>
                         )}
                         {item.is_recommended && (
-                          <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs font-semibold rounded">
+                          <span className="px-1.5 py-0.5 bg-purple-50 text-purple-700 text-[10px] font-semibold rounded">
                             Recommended
                           </span>
                         )}
                         {item.has_customizations && (
-                          <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-semibold rounded">
+                          <span className="px-1.5 py-0.5 bg-blue-50 text-blue-700 text-[10px] font-semibold rounded">
                             Customizable
                           </span>
                         )}
                         {item.has_variants && (
-                          <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 text-xs font-semibold rounded">
+                          <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-700 text-[10px] font-semibold rounded">
                             Variants
                           </span>
                         )}
                         {item.food_type && (
-                          <span className="px-2 py-0.5 bg-gray-100 text-gray-700 text-xs font-semibold rounded">
+                          <span className="px-1.5 py-0.5 bg-gray-100 text-gray-600 text-[10px] font-semibold rounded">
                             {item.food_type}
                           </span>
                         )}
                       </div>
-                      
-                      <div className="flex flex-row gap-2 mt-3 w-full">
-                        {Array.isArray(item.customizations) && item.customizations.length > 0 && (
+
+                      {/* Action buttons - constrained so they never overflow */}
+                      <div className="flex items-center gap-1.5 mt-auto min-w-0">
+                        {(Array.isArray(item.customizations) && item.customizations.length > 0) || (Array.isArray(item.variants) && item.variants.length > 0) ? (
                           <button
-                            onClick={e => { e.stopPropagation(); setViewCustModal({ open: true, item }); }}
-                            className="flex items-center justify-center gap-1 px-2 py-1.5 bg-gray-100 text-gray-700 font-semibold rounded-lg border border-gray-200 hover:bg-orange-50 transition-all text-xs whitespace-nowrap"
+                            onClick={e => { e.stopPropagation(); setViewCustModal({ open: true, item }); setViewCustModalTab('customizations'); }}
+                            className="flex-shrink-0 flex items-center justify-center gap-0.5 px-1.5 py-1 bg-gray-100 text-gray-700 font-semibold rounded-md border border-gray-200 hover:bg-orange-50 transition-all text-[10px] whitespace-nowrap"
                             type="button"
                           >
-                            View Options
+                            Options
                           </button>
-                        )}
+                        ) : null}
                         <button
                           onClick={() => handleOpenEditModal(item)}
-                          className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 bg-blue-50 text-blue-700 font-bold rounded-lg border border-blue-200 hover:bg-blue-100 transition-all text-xs whitespace-nowrap"
+                          className="min-w-0 flex-1 flex items-center justify-center gap-0.5 px-1 py-1 bg-blue-50 text-blue-600 font-bold rounded-md border border-blue-200 hover:bg-blue-100 transition-all text-[10px]"
                         >
-                          <Edit2 size={12} />
-                          Edit
+                          <Edit2 size={10} />
+                          <span className="truncate">Edit</span>
                         </button>
                         <button
                           onClick={() => {
                             setDeleteItemId(item.item_id);
                             setShowDeleteModal(true);
                           }}
-                          className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 bg-red-50 text-red-600 font-bold rounded-lg border border-red-200 hover:bg-red-100 transition-all text-xs whitespace-nowrap"
+                          className="min-w-0 flex-1 flex items-center justify-center gap-0.5 px-1 py-1 bg-red-50 text-red-600 font-bold rounded-md border border-red-200 hover:bg-red-100 transition-all text-[10px]"
                         >
-                          <Trash2 size={12} />
-                          Delete
+                          <Trash2 size={10} />
+                          <span className="truncate">Delete</span>
                         </button>
                       </div>
                     </div>
@@ -1948,10 +2364,27 @@ function MenuContent() {
         ))}
       </div>
 
-      {/* Modals */}
+      {/* Modals - portaled to body so overlay covers sidebar and blurs */}
       {/* Add Item Modal */}
-      {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      {showAddModal && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-md"
+          onClick={() => {
+            setAddItemSaved(null);
+            setShowAddModal(false);
+            setAddImageValidationError('');
+            setAddImageValidating(false);
+            setAddForm({
+              item_name: '', item_description: '', item_image_url: '', image: null,
+              food_type: '', spice_level: '', cuisine_type: '', base_price: '', selling_price: '',
+              discount_percentage: '0', tax_percentage: '0', in_stock: true, available_quantity: '',
+              low_stock_threshold: '', has_customizations: false, has_addons: false, has_variants: false,
+              is_popular: false, is_recommended: false, preparation_time_minutes: 15, serves: 1,
+              is_active: true, allergens: '', category_id: null, customizations: [], variants: [],
+            });
+            setImagePreview('');
+          }}
+        >
           <div onClick={e => e.stopPropagation()}>
             <ItemForm
               isEdit={false}
@@ -1960,9 +2393,21 @@ function MenuContent() {
               imagePreview={imagePreview}
               setImagePreview={setImagePreview}
               onProcessImage={(file) => processImageFile(file, false)}
-              onSubmit={handleAddItem}
+              onSaveAndNext={handleAddSaveAndNext}
+              onSubmitOptions={handleAddSubmitOptions}
+              imageUploadAllowed={imageUploadAllowed}
+              imageLimitReached={imageLimitReached}
+              imageUsed={imageUsed}
+              imageLimit={imageLimit}
+              imageSlotsLeft={imageSlotsLeft}
+              maxCuisinesPerItem={planLimits?.maxCuisinesPerItem ?? null}
+              imageValidationError={addImageValidationError}
+              imageValidating={addImageValidating}
               onCancel={() => {
+                setAddItemSaved(null);
                 setShowAddModal(false);
+                setAddImageValidationError('');
+                setAddImageValidating(false);
                 setAddForm({
                   item_name: '',
                   item_description: '',
@@ -1985,13 +2430,11 @@ function MenuContent() {
                   is_recommended: false,
                   preparation_time_minutes: 15,
                   serves: 1,
-                  display_order: 0,
                   is_active: true,
                   allergens: '',
                   category_id: null,
                   customizations: [],
-                  item_metadata: {},
-                  nutritional_info: {}
+                  variants: [],
                 });
                 setImagePreview('');
               }}
@@ -2001,12 +2444,13 @@ function MenuContent() {
               categories={categories}
             />
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Edit Item Modal */}
-      {showEditModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      {showEditModal && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-md" onClick={() => setShowEditModal(false)}>
           <div onClick={e => e.stopPropagation()}>
             <ItemForm
               isEdit={true}
@@ -2015,9 +2459,20 @@ function MenuContent() {
               imagePreview={editImagePreview}
               setImagePreview={setEditImagePreview}
               onProcessImage={(file) => processImageFile(file, true)}
-              onSubmit={handleSaveEdit}
+              onSaveAndNext={handleEditSaveAndNext}
+              onSubmitOptions={handleEditSubmitOptions}
+              imageUploadAllowed={imageUploadAllowed}
+              imageLimitReached={imageLimitReached}
+              imageUsed={imageUsed}
+              imageLimit={imageLimit}
+              imageSlotsLeft={imageSlotsLeft}
+              maxCuisinesPerItem={planLimits?.maxCuisinesPerItem ?? null}
+              imageValidationError={editImageValidationError}
+              imageValidating={editImageValidating}
               onCancel={() => {
                 setShowEditModal(false);
+                setEditImageValidationError('');
+                setEditImageValidating(false);
                 setEditForm({
                   item_name: '',
                   item_description: '',
@@ -2040,13 +2495,11 @@ function MenuContent() {
                   is_recommended: false,
                   preparation_time_minutes: 15,
                   serves: 1,
-                  display_order: 0,
                   is_active: true,
                   allergens: '',
                   category_id: null,
                   customizations: [],
-                  item_metadata: {},
-                  nutritional_info: {}
+                  variants: [],
                 });
                 setEditImagePreview('');
               }}
@@ -2057,21 +2510,41 @@ function MenuContent() {
               currentItemId={editingId || ''}
             />
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* View Customizations Modal */}
-      {viewCustModal.open && viewCustModal.item && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setViewCustModal({ open: false, item: null })}>
+      {/* View Customizations & Variants Modal */}
+      {viewCustModal.open && viewCustModal.item && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-md" onClick={() => setViewCustModal({ open: false, item: null })}>
           <div
             className="bg-white rounded-xl shadow-xl w-full max-w-md mx-2 p-0 border border-gray-100 relative animate-fadeIn"
             onClick={e => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
-              <h2 className="text-base md:text-lg font-bold text-gray-900">Customizations & Addons</h2>
+            <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-100">
+              <div className="flex items-center gap-2 min-w-0">
+                <h2 className="text-base md:text-lg font-bold text-gray-900 truncate">Options</h2>
+                {/* Toggle: Customizations | Variants */}
+                <div className="flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setViewCustModalTab('customizations')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${viewCustModalTab === 'customizations' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                  >
+                    Addons
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewCustModalTab('variants')}
+                    className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${viewCustModalTab === 'variants' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                  >
+                    Variants
+                  </button>
+                </div>
+              </div>
               <button
                 onClick={() => setViewCustModal({ open: false, item: null })}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
                 tabIndex={0}
                 aria-label="Close"
               >
@@ -2079,46 +2552,79 @@ function MenuContent() {
               </button>
             </div>
             <div className="px-5 py-4 max-h-[60vh] overflow-y-auto">
-              {Array.isArray(viewCustModal.item.customizations) && viewCustModal.item.customizations.length > 0 ? (
-                <div className="space-y-4">
-                  {viewCustModal.item.customizations.map((group: any, idx: number) => (
-                    <div key={idx} className="bg-gray-50 border border-gray-100 rounded-lg p-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="font-semibold text-gray-800 text-sm">{group.customization_title || group.title}</div>
-                        <div className="flex gap-2">
-                          {group.is_required && (
-                            <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded">Required</span>
-                          )}
-                          <span className="px-2 py-0.5 bg-gray-200 text-gray-700 text-xs rounded">
-                            {group.customization_type || 'Checkbox'}
-                          </span>
-                          <span className="px-2 py-0.5 bg-gray-200 text-gray-700 text-xs rounded">
-                            Select: {group.min_selection || 0}-{group.max_selection || 1}
-                          </span>
+              {viewCustModalTab === 'customizations' ? (
+                Array.isArray(viewCustModal.item.customizations) && viewCustModal.item.customizations.length > 0 ? (
+                  <div className="space-y-4">
+                    {viewCustModal.item.customizations.map((group: any, idx: number) => (
+                      <div key={idx} className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="font-semibold text-gray-800 text-sm">{group.customization_title || group.title}</div>
+                          <div className="flex gap-2 flex-wrap justify-end">
+                            {group.is_required && (
+                              <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded">Required</span>
+                            )}
+                            <span className="px-2 py-0.5 bg-gray-200 text-gray-700 text-xs rounded">
+                              {group.customization_type || 'Checkbox'}
+                            </span>
+                            <span className="px-2 py-0.5 bg-gray-200 text-gray-700 text-xs rounded">
+                              Select: {group.min_selection || 0}-{group.max_selection || 1}
+                            </span>
+                          </div>
                         </div>
+                        <ul className="space-y-1">
+                          {group.addons && group.addons.map((addon: any, i: number) => (
+                            <li key={i} className="flex items-center justify-between py-1 px-2 bg-white rounded border">
+                              <span className="text-sm text-gray-700">{addon.addon_name}</span>
+                              <span className="text-sm font-medium text-gray-900">₹{addon.addon_price}</span>
+                            </li>
+                          ))}
+                        </ul>
                       </div>
-                      <ul className="space-y-1">
-                        {group.addons && group.addons.map((addon: any, i: number) => (
-                          <li key={i} className="flex items-center justify-between py-1 px-2 bg-white rounded border">
-                            <span className="text-sm text-gray-700">{addon.addon_name}</span>
-                            <span className="text-sm font-medium text-gray-900">₹{addon.addon_price}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-gray-500 text-sm">No customizations available.</div>
+                )
               ) : (
-                <div className="text-gray-500 text-sm">No customizations available.</div>
+                Array.isArray(viewCustModal.item.variants) && viewCustModal.item.variants.length > 0 ? (
+                  <div className="space-y-3">
+                    {/* Group by variant_type if present */}
+                    {(() => {
+                      const variants = viewCustModal.item.variants!;
+                      const byType = variants.reduce((acc: Record<string, typeof variants>, v: any) => {
+                        const type = v.variant_type || 'Variants';
+                        if (!acc[type]) acc[type] = [];
+                        acc[type].push(v);
+                        return acc;
+                      }, {});
+                      return Object.entries(byType).map(([type, list]) => (
+                        <div key={type} className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                          <div className="font-semibold text-gray-800 text-sm mb-2">{type}</div>
+                          <ul className="space-y-1">
+                            {(list as any[]).map((v: any, i: number) => (
+                              <li key={v.variant_id || i} className="flex items-center justify-between py-1 px-2 bg-white rounded border">
+                                <span className="text-sm text-gray-700">{v.variant_name}</span>
+                                <span className="text-sm font-medium text-gray-900">₹{typeof v.variant_price === 'number' ? v.variant_price : 0}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                ) : (
+                  <div className="text-gray-500 text-sm">No variants available.</div>
+                )
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Delete Confirmation Modal */}
-      {showDeleteModal && (
-        <div className="fixed inset-0 flex items-center justify-center z-50 bg-black/40">
+      {showDeleteModal && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 flex items-center justify-center z-[9999] bg-black/40 backdrop-blur-md">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4">
             <div className="p-6">
               <div className="text-center">
@@ -2148,12 +2654,13 @@ function MenuContent() {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Stock Toggle Confirmation Modal */}
-      {showStockModal && stockToggleItem && (
-        <div className="fixed inset-0 flex items-center justify-center z-50 bg-black/40">
+      {showStockModal && stockToggleItem && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 flex items-center justify-center z-[9999] bg-black/40 backdrop-blur-md">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4">
             <div className="p-6">
               <div className="text-center">
@@ -2195,36 +2702,44 @@ function MenuContent() {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* Category Management Modal */}
-      {showCategoryModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4">
+      {/* Category Management Modal - portaled so overlay covers sidebar and blurs */}
+      {showCategoryModal && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-md"
+          onClick={() => {
+            setShowCategoryModal(false);
+            setCategoryForm({ category_name: '', category_description: '', category_image_url: '', is_active: true });
+            setCategoryImageFile(null);
+            setCategoryImagePreview('');
+            setCategoryImageValidationError('');
+            setEditingCategoryId(null);
+          }}
+        >
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="p-6">
-              <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-bold text-gray-900">
                   {categoryModalMode === 'add' ? 'Add New Category' : 'Edit Category'}
                 </h2>
                 <button
                   onClick={() => {
                     setShowCategoryModal(false);
-                    setCategoryForm({ 
-                      category_name: '', 
-                      category_description: '', 
-                      display_order: 0, 
-                      is_active: true,
-                      category_metadata: {}
-                    });
+                    setCategoryForm({ category_name: '', category_description: '', category_image_url: '', is_active: true });
+                    setCategoryImageFile(null);
+                    setCategoryImagePreview('');
+                    setCategoryImageValidationError('');
                     setEditingCategoryId(null);
                   }}
                   className="p-2 hover:bg-gray-100 rounded-lg"
+                  aria-label="Close"
                 >
                   <X size={20} className="text-gray-600" />
                 </button>
               </div>
-              
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Category Name *</label>
@@ -2236,7 +2751,6 @@ function MenuContent() {
                     placeholder="Enter category name"
                   />
                 </div>
-                
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Description (Optional)</label>
                   <textarea
@@ -2244,71 +2758,101 @@ function MenuContent() {
                     value={categoryForm.category_description || ''}
                     onChange={(e) => setCategoryForm({ ...categoryForm, category_description: e.target.value })}
                     placeholder="Enter category description"
-                    rows={3}
+                    rows={2}
                   />
                 </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Display Order</label>
-                    <input
-                      type="number"
-                      min="0"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:border-orange-400 focus:ring-1 focus:ring-orange-100"
-                      value={categoryForm.display_order || 0}
-                      onChange={(e) => setCategoryForm({ ...categoryForm, display_order: Number(e.target.value) })}
-                    />
-                  </div>
-                  
-                  <div className="flex items-center justify-end">
-                    <label className="flex items-center gap-2 mt-6">
-                      <input
-                        type="checkbox"
-                        checked={categoryForm.is_active}
-                        onChange={(e) => setCategoryForm({ ...categoryForm, is_active: e.target.checked })}
-                        className="h-4 w-4 text-orange-500 rounded"
-                      />
-                      <span className="text-sm text-gray-700">Active</span>
-                    </label>
-                  </div>
-                </div>
-                
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Metadata (JSON, Optional)</label>
-                  <textarea
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:border-orange-400 focus:ring-1 focus:ring-orange-100 font-mono text-sm"
-                    value={categoryForm.category_metadata ? JSON.stringify(categoryForm.category_metadata, null, 2) : ''}
-                    onChange={(e) => {
-                      try {
-                        const value = e.target.value.trim();
-                        const metadata = value ? JSON.parse(value) : null;
-                        setCategoryForm({ ...categoryForm, category_metadata: metadata });
-                      } catch {
-                        // Keep as is if invalid JSON
-                      }
-                    }}
-                    placeholder='{"key": "value"}'
-                    rows={3}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Category Image (Optional)
+                    {imageLimit != null && <span className="text-gray-500 font-normal ml-1">— {imageUsed}/{imageLimit} used</span>}
+                  </label>
+                  {!imageUploadAllowed ? (
+                    <div className="flex items-center gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+                      <ImageIcon size={18} className="flex-shrink-0" />
+                      <span>Image uploads are not included in your current plan. Upgrade to add category images.</span>
+                    </div>
+                  ) : imageLimitReached && !categoryForm.category_image_url && !categoryImageFile ? (
+                    <div className="flex items-center gap-2 p-3 rounded-lg bg-gray-100 border border-gray-200 text-gray-600 text-sm">
+                      <ImageIcon size={18} className="flex-shrink-0" />
+                      <span>Image limit reached ({imageUsed}/{imageLimit}). Subscribe to add more images.</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-3">
+                        <div className="w-16 h-16 border border-gray-200 rounded-lg overflow-hidden bg-gray-50 flex items-center justify-center flex-shrink-0">
+                          {categoryImagePreview ? (
+                            categoryImagePreview.startsWith('data:') || categoryImagePreview.startsWith('blob:') ? (
+                              <img src={categoryImagePreview} alt="Preview" className="w-full h-full object-cover" />
+                            ) : (
+                              <R2Image src={categoryImagePreview} alt="Preview" className="w-full h-full object-cover" />
+                            )
+                          ) : categoryForm.category_image_url ? (
+                            <R2Image src={categoryForm.category_image_url} alt="Category" className="w-full h-full object-cover" />
+                          ) : (
+                            <ImageIcon className="w-6 h-6 text-gray-400" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/jpg"
+                            className="hidden"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              e.target.value = '';
+                              if (!file) return;
+                              setCategoryImageValidationError('');
+                              const result = await validateMenuItemImage(file);
+                              if (!result.valid) {
+                                setCategoryImageValidationError(result.error);
+                                setCategoryImageFile(null);
+                                setCategoryImagePreview('');
+                                return;
+                              }
+                              setCategoryImageFile(file);
+                              setCategoryImagePreview(URL.createObjectURL(file));
+                            }}
+                            id="category-image-input"
+                            disabled={imageLimitReached && !categoryForm.category_image_url}
+                          />
+                          <label
+                            htmlFor="category-image-input"
+                            className={`flex items-center justify-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium ${imageLimitReached && !categoryForm.category_image_url ? 'border-gray-200 bg-gray-100 text-gray-500 cursor-not-allowed' : 'border-gray-300 hover:bg-gray-50 cursor-pointer text-gray-700'}`}
+                          >
+                            <Upload size={16} />
+                            Choose from browser
+                          </label>
+                          {categoryImageFile && (
+                            <p className="text-xs text-gray-500 mt-1 truncate">{categoryImageFile.name}</p>
+                          )}
+                        </div>
+                      </div>
+                      {categoryImageValidationError && (
+                        <p className="text-sm text-red-600 mt-1" role="alert">{categoryImageValidationError}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="category-active"
+                    checked={categoryForm.is_active}
+                    onChange={(e) => setCategoryForm({ ...categoryForm, is_active: e.target.checked })}
+                    className="h-4 w-4 text-orange-500 rounded"
                   />
-                  <p className="text-xs text-gray-500 mt-1">Optional JSON metadata for extended properties</p>
+                  <label htmlFor="category-active" className="text-sm text-gray-700">Active</label>
                 </div>
               </div>
-              
-              {categoryError && (
-                <div className="mt-4 text-red-500 text-sm">{categoryError}</div>
-              )}
-              
+              {categoryError && <div className="mt-4 text-red-500 text-sm">{categoryError}</div>}
               <div className="flex gap-3 mt-6">
                 <button
                   onClick={() => {
                     setShowCategoryModal(false);
-                    setCategoryForm({ 
-                      category_name: '', 
-                      category_description: '', 
-                      display_order: 0, 
-                      is_active: true,
-                      category_metadata: {}
-                    });
+                    setCategoryForm({ category_name: '', category_description: '', category_image_url: '', is_active: true });
+                    setCategoryImageFile(null);
+                    setCategoryImagePreview('');
+                    setCategoryImageValidationError('');
                     setEditingCategoryId(null);
                   }}
                   className="flex-1 px-4 py-2.5 rounded-lg font-bold text-gray-600 bg-white border border-gray-200 hover:bg-gray-100 transition-all"
@@ -2319,12 +2863,11 @@ function MenuContent() {
                 <button
                   onClick={handleSaveCategory}
                   className="flex-1 px-4 py-2.5 rounded-lg font-bold text-white bg-orange-500 hover:bg-orange-600 transition-all"
-                  disabled={categoryLoading}
+                  disabled={categoryLoading || categoryImageUploading || !!categoryImageValidationError}
                 >
-                  {categoryLoading ? 'Saving...' : (categoryModalMode === 'add' ? 'Add Category' : 'Save Changes')}
+                  {categoryLoading || categoryImageUploading ? 'Saving...' : (categoryModalMode === 'add' ? 'Add Category' : 'Save Changes')}
                 </button>
               </div>
-              
               {categoryModalMode === 'edit' && editingCategoryId && (
                 <div className="mt-4 pt-4 border-t border-gray-200">
                   <button
@@ -2338,7 +2881,8 @@ function MenuContent() {
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </MXLayoutWhite>
   );

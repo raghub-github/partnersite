@@ -21,6 +21,7 @@ import {
   Settings,
 } from 'lucide-react'
 import { Toaster } from 'sonner'
+import { MobileHamburgerButton } from '@/components/MobileHamburgerButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -116,14 +117,20 @@ export default function RestaurantManagementPage() {
           )}
 
           {/* Welcome Section */}
-          <div className="space-y-2">
-            <h1 className="text-3xl sm:text-4xl font-bold text-white">
-              Restaurant Management
-            </h1>
-            <p className="text-slate-400">
-              Manage and monitor {restaurant?.restaurant_name || 'your restaurant'}'s
-              information
-            </p>
+          <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 sm:p-6 mb-8">
+            <div className="flex items-center gap-3">
+              {/* Hamburger menu on left (mobile) */}
+              <MobileHamburgerButton />
+              {/* Heading - properly aligned */}
+              <div className="flex-1 min-w-0">
+                <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-white">
+                  Restaurant Management
+                </h1>
+                <p className="text-slate-400 text-sm sm:text-base mt-1">
+                  Manage and monitor {restaurant?.restaurant_name || 'your restaurant'}'s information
+                </p>
+              </div>
+            </div>
           </div>
 
           {restaurant && (

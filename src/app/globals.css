@@ -1,3 +1,8 @@
+/* Toasts above modals (e.g. Add/Edit Item, Customizations) - notifications appear over backdrop */
+[data-sonner-toaster] {
+  z-index: 100002 !important;
+}
+
 /* Phone input custom styles for LoginModal */
 .phone-input-row {
   display: flex;
@@ -46,6 +51,14 @@ input:not([disabled]), textarea:not([disabled]), select:not([disabled]) {
   display: none; /* Chrome/Safari/Webkit */
 }
 
+.scrollbar-hide {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE 10+ */
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/Webkit */
+}
+
 /* Dashboard content area: smooth scroll + hidden scrollbar */
 .dashboard-scroll {
   overflow-y: auto;
@@ -88,4 +101,60 @@ html::-webkit-scrollbar, body::-webkit-scrollbar {
 /* Add cursor pointer to all buttons globally */
 button {
   cursor: pointer !important;
+}
+
+/* Blur sidebar when modal is open */
+body.modal-open-blur aside {
+  filter: blur(8px) !important;
+  transition: filter 0.3s ease;
+}
+
+body.modal-open-blur aside * {
+  pointer-events: none;
+}
+
+/* Animations for ticket closing panel */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-down {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    max-height: 200px;
+  }
+}
+
+@keyframes pulse-subtle {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out;
+}
+
+.animate-slide-down {
+  animation: slide-down 0.3s ease-out;
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 2s ease-in-out infinite;
 }

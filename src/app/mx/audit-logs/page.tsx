@@ -6,15 +6,18 @@ import Link from 'next/link';
 import { MXLayoutWhite } from '@/components/MXLayoutWhite';
 import { DEMO_RESTAURANT_ID as DEMO_STORE_ID } from '@/lib/constants';
 import { ArrowLeft, FileText, Loader2 } from 'lucide-react';
+import { MobileHamburgerButton } from '@/components/MobileHamburgerButton';
 
 interface AuditEntry {
-  id: number;
+  id: string | number; // Can be string (prefixed) or number (legacy)
   action: string;
-  restriction_type: string | null;
-  performed_by_id: string | null;
+  action_field?: string | null;
+  restriction_type?: string | null;
+  performed_by_id: string | number | null;
   performed_by_email: string | null;
   performed_by_name: string | null;
   created_at: string;
+  type?: 'status' | 'settings';
 }
 
 export default function AuditLogsPage() {
@@ -51,20 +54,22 @@ export default function AuditLogsPage() {
       <div className="flex-1 flex flex-col min-h-0 bg-[#f8fafc] overflow-hidden w-full">
         <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 lg:px-8 py-5">
           <div className="max-w-4xl mx-auto">
-            <div className="flex items-center gap-3 mb-6">
-              {/* Spacer for hamburger menu on left (mobile) */}
-              <div className="md:hidden w-12"></div>
-              {/* Back button - hidden on mobile, shown on desktop */}
-              <Link
-                href={storeId ? `/mx/dashboard?storeId=${storeId}` : '/mx/dashboard'}
-                className="hidden md:flex p-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700"
-              >
-                <ArrowLeft size={18} />
-              </Link>
-              {/* Heading on right for mobile, left for desktop */}
-              <div className="ml-auto md:ml-0">
-                <h1 className="text-lg font-bold text-gray-900">Full audit logs</h1>
-                <p className="text-xs text-gray-500">Store activity and changes</p>
+            <div className="bg-white border-b border-gray-200 shadow-sm -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 py-3 sm:py-4 mb-6">
+              <div className="flex items-center gap-3">
+                {/* Hamburger menu on left (mobile) */}
+                <MobileHamburgerButton />
+                {/* Back button - hidden on mobile, shown on desktop */}
+                <Link
+                  href={storeId ? `/mx/dashboard?storeId=${storeId}` : '/mx/dashboard'}
+                  className="hidden md:flex p-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 transition-colors"
+                >
+                  <ArrowLeft size={18} />
+                </Link>
+                {/* Heading - properly aligned */}
+                <div className="flex-1 min-w-0">
+                  <h1 className="text-lg sm:text-xl md:text-2xl font-bold text-gray-900">Full audit logs</h1>
+                  <p className="text-xs sm:text-sm text-gray-600 mt-0.5">Store activity and changes</p>
+                </div>
               </div>
             </div>
 
@@ -91,11 +96,17 @@ export default function AuditLogsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {logs.map((log) => (
-                        <tr key={log.id} className="border-b border-gray-100 hover:bg-gray-50/50">
+                      {logs.map((log, index) => (
+                        <tr key={`${log.id}-${index}`} className="border-b border-gray-100 hover:bg-gray-50/50">
                           <td className="py-3 px-4 text-gray-600 whitespace-nowrap">{formatDate(log.created_at)}</td>
-                          <td className="py-3 px-4 font-medium text-gray-900">{log.action === 'OPEN' ? 'Store opened' : 'Store closed'}</td>
-                          <td className="py-3 px-4 text-gray-700">{log.restriction_type ? log.restriction_type.replace('_', ' ') : '—'}</td>
+                          <td className="py-3 px-4 font-medium text-gray-900">{log.action}</td>
+                          <td className="py-3 px-4 text-gray-700">
+                            {log.restriction_type 
+                              ? log.restriction_type.replace(/_/g, ' ') 
+                              : log.action_field 
+                                ? log.action_field.replace(/_/g, ' ')
+                                : '—'}
+                          </td>
                           <td className="py-3 px-4 text-gray-600">{log.performed_by_name || log.performed_by_email || '—'}{log.performed_by_id ? ` (ID: ${log.performed_by_id})` : ''}</td>
                         </tr>
                       ))}

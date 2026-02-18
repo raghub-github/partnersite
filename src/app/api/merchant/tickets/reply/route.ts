@@ -20,11 +20,11 @@ function getSupabaseAdmin() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { ticket_id, message } = body;
+    const { ticket_id, message, images } = body;
 
-    if (!ticket_id || !message?.trim()) {
+    if (!ticket_id || (!message?.trim() && (!images || images.length === 0))) {
       return NextResponse.json(
-        { success: false, error: "Ticket ID and message are required." },
+        { success: false, error: "Ticket ID and either message or images are required." },
         { status: 400 }
       );
     }
@@ -81,10 +81,29 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Strict: closed tickets cannot receive replies
+    if (ticket.status === 'CLOSED') {
+      return NextResponse.json(
+        { success: false, error: "This ticket is closed. You cannot send messages." },
+        { status: 403 }
+      );
+    }
+
+    // Format message with images if provided
+    let messageText = message?.trim() || '';
+    if (images && Array.isArray(images) && images.length > 0) {
+      const imageJson = JSON.stringify(images);
+      if (messageText) {
+        messageText += `\n\n[IMAGES:${imageJson}]`;
+      } else {
+        messageText = `[IMAGES:${imageJson}]`;
+      }
+    }
+
     // Insert message into unified_ticket_messages table
     const messageRow = {
       ticket_id: ticket.id,
-      message_text: message.trim(),
+      message_text: messageText,
       message_type: 'TEXT',
       sender_type: 'MERCHANT',
       sender_id: merchant_parent_id,
@@ -110,9 +129,15 @@ export async function POST(request: NextRequest) {
     }
 
     // Update ticket's updated_at timestamp
+    // If ticket was reopened and now has a new message, it's active again
     await db
       .from("unified_tickets")
-      .update({ updated_at: new Date().toISOString() })
+      .update({ 
+        updated_at: new Date().toISOString(),
+        last_response_at: new Date().toISOString(),
+        last_response_by_type: 'MERCHANT',
+        last_response_by_id: merchant_parent_id,
+      })
       .eq("id", ticket_id);
 
     return NextResponse.json({

@@ -31,6 +31,7 @@ import {
   Check,
   User,
   Bike,
+  MoreVertical,
 } from 'lucide-react';
 import { useFoodOrders, type OrdersFoodRow, type FoodOrderStats } from '@/hooks/useFoodOrders';
 import { PageSkeletonOrders } from '@/components/PageSkeleton';
@@ -38,6 +39,7 @@ import { fetchStoreById } from '@/lib/database';
 import { MerchantStore } from '@/lib/merchantStore';
 import { DEMO_RESTAURANT_ID } from '@/lib/constants';
 import { createClient } from '@/lib/supabase/client';
+import { MobileHamburgerButton } from '@/components/MobileHamburgerButton';
 
 // orders_food_status enum: CREATED, ACCEPTED, PREPARING, READY_FOR_PICKUP, OUT_FOR_DELIVERY, DELIVERED, RTO, CANCELLED
 const STATUS_LABEL: Record<string, string> = {
@@ -155,6 +157,36 @@ function OrdersPageContent() {
   const [rejectModal, setRejectModal] = useState<OrdersFoodRow | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [dispatchModal, setDispatchModal] = useState<OrdersFoodRow | null>(null);
+  const [rtoModalOrder, setRtoModalOrder] = useState<OrdersFoodRow | null>(null);
+  const [ridersLogModalOrderId, setRidersLogModalOrderId] = useState<number | null>(null);
+  const [ridersLogModalOrderLabel, setRidersLogModalOrderLabel] = useState<string | null>(null);
+  const [ridersLogList, setRidersLogList] = useState<Array<{ rider_id: number; rider_name: string | null; rider_mobile: string | null; selfie_url: string | null; assignment_status: string; assigned_at: string | null; accepted_at: string | null; rejected_at: string | null; reached_merchant_at: string | null; picked_up_at: string | null; delivered_at: string | null; cancelled_at: string | null }>>([]);
+  const [ridersLogLoading, setRidersLogLoading] = useState(false);
+  const [riderImageModalUrl, setRiderImageModalUrl] = useState<string | null>(null);
+  const [headerRtoMenuOpen, setHeaderRtoMenuOpen] = useState(false);
+  const headerRtoMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!headerRtoMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      if (headerRtoMenuRef.current && !headerRtoMenuRef.current.contains(e.target as Node)) setHeaderRtoMenuOpen(false);
+    };
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [headerRtoMenuOpen]);
+
+  useEffect(() => {
+    if (!ridersLogModalOrderId) {
+      setRidersLogList([]);
+      return;
+    }
+    setRidersLogLoading(true);
+    fetch(`/api/food-orders/${ridersLogModalOrderId}/riders-log`)
+      .then((res) => res.ok ? res.json() : { riders: [] })
+      .then((data) => { setRidersLogList(data.riders || []); })
+      .catch(() => setRidersLogList([]))
+      .finally(() => setRidersLogLoading(false));
+  }, [ridersLogModalOrderId]);
+
   const [otpInput, setOtpInput] = useState('');
   const [otpVerified, setOtpVerified] = useState<Set<number>>(new Set());
   const [otpCache, setOtpCache] = useState<Record<number, { otp_code: string; otp_type: string }>>({});
@@ -715,10 +747,15 @@ function OrdersPageContent() {
             {/* Mobile: 2 rows (Row 1 = Today+Active, Row 2 = Filter + status + sound). Desktop: single row */}
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 md:gap-0">
               {/* Row 1 (mobile) / Left (desktop): On mobile Today+Active on right. On desktop title + all stats on left */}
-              <div className="flex justify-end md:justify-start md:flex-1 md:items-center md:gap-3 min-w-0 overflow-x-auto hide-scrollbar">
+              <div className="flex items-center justify-end md:justify-start md:flex-1 md:items-center md:gap-3 min-w-0 overflow-x-auto hide-scrollbar">
+                {/* Hamburger menu on left (mobile) */}
+                <div className="md:hidden mr-2">
+                  <MobileHamburgerButton />
+                </div>
+                {/* Title - always visible on desktop */}
                 <div className="hidden md:flex items-center gap-2 shrink-0">
                   <Sparkles className="w-5 h-5 text-orange-500 shrink-0" />
-                  <span className="font-semibold text-gray-900 whitespace-nowrap">Food Orders</span>
+                  <h1 className="text-lg font-bold text-gray-900 whitespace-nowrap">Food Orders</h1>
                 </div>
                 {stats && (
                   <div className="flex items-center gap-2 shrink-0">
@@ -802,15 +839,14 @@ function OrdersPageContent() {
                 <div className="hidden lg:flex flex-1 min-w-0 border-r border-gray-200 bg-gray-50/80 flex-col overflow-hidden order-1 p-3">
                 <div className="flex-1 overflow-y-auto min-h-0 hide-scrollbar overflow-x-hidden">
                   <div className="bg-white rounded-xl border border-gray-200/80 shadow-md overflow-hidden flex flex-col h-full min-h-[320px]">
-                    {/* Top row: Compact premium header with OTP */}
-                    <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-3 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200/60">
-                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    {/* Single header row: Order id + OTP + status + time | Compact timeline | Close */}
+                    <div className="shrink-0 flex items-center gap-3 px-4 py-2.5 bg-gradient-to-r from-gray-50 to-white border-b border-gray-200/60">
+                      <div className="flex items-center gap-2.5 min-w-0 shrink-0">
                         <FormattedOrderId 
                           formattedOrderId={selectedOrder.formatted_order_id} 
                           fallbackOrderId={selectedOrder.order_id}
                           size="base"
                         />
-                        {/* OTP always visible - bold and big */}
                         <div className="flex items-center gap-2 px-3 py-1 bg-gradient-to-r from-slate-100 to-slate-50 rounded-lg border border-slate-200">
                           <span className="text-xs font-semibold text-gray-700">OTP:</span>
                           {otpCache[selectedOrder.id] ? (
@@ -838,26 +874,37 @@ function OrdersPageContent() {
                         </span>
                         <span className="text-[10px] text-gray-500">{formatTimeAgo(selectedOrder.created_at)}</span>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <div className="flex items-center gap-2 w-full min-w-[200px] justify-end">
-                          <ActionBtns
-                            order={selectedOrder}
-                            onAccept={() => updateStatus(selectedOrder, 'ACCEPTED')}
-                            onReject={() => { setRejectModal(selectedOrder); closeOrderPanel(); }}
-                            onPreparing={() => updateStatus(selectedOrder, 'PREPARING')}
-                            onReady={() => updateStatus(selectedOrder, 'READY_FOR_PICKUP')}
-                            onDispatch={() => setDispatchModal(selectedOrder)}
-                            onComplete={() => updateStatus(selectedOrder, 'DELIVERED')}
-                            onRto={() => updateStatus(selectedOrder, 'RTO')}
-                            loading={actionLoading === selectedOrder.id}
-                            otpVerified={otpVerified.has(selectedOrder.id)}
-                            topRightLayout
-                          />
-                        </div>
-                        <button onClick={closeOrderPanel} className="p-1.5 hover:bg-gray-100 rounded-md shrink-0 transition-colors" aria-label="Close">
-                          <X size={16} className="text-gray-500" />
-                        </button>
+                      <div className="flex-1 min-w-0 flex items-center justify-center px-2">
+                        <OrderStatusTimeline order={selectedOrder} compact />
                       </div>
+                      {['PREPARING', 'READY_FOR_PICKUP', 'OUT_FOR_DELIVERY'].includes(selectedOrder.order_status || '') && (
+                        <div className="relative shrink-0" ref={headerRtoMenuRef}>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setHeaderRtoMenuOpen((o) => !o); }}
+                            disabled={actionLoading === selectedOrder.id}
+                            className="p-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition-colors"
+                            aria-label="More actions"
+                          >
+                            <MoreVertical size={18} />
+                          </button>
+                          {headerRtoMenuOpen && (
+                            <div className="absolute right-0 top-full mt-1 py-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 min-w-[100px]">
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); setRtoModalOrder(selectedOrder); setHeaderRtoMenuOpen(false); }}
+                                disabled={actionLoading === selectedOrder.id}
+                                className="w-full text-left px-3 py-2 text-sm font-medium text-orange-700 hover:bg-orange-50 rounded-none first:rounded-t-lg last:rounded-b-lg"
+                              >
+                                RTO
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <button onClick={closeOrderPanel} className="p-1.5 hover:bg-gray-100 rounded-md shrink-0 transition-colors" aria-label="Close">
+                        <X size={16} className="text-gray-500" />
+                      </button>
                     </div>
                     {/* Card body: compact premium layout */}
                     <div className="flex-1 overflow-y-auto p-4 min-h-0 overflow-x-hidden">
@@ -904,15 +951,28 @@ function OrdersPageContent() {
                           
                           {/* Rider - Full Details with Timeline (always show if rider_id exists) - auto width */}
                           {(selectedOrder.rider_id || selectedOrder.rider_name || selectedOrder.rider_details) ? (
-                            <div className="rounded-lg bg-gradient-to-br from-purple-50/50 to-purple-100/30 p-3 border border-purple-100/60 shadow-sm w-full">
+                            <div className="rounded-lg bg-gradient-to-br from-purple-50/50 to-purple-100/30 p-3 border border-purple-100/60 shadow-sm w-full relative">
+                              <button
+                                type="button"
+                                onClick={() => { setRidersLogModalOrderId(selectedOrder.id); setRidersLogModalOrderLabel(selectedOrder.formatted_order_id || `#${selectedOrder.order_id}`); }}
+                                className="absolute top-2 right-2 text-[10px] font-semibold text-purple-600 hover:text-purple-800 hover:underline"
+                              >
+                                Rider&apos;s log
+                              </button>
                               <div className="space-y-2.5">
                                 <div className="flex items-start gap-2.5">
                                   {selectedOrder.rider_details?.selfie_url ? (
-                                    <img 
-                                      src={selectedOrder.rider_details.selfie_url} 
-                                      alt={selectedOrder.rider_name || 'Rider'} 
-                                      className="w-8 h-8 rounded-full object-cover border-2 border-purple-200 shrink-0"
-                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => setRiderImageModalUrl(selectedOrder.rider_details?.selfie_url || null)}
+                                      className="shrink-0 rounded-full border-2 border-purple-200 overflow-hidden focus:outline-none focus:ring-2 focus:ring-purple-400"
+                                    >
+                                      <img 
+                                        src={selectedOrder.rider_details.selfie_url} 
+                                        alt={selectedOrder.rider_name || 'Rider'} 
+                                        className="w-8 h-8 rounded-full object-cover"
+                                      />
+                                    </button>
                                   ) : (
                                     <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center shrink-0">
                                       <Bike size={16} className="text-purple-600" />
@@ -985,6 +1045,23 @@ function OrdersPageContent() {
                         
                         {/* Center: Items & Amount - flexible width, uses remaining space */}
                         <div className="flex-1 min-w-0 space-y-3 lg:max-w-none">
+                          {/* Action buttons - same width as items card; 3-dot RTO is in header */}
+                          <div className="w-full flex gap-2 items-center">
+                            <ActionBtns
+                              order={selectedOrder}
+                              onAccept={() => updateStatus(selectedOrder, 'ACCEPTED')}
+                              onReject={() => { setRejectModal(selectedOrder); closeOrderPanel(); }}
+                              onPreparing={() => updateStatus(selectedOrder, 'PREPARING')}
+                              onReady={() => updateStatus(selectedOrder, 'READY_FOR_PICKUP')}
+                              onDispatch={() => setDispatchModal(selectedOrder)}
+                              onComplete={() => updateStatus(selectedOrder, 'DELIVERED')}
+                              onRto={() => setRtoModalOrder(selectedOrder)}
+                              loading={actionLoading === selectedOrder.id}
+                              otpVerified={otpVerified.has(selectedOrder.id)}
+                              topRightLayout
+                              hideRtoMenu
+                            />
+                          </div>
                           {/* Items - compact premium with QTY | Price | Amount */}
                           <div className="rounded-lg bg-white p-3 border border-gray-200 shadow-sm w-full">
                             <div className="flex items-center justify-between mb-2.5">
@@ -1039,13 +1116,6 @@ function OrdersPageContent() {
                         </div>
                       </div>
                       
-                      {/* Timeline moved below all info cards */}
-                      <div className="mt-4">
-                        <div className="rounded-lg bg-white p-3 border border-gray-200 shadow-sm">
-                          <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-2.5">Order Status Timeline</p>
-                          <OrderStatusTimeline order={selectedOrder} />
-                        </div>
-                      </div>
                       {/* Cancellation - compact */}
                       {(selectedOrder.rejected_reason || selectedOrder.cancelled_by_type) && (
                         <div className="mt-3 p-2.5 bg-red-50/80 rounded-lg border border-red-200/60">
@@ -1086,8 +1156,10 @@ function OrdersPageContent() {
                     onReady={() => updateStatus(selectedOrder, 'READY_FOR_PICKUP')}
                     onDispatch={() => setDispatchModal(selectedOrder)}
                     onComplete={() => updateStatus(selectedOrder, 'DELIVERED')}
-                    onRto={() => updateStatus(selectedOrder, 'RTO')}
+                    onRto={() => setRtoModalOrder(selectedOrder)}
                     actionLoading={actionLoading === selectedOrder.id}
+                    onOpenRidersLog={() => { setRidersLogModalOrderId(selectedOrder.id); setRidersLogModalOrderLabel(selectedOrder.formatted_order_id || `#${selectedOrder.order_id}`); }}
+                    onOpenRiderImage={(url) => setRiderImageModalUrl(url)}
                   />
                 </div>
 
@@ -1110,7 +1182,7 @@ function OrdersPageContent() {
                             setDispatchModal(order);
                             setOtpInput('');
                           }}
-                          onRto={() => updateStatus(order, 'RTO')}
+                          onRto={() => setRtoModalOrder(order)}
                           onComplete={() => updateStatus(order, 'DELIVERED')}
                           loading={actionLoading === order.id}
                           otpCode={otpCache[order.id]?.otp_code}
@@ -1151,7 +1223,7 @@ function OrdersPageContent() {
                       setDispatchModal(order);
                       setOtpInput('');
                     }}
-                    onRto={() => updateStatus(order, 'RTO')}
+                    onRto={() => setRtoModalOrder(order)}
                     onComplete={() => updateStatus(order, 'DELIVERED')}
                     loading={actionLoading === order.id}
                     otpCode={otpCache[order.id]?.otp_code}
@@ -1176,7 +1248,7 @@ function OrdersPageContent() {
                     onPreparing={() => updateStatus(order, 'PREPARING')}
                     onReady={() => updateStatus(order, 'READY_FOR_PICKUP')}
                     onDispatch={() => setDispatchModal(order)}
-                    onRto={() => updateStatus(order, 'RTO')}
+                    onRto={() => setRtoModalOrder(order)}
                     onComplete={() => updateStatus(order, 'DELIVERED')}
                     loading={actionLoading === order.id}
                     otpCode={otpCache[order.id]?.otp_code}
@@ -1399,6 +1471,147 @@ function OrdersPageContent() {
               </button>
             </div>
           </div>
+        </div>,
+        document.body
+      )}
+
+      {/* RTO warning modal */}
+      {rtoModalOrder && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-md flex items-end sm:items-center justify-center z-[100] p-3 sm:p-4">
+          <div className="bg-white rounded-t-xl sm:rounded-xl shadow-xl max-w-sm w-full p-4 sm:p-5 max-h-[90vh] overflow-y-auto">
+            <h3 className="font-semibold text-gray-900 mb-2">
+              Mark as RTO (Return to Origin) - Order{' '}
+              {rtoModalOrder.formatted_order_id ? (
+                <FormattedOrderId 
+                  formattedOrderId={rtoModalOrder.formatted_order_id} 
+                  fallbackOrderId={rtoModalOrder.order_id}
+                  size="base"
+                />
+              ) : (
+                `#${rtoModalOrder.order_id}`
+              )}
+            </h3>
+            <div className="mb-4 p-3 rounded-lg bg-orange-50 border border-orange-200">
+              <p className="text-sm text-orange-800">
+                This will mark the order as Return to Origin. The order will be considered undelivered and may affect your metrics. Are you sure you want to continue?
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setRtoModalOrder(null)}
+                className="flex-1 py-2.5 border border-gray-200 rounded-lg text-sm font-medium hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  updateStatus(rtoModalOrder, 'RTO');
+                  setRtoModalOrder(null);
+                }}
+                className="flex-1 py-2.5 bg-orange-600 text-white rounded-lg text-sm font-semibold hover:bg-orange-700"
+              >
+                Confirm RTO
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Rider's log modal – all riders assigned to this order */}
+      {ridersLogModalOrderId != null && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-md flex items-end sm:items-center justify-center z-[100] p-3 sm:p-4"
+          onClick={() => { setRidersLogModalOrderId(null); setRidersLogModalOrderLabel(null); }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Close modal"
+        >
+          <div
+            className="bg-white rounded-t-xl sm:rounded-xl shadow-xl max-w-md w-full max-h-[85vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="shrink-0 flex items-center justify-between p-4 border-b border-gray-200">
+              <h3 className="font-semibold text-gray-900">
+                Rider&apos;s log
+                {ridersLogModalOrderLabel && <span className="text-gray-500 font-medium ml-1.5">({ridersLogModalOrderLabel})</span>}
+              </h3>
+              <button type="button" onClick={() => { setRidersLogModalOrderId(null); setRidersLogModalOrderLabel(null); }} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors" aria-label="Close">
+                <X size={18} className="text-gray-500" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4">
+              {ridersLogLoading ? (
+                <p className="text-sm text-gray-500">Loading...</p>
+              ) : ridersLogList.length === 0 ? (
+                <p className="text-sm text-gray-500">No rider assignment history for this order.</p>
+              ) : (
+                <ul className="space-y-3">
+                  {ridersLogList.map((r, idx) => {
+                    const fmt = (s: string | null) => (s ? new Date(s).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' }) : '—');
+                    return (
+                      <li key={`${r.rider_id}-${idx}`} className="p-3 rounded-lg border border-gray-200 bg-gray-50/50">
+                        <div className="flex items-start gap-3">
+                          {r.selfie_url ? (
+                            <button
+                              type="button"
+                              onClick={() => setRiderImageModalUrl(r.selfie_url)}
+                              className="shrink-0 w-10 h-10 rounded-full overflow-hidden border-2 border-purple-200 focus:outline-none focus:ring-2 focus:ring-purple-400"
+                            >
+                              <img src={r.selfie_url} alt={r.rider_name || 'Rider'} className="w-full h-full object-cover" />
+                            </button>
+                          ) : (
+                            <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center shrink-0">
+                              <Bike size={18} className="text-purple-600" />
+                            </div>
+                          )}
+                          <div className="min-w-0 flex-1 text-sm">
+                            <p className="font-semibold text-gray-900">{r.rider_name || `Rider #${r.rider_id}`}</p>
+                            {r.rider_mobile && (
+                              <a href={`tel:${r.rider_mobile}`} className="text-purple-600 hover:underline">{r.rider_mobile}</a>
+                            )}
+                            <p className="text-[10px] text-gray-500 mt-1 capitalize">{r.assignment_status?.replace(/_/g, ' ')}</p>
+                            <div className="mt-2 text-[10px] text-gray-600 space-y-0.5">
+                              <p>Assigned: {fmt(r.assigned_at)}</p>
+                              {r.accepted_at && <p>Accepted: {fmt(r.accepted_at)}</p>}
+                              {r.reached_merchant_at && <p>Reached store: {fmt(r.reached_merchant_at)}</p>}
+                              {r.picked_up_at && <p>Picked up: {fmt(r.picked_up_at)}</p>}
+                              {r.delivered_at && <p>Delivered: {fmt(r.delivered_at)}</p>}
+                              {r.rejected_at && <p>Rejected: {fmt(r.rejected_at)}</p>}
+                              {r.cancelled_at && <p>Cancelled: {fmt(r.cancelled_at)}</p>}
+                            </div>
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Rider image lightbox */}
+      {riderImageModalUrl && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-[110] p-4"
+          onClick={() => setRiderImageModalUrl(null)}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => e.key === 'Escape' && setRiderImageModalUrl(null)}
+          aria-label="Close image"
+        >
+          <button type="button" onClick={() => setRiderImageModalUrl(null)} className="absolute top-3 right-3 p-2 rounded-full bg-white/20 hover:bg-white/30 text-white" aria-label="Close">
+            <X size={24} />
+          </button>
+          <img
+            src={riderImageModalUrl}
+            alt="Rider"
+            className="max-w-full max-h-[90vh] object-contain rounded-lg"
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>,
         document.body
       )}
@@ -1688,7 +1901,7 @@ function RiderTimeline({ riderId, orderId }: { riderId: number | null | undefine
   );
 }
 
-function OrderStatusTimeline({ order }: { order: OrdersFoodRow }) {
+function OrderStatusTimeline({ order, compact }: { order: OrdersFoodRow; compact?: boolean }) {
   const status = order.order_status || 'CREATED';
   const isTerminal = status === 'CANCELLED' || status === 'RTO';
   const lastCompletedIdx = lastCompletedStepIndex(order);
@@ -1696,6 +1909,82 @@ function OrderStatusTimeline({ order }: { order: OrdersFoodRow }) {
   const formatTs = (s: string | null | undefined) => (s ? new Date(s).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true }) : '');
 
   const stepsToShow = isTerminal ? ORDER_STEPS.slice(0, lastCompletedIdx + 1) : ORDER_STEPS;
+
+  if (compact) {
+    const terminalLabel = status === 'CANCELLED' ? 'Cancelled' : 'RTO';
+    return (
+      <div className="flex-1 w-full min-w-0 flex flex-col">
+        {/* Row 1: Timeline heading 45° tilt; step titles – same left column width as rows 2 & 3 for perfect alignment */}
+        <div className="flex items-center w-full">
+          <div className="shrink-0 w-16 mr-3 flex items-center justify-center min-h-[20px] mt-1.5">
+            {/* <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide px-2 py-1 rounded-md bg-blue-100 border border-gray-200/80 inline-flex items-center justify-center origin-center" style={{ transform: 'rotate(-50deg)' }}></span> */}
+          </div>
+          <div className="flex-1 flex min-w-0">
+            {stepsToShow.map((step) => (
+              <div key={step.key} className="flex-1 flex flex-col items-center min-w-0 px-0.5">
+                <span className="text-[9px] font-medium text-gray-600 text-center leading-tight truncate w-full" title={step.label}>{step.label}</span>
+              </div>
+            ))}
+            {isTerminal && (
+              <div className="flex-1 flex flex-col items-center min-w-0 px-0.5">
+                <span className="text-[9px] font-medium text-gray-600 text-center leading-tight">{terminalLabel}</span>
+              </div>
+            )}
+          </div>
+        </div>
+        {/* Row 2: beech me – circles + connectors (single line) */}
+        <div className="flex items-center w-full mt-1">
+          <div className="shrink-0 w-16 mr-3" aria-hidden />
+          <div className="flex-1 flex items-center min-w-0">
+            {stepsToShow.map((step, i) => {
+              const stepIdx = orderStepIndex(step.status);
+              const done = currentIdx >= stepIdx || (status === step.status);
+              const prevDone = i > 0 && (currentIdx >= orderStepIndex(stepsToShow[i - 1].status));
+              return (
+                <div key={step.key} className="flex-1 flex items-center min-w-0">
+                  <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${done ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'}`}>
+                    {done ? <Check size={10} strokeWidth={3} /> : <span className="text-[8px] font-bold">{i + 1}</span>}
+                  </div>
+                  {i < stepsToShow.length - 1 ? (
+                    <div className={`flex-1 h-0.5 min-w-[6px] ${prevDone ? 'bg-green-400' : 'bg-gray-200'}`} />
+                  ) : null}
+                </div>
+              );
+            })}
+            {isTerminal && (
+              <>
+                <div className="flex-1 h-0.5 min-w-[6px] bg-gray-300" />
+                <div className="flex-1 flex items-center min-w-0">
+                  <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${status === 'CANCELLED' ? 'bg-red-100 text-red-600' : 'bg-orange-100 text-orange-600'}`}>
+                    <XCircle size={12} strokeWidth={2.5} />
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+        {/* Row 3: time neeche */}
+        <div className="flex items-start w-full mt-1">
+          <div className="shrink-0 w-16 mr-3" aria-hidden />
+          <div className="flex-1 flex min-w-0">
+            {stepsToShow.map((step) => {
+              const ts = step.at(order);
+              return (
+                <div key={step.key} className="flex-1 flex flex-col items-center min-w-0 px-0.5">
+                  {ts ? <span className="text-[8px] text-gray-500 text-center">{formatTs(ts)}</span> : <span className="text-[8px] text-gray-400">—</span>}
+                </div>
+              );
+            })}
+            {isTerminal && (
+              <div className="flex-1 flex flex-col items-center min-w-0 px-0.5">
+                {order.cancelled_at ? <span className="text-[8px] text-gray-500 text-center">{formatTs(order.cancelled_at)}</span> : <span className="text-[8px] text-gray-400">—</span>}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-start overflow-x-auto hide-scrollbar">
@@ -1753,6 +2042,8 @@ function OrderDetailMobile({
   onComplete,
   onRto,
   actionLoading,
+  onOpenRidersLog,
+  onOpenRiderImage,
 }: {
   order: OrdersFoodRow;
   onClose: () => void;
@@ -1771,6 +2062,8 @@ function OrderDetailMobile({
   onComplete: () => void;
   onRto: () => void;
   actionLoading: boolean;
+  onOpenRidersLog?: () => void;
+  onOpenRiderImage?: (url: string) => void;
 }) {
   const status = order.order_status || 'CREATED';
   const statusColor =
@@ -1866,15 +2159,38 @@ function OrderDetailMobile({
 
         {/* Rider - Full Details with Timeline */}
         {(order.rider_id || order.rider_name || order.rider_details) ? (
-          <div className="rounded-lg bg-gradient-to-br from-purple-50/50 to-purple-100/30 p-3 border border-purple-100/60 shadow-sm">
+          <div className="rounded-lg bg-gradient-to-br from-purple-50/50 to-purple-100/30 p-3 border border-purple-100/60 shadow-sm relative">
+            {onOpenRidersLog && (
+              <button
+                type="button"
+                onClick={onOpenRidersLog}
+                className="absolute top-2 right-2 text-[10px] font-semibold text-purple-600 hover:text-purple-800 hover:underline"
+              >
+                Rider&apos;s log
+              </button>
+            )}
             <div className="space-y-2.5">
               <div className="flex items-start gap-2.5">
                 {order.rider_details?.selfie_url ? (
-                  <img 
-                    src={order.rider_details.selfie_url} 
-                    alt={order.rider_name || 'Rider'} 
-                    className="w-8 h-8 rounded-full object-cover border-2 border-purple-200 shrink-0"
-                  />
+                  onOpenRiderImage ? (
+                    <button
+                      type="button"
+                      onClick={() => onOpenRiderImage(order.rider_details!.selfie_url!)}
+                      className="shrink-0 rounded-full border-2 border-purple-200 overflow-hidden focus:outline-none focus:ring-2 focus:ring-purple-400"
+                    >
+                      <img 
+                        src={order.rider_details.selfie_url} 
+                        alt={order.rider_name || 'Rider'} 
+                        className="w-8 h-8 rounded-full object-cover"
+                      />
+                    </button>
+                  ) : (
+                    <img 
+                      src={order.rider_details.selfie_url} 
+                      alt={order.rider_name || 'Rider'} 
+                      className="w-8 h-8 rounded-full object-cover border-2 border-purple-200 shrink-0"
+                    />
+                  )
                 ) : (
                   <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center shrink-0">
                     <Bike size={16} className="text-purple-600" />
@@ -2368,6 +2684,7 @@ function ActionBtns({
   compact,
   otpVerified,
   topRightLayout,
+  hideRtoMenu,
 }: {
   order: OrdersFoodRow;
   onAccept: () => void;
@@ -2382,12 +2699,24 @@ function ActionBtns({
   otpVerified?: boolean;
   /** When true: actions at top-right, primary button full width, Reject/secondary half width */
   topRightLayout?: boolean;
+  /** When true: do not render 3-dot RTO menu (e.g. when RTO is in header) */
+  hideRtoMenu?: boolean;
 }) {
   const status = order.order_status || 'CREATED';
   const dis = loading;
   const btnBase = 'rounded-xl font-medium disabled:opacity-50 min-w-0 transition-all duration-200 active:scale-[0.98] shadow-sm border border-transparent';
   const primaryFull = topRightLayout ? 'flex-[2] px-4 py-2.5 text-sm font-semibold' : '';
   const rejectHalf = topRightLayout ? 'flex-1 px-3 py-2.5 text-sm font-semibold' : '';
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [menuOpen]);
 
   if (status === 'CREATED' || status === 'NEW') {
     return (
@@ -2422,9 +2751,38 @@ function ActionBtns({
       </button>
     );
   }
+  const RtoMenu = () => {
+    if (!onRto || hideRtoMenu) return null;
+    return (
+      <div className="relative shrink-0" ref={menuRef}>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); setMenuOpen((o) => !o); }}
+          disabled={dis}
+          className="p-2 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 disabled:opacity-50 transition-colors"
+          aria-label="More actions"
+        >
+          <MoreVertical size={18} />
+        </button>
+        {menuOpen && (
+          <div className="absolute right-0 top-full mt-1 py-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 min-w-[100px]">
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onRto(); setMenuOpen(false); }}
+              disabled={dis}
+              className="w-full text-left px-3 py-2 text-sm font-medium text-orange-700 hover:bg-orange-50 rounded-none first:rounded-t-lg last:rounded-b-lg"
+            >
+              RTO
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   if (status === 'PREPARING') {
     return (
-      <div className={`flex gap-2 ${topRightLayout ? 'w-full' : 'flex-wrap'}`}>
+      <div className={`flex gap-2 items-center ${topRightLayout ? 'w-full' : 'flex-wrap'}`}>
         <button
           onClick={(e) => { e.stopPropagation(); onReady(); }}
           disabled={dis}
@@ -2432,21 +2790,13 @@ function ActionBtns({
         >
           Ready
         </button>
-        {onRto && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onRto(); }}
-            disabled={dis}
-            className={`${btnBase} ${topRightLayout ? 'flex-1 px-3 py-2.5 text-sm font-semibold' : ''} ${compact ? 'px-2.5 py-1.5 text-xs' : 'px-3 py-2 text-sm'} bg-orange-50 text-orange-700 hover:bg-orange-100 border-orange-200/60`}
-          >
-            RTO
-          </button>
-        )}
+        <RtoMenu />
       </div>
     );
   }
   if (status === 'READY_FOR_PICKUP') {
     return (
-      <div className={`flex gap-2 ${topRightLayout ? 'w-full' : 'flex-wrap'}`}>
+      <div className={`flex gap-2 items-center ${topRightLayout ? 'w-full' : 'flex-wrap'}`}>
         <button
           onClick={(e) => { e.stopPropagation(); onDispatch(); }}
           disabled={dis}
@@ -2454,21 +2804,13 @@ function ActionBtns({
         >
           Dispatch
         </button>
-        {onRto && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onRto(); }}
-            disabled={dis}
-            className={`${btnBase} ${topRightLayout ? 'flex-1 px-3 py-2.5 text-sm font-semibold' : ''} ${compact ? 'px-2.5 py-1.5 text-xs' : 'px-3 py-2 text-sm'} bg-orange-50 text-orange-700 hover:bg-orange-100 border-orange-200/60`}
-          >
-            RTO
-          </button>
-        )}
+        <RtoMenu />
       </div>
     );
   }
   if (status === 'OUT_FOR_DELIVERY') {
     return (
-      <div className={`flex gap-2 ${topRightLayout ? 'w-full' : 'flex-wrap'}`}>
+      <div className={`flex gap-2 items-center ${topRightLayout ? 'w-full' : 'flex-wrap'}`}>
         <button
           onClick={(e) => { e.stopPropagation(); onComplete(); }}
           disabled={dis}
@@ -2476,15 +2818,7 @@ function ActionBtns({
         >
           Complete
         </button>
-        {onRto && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onRto(); }}
-            disabled={dis}
-            className={`${btnBase} ${topRightLayout ? 'flex-1 px-3 py-2.5 text-sm font-semibold' : ''} ${compact ? 'px-2.5 py-1.5 text-xs' : 'px-3 py-2 text-sm'} bg-orange-50 text-orange-700 hover:bg-orange-100 border-orange-200/60`}
-          >
-            RTO
-          </button>
-        )}
+        <RtoMenu />
       </div>
     );
   }

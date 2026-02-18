@@ -16,6 +16,10 @@ interface MXLayoutWhiteProps {
   leftSidebarCollapsed?: boolean
   /** Optional content shown inside the mobile hamburger menu (e.g. stats for food-orders) */
   mobileMenuExtra?: React.ReactNode
+  /** Optional filters/stats content shown in sidebar (desktop and mobile) */
+  sidebarFilters?: React.ReactNode
+  /** When true, hides the Need Help Badge */
+  hideHelpBadge?: boolean
 }
 
 export const MXLayoutWhite: React.FC<MXLayoutWhiteProps> = ({
@@ -25,6 +29,8 @@ export const MXLayoutWhite: React.FC<MXLayoutWhiteProps> = ({
   sidebarPosition = 'left',
   leftSidebarCollapsed = false,
   mobileMenuExtra,
+  sidebarFilters,
+  hideHelpBadge = false,
 }) => {
   const isRight = sidebarPosition === 'right';
   // Small/mobile (≤767px): sidebar stays collapsed; never allow expand. Desktop: unchanged.
@@ -51,6 +57,7 @@ export const MXLayoutWhite: React.FC<MXLayoutWhiteProps> = ({
         collapsed={effectiveCollapsed}
         onCollapsedChange={(v) => { if (!isSmallScreen) setEffectiveCollapsed(v); }}
         mobileMenuExtra={mobileMenuExtra}
+        sidebarFilters={sidebarFilters}
       />
       <main className={`flex-1 flex flex-col overflow-hidden h-full relative z-0 transition-[margin] duration-200 ${effectiveCollapsed ? (isRight ? 'mr-0 md:mr-16' : 'ml-0 md:ml-16') : (isRight ? 'mr-0 md:mr-64' : 'ml-0 md:ml-64')}`}>
         <ParentBlockedBanner />
@@ -58,8 +65,8 @@ export const MXLayoutWhite: React.FC<MXLayoutWhiteProps> = ({
           {children}
         </div>
       </main>
-      {/* Need Help Badge (fixed, always visible) */}
-      <NeedHelpBadge />
+      {/* Need Help Badge (fixed, always visible unless hidden) */}
+      {!hideHelpBadge && <NeedHelpBadge />}
     </div>
   )
 }

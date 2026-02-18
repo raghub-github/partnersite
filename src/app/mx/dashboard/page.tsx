@@ -20,15 +20,13 @@ import {
   Monitor,
   Smartphone,
   Activity,
-  Pause,
-  UtensilsCrossed,
-  Tag,
-  FileBarChart,
   ArrowRight,
   CheckCircle2,
   XCircle,
   Loader2,
-  Calendar
+  Calendar,
+  SlidersHorizontal,
+  ChevronUp
 } from 'lucide-react'
 import {
   LineChart,
@@ -44,7 +42,9 @@ import {
   Tooltip,
   ResponsiveContainer,
   BarChart,
-  Bar
+  Bar,
+  ComposedChart,
+  Legend
 } from 'recharts'
 import { Toaster, toast } from 'sonner'
 import { Suspense } from 'react'
@@ -53,6 +53,7 @@ import { Suspense } from 'react'
 import { useMerchantSession } from '@/context/MerchantSessionContext';
 import { PageSkeletonDashboard } from '@/components/PageSkeleton';
 import { createClient } from '@/lib/supabase/client';
+import { MobileHamburgerButton } from '@/components/MobileHamburgerButton';
 
 export const dynamic = 'force-dynamic'
 
@@ -71,6 +72,119 @@ function formatTimeHMS(t: string): string {
   if (parts.length === 2) return `${t}:00`
   if (parts.length === 1) return `${t.padStart(2, '0')}:00:00`
   return t
+}
+
+/** Compact chart card header: title, date range, optional filter button (hidden when hideFilterButton) */
+function ChartCardHeader({
+  title,
+  dateRange,
+  onFilterClick,
+  filterOpen,
+  hideFilterButton = false,
+  children,
+}: {
+  title: string
+  dateRange: string
+  onFilterClick: () => void
+  filterOpen: boolean
+  hideFilterButton?: boolean
+  children?: React.ReactNode
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2 mb-3 min-h-[28px]">
+      <h3 className="text-sm font-bold text-gray-900 truncate">{title}</h3>
+      <div className="flex items-center gap-1.5 shrink-0">
+        <span className="text-[10px] text-gray-500 tabular-nums">{dateRange}</span>
+        {!hideFilterButton && (
+          <button
+            type="button"
+            onClick={onFilterClick}
+            className={`p-1.5 rounded-lg transition-colors ${filterOpen ? 'bg-orange-100 text-orange-600' : 'hover:bg-gray-100 text-gray-500'}`}
+            aria-label="Filter chart"
+          >
+            <SlidersHorizontal size={14} />
+          </button>
+        )}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+/** Compact filter popover for chart cards */
+function ChartFilterPopover({
+  open,
+  onClose,
+  dateFrom,
+  dateTo,
+  onDateFromChange,
+  onDateToChange,
+  orderType,
+  onOrderTypeChange,
+  onApply,
+}: {
+  open: boolean
+  onClose: () => void
+  dateFrom: string
+  dateTo: string
+  onDateFromChange: (v: string) => void
+  onDateToChange: (v: string) => void
+  orderType: string
+  onOrderTypeChange: (v: string) => void
+  onApply: () => void
+}) {
+  if (!open) return null
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} aria-hidden="true" />
+      <div
+        className="absolute right-0 top-full mt-1 z-50 w-56 rounded-lg border border-gray-200 bg-white p-3 shadow-lg"
+        style={{ minWidth: '200px' }}
+      >
+        <p className="text-xs font-semibold text-gray-700 mb-2">Filter</p>
+        <div className="space-y-2">
+          <div>
+            <label className="text-[10px] text-gray-500 block mb-0.5">Date range</label>
+            <div className="grid grid-cols-2 gap-1">
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => onDateFromChange(e.target.value)}
+                className="text-xs border border-gray-300 rounded px-2 py-1.5"
+              />
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => onDateToChange(e.target.value)}
+                className="text-xs border border-gray-300 rounded px-2 py-1.5"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-[10px] text-gray-500 block mb-0.5">Order type</label>
+            <select
+              value={orderType}
+              onChange={(e) => onOrderTypeChange(e.target.value)}
+              className="w-full text-xs border border-gray-300 rounded px-2 py-1.5"
+            >
+              <option value="all">All</option>
+              <option value="veg">Veg</option>
+              <option value="non_veg">Non-Veg</option>
+              <option value="mixed">Mixed</option>
+            </select>
+          </div>
+        </div>
+        <div className="flex gap-2 mt-3">
+          <button type="button" onClick={onClose} className="flex-1 text-xs py-1.5 border border-gray-300 rounded text-gray-700">
+            Cancel
+          </button>
+          <button type="button" onClick={() => { onApply(); onClose(); }} className="flex-1 text-xs py-1.5 bg-orange-600 text-white rounded font-medium">
+            Apply
+          </button>
+        </div>
+      </div>
+    </>
+  )
 }
 
 function StatCard({ title, value, icon, color }: StatCardProps) {
@@ -123,6 +237,8 @@ function DashboardContent() {
   const [lastToggledAt, setLastToggledAt] = useState<string | null>(null)
   const [opensAt, setOpensAt] = useState<string | null>(null)
   const [countdownTick, setCountdownTick] = useState(0)
+  const [manualActivationLock, setManualActivationLock] = useState(false)
+  const [isTodayScheduledClosed, setIsTodayScheduledClosed] = useState(false)
 
   // Store close: popup modal (no in-card expansion)
   const [showClosePopup, setShowClosePopup] = useState(false)
@@ -158,8 +274,20 @@ function DashboardContent() {
   const [hourlyHeatmap, setHourlyHeatmap] = useState<{ hour: number; count: number; pct: number }[]>([])
   const [weeklyPerformance, setWeeklyPerformance] = useState<{ w: string; orders: number }[]>([])
   const [deliverySuccessRate, setDeliverySuccessRate] = useState<{ d: string; rate: number }[]>([])
+  const [stackedTrend, setStackedTrend] = useState<{ day: string; orders: number; revenue: number; cancellations: number }[]>([])
+  const [funnelData, setFunnelData] = useState<{ stage: string; value: number; fill: string }[]>([])
+  const [donutVegNonVeg, setDonutVegNonVeg] = useState<{ name: string; value: number; color: string; pct?: number }[]>([])
+  const [dateRangeLabel, setDateRangeLabel] = useState('')
+  const [salesTotal, setSalesTotal] = useState(0)
+  const [salesGrowth, setSalesGrowth] = useState(0)
+  const [viewsTotal, setViewsTotal] = useState(0)
+  const [viewsGrowth, setViewsGrowth] = useState(0)
   const [analyticsLoading, setAnalyticsLoading] = useState(true)
-  const [statusLog, setStatusLog] = useState<{ id: number; action: string; restriction_type: string | null; close_reason: string | null; performed_by_name: string | null; performed_by_id: string | null; performed_by_email: string | null; created_at: string }[]>([])
+  const [chartFilterOpen, setChartFilterOpen] = useState<string | null>(null)
+  const [chartDateFrom, setChartDateFrom] = useState('')
+  const [chartDateTo, setChartDateTo] = useState('')
+  const [chartOrderType, setChartOrderType] = useState('all')
+  const [statusLog, setStatusLog] = useState<{ id: string | number; action: string; action_field?: string | null; restriction_type?: string | null; close_reason?: string | null; performed_by_name: string | null; performed_by_id: string | number | null; performed_by_email: string | null; created_at: string; type?: 'status' | 'settings' }[]>([])
 
   // Get store ID and default stats date (today)
   useEffect(() => {
@@ -185,6 +313,16 @@ function DashboardContent() {
       setStatsDate(new Date().toISOString().slice(0, 10))
     }
   }, [])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && chartDateFrom === '' && chartDateTo === '') {
+      const end = new Date()
+      const start = new Date()
+      start.setDate(start.getDate() - 29)
+      setChartDateFrom(start.toISOString().slice(0, 10))
+      setChartDateTo(end.toISOString().slice(0, 10))
+    }
+  }, [chartDateFrom, chartDateTo])
 
   // Load store data
   useEffect(() => {
@@ -242,6 +380,8 @@ function DashboardContent() {
         setRestrictionType(data.restriction_type || null)
         setWithinHoursButRestricted(data.within_hours_but_restricted === true)
         setLastToggledAt(data.last_toggled_at || null)
+        setManualActivationLock(data.block_auto_open === true)
+        setIsTodayScheduledClosed(data.is_today_scheduled_closed === true)
         if ((data.today_slots?.length ?? 0) > 0) {
           const first = data.today_slots[0]
           setOpeningTime(first.start || '09:00')
@@ -314,10 +454,53 @@ function DashboardContent() {
     fetchDeliverySettings()
   }, [fetchDeliverySettings])
 
-  // Store status log for Recent activities & Audit log
+  // Save manual activation lock to database
+  const saveManualActivationLock = React.useCallback(async (enabled: boolean) => {
+    if (!storeId) return;
+    try {
+      const res = await fetch('/api/store-operations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          store_id: storeId,
+          action: 'update_manual_lock',
+          block_auto_open: enabled,
+        }),
+      });
+
+      if (!res.ok) {
+        let errorText = 'Failed to save';
+        try {
+          const errorData = await res.json();
+          errorText = errorData.error || errorText;
+        } catch (e) {
+          errorText = await res.text() || errorText;
+        }
+        console.error('Failed to save manual activation lock:', errorText);
+        toast.error('Failed to save manual activation lock setting');
+        // Revert toggle on error
+        setManualActivationLock(!enabled);
+        return;
+      }
+
+      const result = await res.json();
+      if (result.success) {
+        toast.success(enabled ? '🔒 Manual activation lock enabled' : '🔓 Manual activation lock disabled');
+        // Refresh store operations to get updated state
+        fetchStoreOperations();
+      }
+    } catch (error) {
+      console.error('Error saving manual activation lock:', error);
+      toast.error('Failed to save manual activation lock setting');
+      // Revert toggle on error
+      setManualActivationLock(!enabled);
+    }
+  }, [storeId, fetchStoreOperations]);
+
+  // Store status log for Recent activities & Audit log (now uses combined audit logs API)
   useEffect(() => {
     if (!storeId) return
-    fetch(`/api/merchant/store-status-log?storeId=${encodeURIComponent(storeId)}&limit=30`)
+    fetch(`/api/merchant/audit-logs?storeId=${encodeURIComponent(storeId)}&limit=30`)
       .then((res) => res.json())
       .then((data) => { if (data.logs) setStatusLog(data.logs); })
       .catch(() => setStatusLog([]))
@@ -348,11 +531,14 @@ function DashboardContent() {
     }
   }, [storeId, statsDate])
 
-  // Charts from dashboard-analytics (orders_food, last 7 days / 4 weeks)
+  // Charts from dashboard-analytics (orders_food)
   const fetchCharts = React.useCallback(async () => {
     if (!storeId) return
     setAnalyticsLoading(true)
-    fetch(`/api/dashboard-analytics?store_id=${encodeURIComponent(storeId)}`)
+    const params = new URLSearchParams({ store_id: storeId })
+    if (chartDateFrom) params.set('date_from', chartDateFrom)
+    if (chartDateTo) params.set('date_to', chartDateTo)
+    fetch(`/api/dashboard-analytics?${params}`)
       .then((res) => res.json())
       .then((data) => {
         setOrdersTrend(Array.isArray(data.ordersTrend) ? data.ordersTrend : [])
@@ -361,10 +547,18 @@ function DashboardContent() {
         setHourlyHeatmap(Array.isArray(data.hourlyHeatmap) ? data.hourlyHeatmap : [])
         setWeeklyPerformance(Array.isArray(data.weeklyPerformance) ? data.weeklyPerformance : [])
         setDeliverySuccessRate(Array.isArray(data.deliverySuccessRate) ? data.deliverySuccessRate : [])
+        setStackedTrend(Array.isArray(data.stackedTrend) ? data.stackedTrend : [])
+        setFunnelData(Array.isArray(data.funnelData) ? data.funnelData : [])
+        setDonutVegNonVeg(Array.isArray(data.donutVegNonVeg) ? data.donutVegNonVeg : [])
+        setDateRangeLabel(data.dateRangeLabel || '')
+        setSalesTotal(data.salesTotal ?? 0)
+        setSalesGrowth(data.salesGrowth ?? 0)
+        setViewsTotal(data.viewsTotal ?? 0)
+        setViewsGrowth(data.viewsGrowth ?? 0)
       })
       .catch(() => {})
       .finally(() => setAnalyticsLoading(false))
-  }, [storeId])
+  }, [storeId, chartDateFrom, chartDateTo])
 
   useEffect(() => {
     fetchStats()
@@ -863,14 +1057,14 @@ function DashboardContent() {
           <div className="dashboard-scroll hide-scrollbar flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 sm:px-6 lg:px-8 py-5">
             <div className="max-w-[1600px] mx-auto space-y-5">
               {/* Compact header – minimal height */}
-              <div className="shrink-0 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 py-1.5 bg-[#f8fafc] border-b border-gray-200/60">
-                <div className="flex items-center justify-between gap-2">
-                  {/* Spacer for hamburger menu on left (mobile) */}
-                  <div className="md:hidden w-12"></div>
-                  {/* Heading on right for mobile, left for desktop */}
-                  <div className="ml-auto md:ml-0">
-                    <h1 className="text-sm sm:text-base font-bold text-gray-900 tracking-tight">Dashboard</h1>
-                    <p className="text-[10px] text-gray-500">GatiMitra · Operations command center</p>
+              <div className="shrink-0 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 py-2.5 sm:py-3 bg-white border-b border-gray-200 shadow-sm">
+                <div className="flex items-center gap-3">
+                  {/* Hamburger menu on left (mobile) */}
+                  <MobileHamburgerButton />
+                  {/* Heading - properly aligned */}
+                  <div className="flex-1 min-w-0">
+                    <h1 className="text-base sm:text-lg md:text-xl font-bold text-gray-900">Dashboard</h1>
+                    <p className="text-xs sm:text-sm text-gray-600 mt-0.5">GatiMitra · Operations command center</p>
                   </div>
                 </div>
               </div>
@@ -943,7 +1137,7 @@ function DashboardContent() {
                     </p>
                   )}
                   {!isStoreOpen && (() => {
-                    const lastClosed = statusLog.find((l) => l.action === 'CLOSED')
+                    const lastClosed = statusLog.find((l) => l.action === 'CLOSED' || l.action === 'Store closed')
                     return lastClosed?.close_reason ? (
                       <p className="text-[10px] font-medium mt-1.5 text-gray-700 bg-white/60 rounded px-2 py-1 border border-gray-200/80">
                         Reason: <span className="font-semibold text-gray-900">{lastClosed.close_reason}</span>
@@ -960,7 +1154,12 @@ function DashboardContent() {
                   {withinHoursButRestricted && (
                     <p className="text-[10px] text-amber-800 mt-1.5 font-medium bg-amber-100/60 rounded px-2 py-1">Store is within operating hours but remains OFF due to manual restriction.</p>
                   )}
-                  {!isStoreOpen && opensAt && !withinHoursButRestricted && (() => {
+                  {!isStoreOpen && isTodayScheduledClosed && (
+                    <p className="text-[10px] text-gray-700 mt-1.5 font-medium bg-gray-100/60 rounded px-2 py-1 border border-gray-200">
+                      Today Closed (Scheduled Closed)
+                    </p>
+                  )}
+                  {!isStoreOpen && !isTodayScheduledClosed && opensAt && !withinHoursButRestricted && (() => {
                     const ms = new Date(opensAt).getTime() - Date.now()
                     if (ms <= 0) return <p className="text-[10px] text-red-600 mt-1 font-medium">Opens now</p>
                     const h = Math.floor(ms / 3600000)
@@ -978,6 +1177,27 @@ function DashboardContent() {
                       {todaySlots.length > 0 ? todaySlots.map((s) => `${formatTimeHMS(s.start)}–${formatTimeHMS(s.end)}`).join(', ') : 'No slots'}
                     </p>
                   )}
+                  
+                  {/* Manual Activation Lock Toggle */}
+                  <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-200/60">
+                    <div className="flex-1">
+                      <p className="text-[10px] font-semibold text-gray-700">Manual Activation Lock</p>
+                      <p className="text-[9px] text-gray-500 mt-0.5">Prevent automatic store opening</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={manualActivationLock}
+                        onChange={async (e) => {
+                          const newValue = e.target.checked;
+                          setManualActivationLock(newValue);
+                          await saveManualActivationLock(newValue);
+                        }}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-red-600"></div>
+                    </label>
+                  </div>
                 </div>
 
                 {/* Delivery status */}
@@ -1059,10 +1279,108 @@ function DashboardContent() {
                 <StatCard title="Acceptance %" value={`${acceptanceRate}%`} icon={<CheckCircle2 size={18} />} color="emerald" />
               </div>
 
+              {/* ═══ SALES & VIEWS (image-style advanced charts) ═══ */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4">
+                  <div className="relative">
+                    <ChartCardHeader
+                      title="Sales"
+                      dateRange={dateRangeLabel || '—'}
+                      onFilterClick={() => setChartFilterOpen(prev => prev === 'sales' ? null : 'sales')}
+                      filterOpen={chartFilterOpen === 'sales'}
+                    />
+                    {chartFilterOpen === 'sales' && (
+                    <ChartFilterPopover
+                      open
+                      onClose={() => setChartFilterOpen(null)}
+                      dateFrom={chartDateFrom}
+                      dateTo={chartDateTo}
+                      onDateFromChange={setChartDateFrom}
+                      onDateToChange={setChartDateTo}
+                      orderType={chartOrderType}
+                      onOrderTypeChange={setChartOrderType}
+                      onApply={() => fetchCharts()}
+                    />
+                  )}
+                  </div>
+                  <p className="text-2xl font-bold text-gray-900">₹{salesTotal.toLocaleString('en-IN')}</p>
+                  <p className={`text-xs font-medium flex items-center gap-1 mt-0.5 ${salesGrowth >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                    <ChevronUp size={12} className={salesGrowth < 0 ? 'rotate-180' : ''} /> {salesGrowth >= 0 ? '+' : ''}{salesGrowth}% Growth in the last {chartDateFrom && chartDateTo ? Math.ceil((new Date(chartDateTo).getTime() - new Date(chartDateFrom).getTime()) / 86400000) + 1 : 30} days
+                  </p>
+                  <div className="h-[140px] mt-3">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={revenueByDay.length ? revenueByDay : [{ d: '—', rev: 0 }]} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+                        <defs><linearGradient id="salesBar" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.9} /><stop offset="100%" stopColor="#8b5cf6" stopOpacity={0.4} /></linearGradient></defs>
+                        <XAxis dataKey="d" tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `${v}k`} />
+                        <Tooltip contentStyle={{ fontSize: 11 }} formatter={(v: unknown) => [`₹${Number(v) * 1000}`, 'Revenue']} />
+                        <Bar dataKey="rev" fill="url(#salesBar)" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4">
+                  <div className="relative">
+                    <ChartCardHeader
+                      title="Views"
+                      dateRange={dateRangeLabel || '—'}
+                      onFilterClick={() => setChartFilterOpen(prev => prev === 'views' ? null : 'views')}
+                      filterOpen={chartFilterOpen === 'views'}
+                    />
+                    {chartFilterOpen === 'views' && (
+                    <ChartFilterPopover
+                      open
+                      onClose={() => setChartFilterOpen(null)}
+                      dateFrom={chartDateFrom}
+                      dateTo={chartDateTo}
+                      onDateFromChange={setChartDateFrom}
+                      onDateToChange={setChartDateTo}
+                      orderType={chartOrderType}
+                      onOrderTypeChange={setChartOrderType}
+                      onApply={() => fetchCharts()}
+                    />
+                  )}
+                  </div>
+                  <p className="text-2xl font-bold text-gray-900">{viewsTotal.toLocaleString('en-IN')}</p>
+                  <p className={`text-xs font-medium flex items-center gap-1 mt-0.5 ${viewsGrowth >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                    <ChevronUp size={12} className={viewsGrowth < 0 ? 'rotate-180' : ''} /> {viewsGrowth >= 0 ? '+' : ''}{viewsGrowth}% Growth in the last {chartDateFrom && chartDateTo ? Math.ceil((new Date(chartDateTo).getTime() - new Date(chartDateFrom).getTime()) / 86400000) + 1 : 30} days
+                  </p>
+                  <div className="h-[140px] mt-3">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={ordersTrend.length ? ordersTrend : [{ day: '—', orders: 0 }]} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+                        <defs><linearGradient id="viewsArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.4} /><stop offset="100%" stopColor="#8b5cf6" stopOpacity={0} /></linearGradient></defs>
+                        <XAxis dataKey="day" tick={{ fontSize: 10 }} />
+                        <YAxis tick={{ fontSize: 10 }} />
+                        <Tooltip contentStyle={{ fontSize: 11 }} />
+                        <Area type="monotone" dataKey="orders" stroke="#8b5cf6" fill="url(#viewsArea)" strokeWidth={2} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </div>
+
               {/* ═══ ANALYTICS & GRAPHS (from orders_food) ═══ */}
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4">
-                  <h3 className="text-sm font-bold text-gray-900 mb-3">Orders trend (last 7 days)</h3>
+                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+                  <ChartCardHeader
+                    title="Orders trend"
+                    dateRange={dateRangeLabel || '—'}
+                    onFilterClick={() => setChartFilterOpen(prev => prev === 'orders' ? null : 'orders')}
+                    filterOpen={chartFilterOpen === 'orders'}
+                  />
+                  {chartFilterOpen === 'orders' && (
+                    <ChartFilterPopover
+                      open
+                      onClose={() => setChartFilterOpen(null)}
+                      dateFrom={chartDateFrom}
+                      dateTo={chartDateTo}
+                      onDateFromChange={setChartDateFrom}
+                      onDateToChange={setChartDateTo}
+                      orderType={chartOrderType}
+                      onOrderTypeChange={setChartOrderType}
+                      onApply={() => fetchCharts()}
+                    />
+                  )}
                   <div className="h-[180px] w-full">
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={ordersTrend.length ? ordersTrend : [{ day: 'Mon', orders: 0 }, { day: 'Tue', orders: 0 }, { day: 'Wed', orders: 0 }, { day: 'Thu', orders: 0 }, { day: 'Fri', orders: 0 }, { day: 'Sat', orders: 0 }, { day: 'Sun', orders: 0 }]}>
@@ -1075,8 +1393,26 @@ function DashboardContent() {
                     </ResponsiveContainer>
                   </div>
                 </div>
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4">
-                  <h3 className="text-sm font-bold text-gray-900 mb-3">Revenue analytics</h3>
+                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+                  <ChartCardHeader
+                    title="Revenue analytics"
+                    dateRange={dateRangeLabel || '—'}
+                    onFilterClick={() => setChartFilterOpen(prev => prev === 'revenue' ? null : 'revenue')}
+                    filterOpen={chartFilterOpen === 'revenue'}
+                  />
+                  {chartFilterOpen === 'revenue' && (
+                    <ChartFilterPopover
+                      open
+                      onClose={() => setChartFilterOpen(null)}
+                      dateFrom={chartDateFrom}
+                      dateTo={chartDateTo}
+                      onDateFromChange={setChartDateFrom}
+                      onDateToChange={setChartDateTo}
+                      orderType={chartOrderType}
+                      onOrderTypeChange={setChartOrderType}
+                      onApply={() => fetchCharts()}
+                    />
+                  )}
                   <div className="h-[180px] w-full">
                     <ResponsiveContainer width="100%" height="100%">
                       <AreaChart data={revenueByDay.length ? revenueByDay : [{ d: 'Mon', rev: 0 }, { d: 'Tue', rev: 0 }, { d: 'Wed', rev: 0 }, { d: 'Thu', rev: 0 }, { d: 'Fri', rev: 0 }, { d: 'Sat', rev: 0 }, { d: 'Sun', rev: 0 }]}>
@@ -1092,8 +1428,26 @@ function DashboardContent() {
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4">
-                  <h3 className="text-sm font-bold text-gray-900 mb-3">Order category distribution (Veg / Non-Veg)</h3>
+                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+                  <ChartCardHeader
+                    title="Order category (Veg/Non-Veg)"
+                    dateRange={dateRangeLabel || '—'}
+                    onFilterClick={() => setChartFilterOpen(prev => prev === 'category' ? null : 'category')}
+                    filterOpen={chartFilterOpen === 'category'}
+                  />
+                  {chartFilterOpen === 'category' && (
+                    <ChartFilterPopover
+                      open
+                      onClose={() => setChartFilterOpen(null)}
+                      dateFrom={chartDateFrom}
+                      dateTo={chartDateTo}
+                      onDateFromChange={setChartDateFrom}
+                      onDateToChange={setChartDateTo}
+                      orderType={chartOrderType}
+                      onOrderTypeChange={setChartOrderType}
+                      onApply={() => fetchCharts()}
+                    />
+                  )}
                   <div className="h-[160px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
@@ -1105,8 +1459,26 @@ function DashboardContent() {
                     </ResponsiveContainer>
                   </div>
                 </div>
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4">
-                  <h3 className="text-sm font-bold text-gray-900 mb-3">Hourly order heatmap</h3>
+                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+                  <ChartCardHeader
+                    title="Hourly order heatmap"
+                    dateRange={dateRangeLabel || '—'}
+                    onFilterClick={() => setChartFilterOpen(prev => prev === 'heatmap' ? null : 'heatmap')}
+                    filterOpen={chartFilterOpen === 'heatmap'}
+                  />
+                  {chartFilterOpen === 'heatmap' && (
+                    <ChartFilterPopover
+                      open
+                      onClose={() => setChartFilterOpen(null)}
+                      dateFrom={chartDateFrom}
+                      dateTo={chartDateTo}
+                      onDateFromChange={setChartDateFrom}
+                      onDateToChange={setChartDateTo}
+                      orderType={chartOrderType}
+                      onOrderTypeChange={setChartOrderType}
+                      onApply={() => fetchCharts()}
+                    />
+                  )}
                   <div className="flex items-end gap-1 h-[100px]">
                     {(hourlyHeatmap.length ? hourlyHeatmap : [10,11,12,13,14,15,16,17,18,19,20,21].map((hour) => ({ hour, count: 0, pct: 0 }))).map((item, i) => (
                       <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1 h-full">
@@ -1116,8 +1488,26 @@ function DashboardContent() {
                     ))}
                   </div>
                 </div>
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4">
-                  <h3 className="text-sm font-bold text-gray-900 mb-3">Weekly performance</h3>
+                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+                  <ChartCardHeader
+                    title="Weekly performance"
+                    dateRange={dateRangeLabel || '—'}
+                    onFilterClick={() => setChartFilterOpen(prev => prev === 'weekly' ? null : 'weekly')}
+                    filterOpen={chartFilterOpen === 'weekly'}
+                  />
+                  {chartFilterOpen === 'weekly' && (
+                    <ChartFilterPopover
+                      open
+                      onClose={() => setChartFilterOpen(null)}
+                      dateFrom={chartDateFrom}
+                      dateTo={chartDateTo}
+                      onDateFromChange={setChartDateFrom}
+                      onDateToChange={setChartDateTo}
+                      orderType={chartOrderType}
+                      onOrderTypeChange={setChartOrderType}
+                      onApply={() => fetchCharts()}
+                    />
+                  )}
                   <div className="h-[120px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={weeklyPerformance.length ? weeklyPerformance : [{ w: 'W1', orders: 0 }, { w: 'W2', orders: 0 }, { w: 'W3', orders: 0 }, { w: 'W4', orders: 0 }]} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
@@ -1130,8 +1520,26 @@ function DashboardContent() {
                   </div>
                 </div>
               </div>
-              <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4">
-                <h3 className="text-sm font-bold text-gray-900 mb-3">Delivery success rate (last 7 days)</h3>
+              <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+                <ChartCardHeader
+                  title="Delivery success rate"
+                  dateRange={dateRangeLabel || '—'}
+                  onFilterClick={() => setChartFilterOpen(prev => prev === 'delivery' ? null : 'delivery')}
+                  filterOpen={chartFilterOpen === 'delivery'}
+                />
+                {chartFilterOpen === 'delivery' && (
+                  <ChartFilterPopover
+                    open
+                    onClose={() => setChartFilterOpen(null)}
+                    dateFrom={chartDateFrom}
+                    dateTo={chartDateTo}
+                    onDateFromChange={setChartDateFrom}
+                    onDateToChange={setChartDateTo}
+                    orderType={chartOrderType}
+                    onOrderTypeChange={setChartOrderType}
+                    onApply={() => fetchCharts()}
+                  />
+                )}
                 <div className="h-[140px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={deliverySuccessRate.length ? deliverySuccessRate : [{ d: 'Mon', rate: 100 }, { d: 'Tue', rate: 100 }, { d: 'Wed', rate: 100 }, { d: 'Thu', rate: 100 }, { d: 'Fri', rate: 100 }, { d: 'Sat', rate: 100 }, { d: 'Sun', rate: 100 }]}>
@@ -1142,6 +1550,186 @@ function DashboardContent() {
                       <Line type="monotone" dataKey="rate" stroke="#10b981" strokeWidth={2} dot={{ fill: '#10b981', r: 3 }} />
                     </LineChart>
                   </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* ═══ ADVANCED ANALYTICS (Stacked Area, Exploded Pie, Donut, Funnel) ═══ */}
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+                  <ChartCardHeader
+                    title="Multi-metric trends"
+                    dateRange={dateRangeLabel || '—'}
+                    onFilterClick={() => setChartFilterOpen(prev => prev === 'multi' ? null : 'multi')}
+                    filterOpen={chartFilterOpen === 'multi'}
+                  />
+                  {chartFilterOpen === 'multi' && (
+                    <ChartFilterPopover
+                      open
+                      onClose={() => setChartFilterOpen(null)}
+                      dateFrom={chartDateFrom}
+                      dateTo={chartDateTo}
+                      onDateFromChange={setChartDateFrom}
+                      onDateToChange={setChartDateTo}
+                      orderType={chartOrderType}
+                      onOrderTypeChange={setChartOrderType}
+                      onApply={() => fetchCharts()}
+                    />
+                  )}
+                  <div className="h-[200px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={stackedTrend.length ? stackedTrend : [{ day: 'Mon', orders: 0, revenue: 0, cancellations: 0 }, { day: 'Tue', orders: 0, revenue: 0, cancellations: 0 }, { day: 'Wed', orders: 0, revenue: 0, cancellations: 0 }, { day: 'Thu', orders: 0, revenue: 0, cancellations: 0 }, { day: 'Fri', orders: 0, revenue: 0, cancellations: 0 }, { day: 'Sat', orders: 0, revenue: 0, cancellations: 0 }, { day: 'Sun', orders: 0, revenue: 0, cancellations: 0 }]}>
+                        <defs>
+                          <linearGradient id="ordersGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#f97316" stopOpacity={0.5} /><stop offset="100%" stopColor="#f97316" stopOpacity={0} /></linearGradient>
+                          <linearGradient id="revenueGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.5} /><stop offset="100%" stopColor="#8b5cf6" stopOpacity={0} /></linearGradient>
+                          <linearGradient id="cancGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#ef4444" stopOpacity={0.5} /><stop offset="100%" stopColor="#ef4444" stopOpacity={0} /></linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                        <XAxis dataKey="day" tick={{ fontSize: 11 }} stroke="#94a3b8" />
+                        <YAxis yAxisId="left" tick={{ fontSize: 11 }} stroke="#94a3b8" />
+                        <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} stroke="#94a3b8" />
+                        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={(v: unknown, name?: string) => { const n = name ?? ''; const disp = n === 'revenue' ? `₹${Number(v) * 1000}` : String(v); const label = n === 'revenue' ? 'Revenue (₹k)' : n.charAt(0).toUpperCase() + n.slice(1); return [disp, label] as [React.ReactNode, string]; }} />
+                        <Legend wrapperStyle={{ fontSize: 11 }} />
+                        <Area yAxisId="left" type="monotone" dataKey="orders" stroke="#f97316" fill="url(#ordersGrad)" strokeWidth={2} name="Orders" />
+                        <Area yAxisId="right" type="monotone" dataKey="revenue" stroke="#8b5cf6" fill="url(#revenueGrad)" strokeWidth={2} name="Revenue (₹k)" />
+                        <Area yAxisId="left" type="monotone" dataKey="cancellations" stroke="#ef4444" fill="url(#cancGrad)" strokeWidth={2} name="Cancellations" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+                  <ChartCardHeader
+                    title="Order type distribution"
+                    dateRange={dateRangeLabel || '—'}
+                    onFilterClick={() => setChartFilterOpen(prev => prev === 'orderType' ? null : 'orderType')}
+                    filterOpen={chartFilterOpen === 'orderType'}
+                    hideFilterButton
+                  />
+                  {chartFilterOpen === 'orderType' && (
+                    <ChartFilterPopover
+                      open
+                      onClose={() => setChartFilterOpen(null)}
+                      dateFrom={chartDateFrom}
+                      dateTo={chartDateTo}
+                      onDateFromChange={setChartDateFrom}
+                      onDateToChange={setChartDateTo}
+                      orderType={chartOrderType}
+                      onOrderTypeChange={setChartOrderType}
+                      onApply={() => fetchCharts()}
+                    />
+                  )}
+                  <div className="h-[200px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={categoryDistribution.length ? categoryDistribution : [{ name: 'No data', value: 1, color: '#e2e8f0' }]}
+                          cx="50%"
+                          cy="50%"
+                          outerRadius={70}
+                          paddingAngle={4}
+                          dataKey="value"
+                        >
+                          {(categoryDistribution.length ? categoryDistribution : [{ name: 'No data', value: 1, color: '#e2e8f0' }]).map((entry, i) => (
+                            <Cell key={i} fill={entry.color} stroke="#fff" strokeWidth={2} />
+                          ))}
+                        </Pie>
+                        <Tooltip contentStyle={{ fontSize: 11, borderRadius: 6 }} formatter={(v: unknown, name?: string, props?: { payload?: { value?: number } }) => [`${props?.payload?.value ?? v} (${props?.payload?.value ?? v} orders)`, name ?? '']} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-4">
+                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+                  <ChartCardHeader
+                    title="Veg / Non-Veg breakdown"
+                    dateRange={dateRangeLabel || '—'}
+                    onFilterClick={() => setChartFilterOpen(prev => prev === 'donut' ? null : 'donut')}
+                    filterOpen={chartFilterOpen === 'donut'}
+                    hideFilterButton
+                  />
+                  {chartFilterOpen === 'donut' && (
+                    <ChartFilterPopover
+                      open
+                      onClose={() => setChartFilterOpen(null)}
+                      dateFrom={chartDateFrom}
+                      dateTo={chartDateTo}
+                      onDateFromChange={setChartDateFrom}
+                      onDateToChange={setChartDateTo}
+                      orderType={chartOrderType}
+                      onOrderTypeChange={setChartOrderType}
+                      onApply={() => fetchCharts()}
+                    />
+                  )}
+                  <div className="h-[180px] flex items-center">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={donutVegNonVeg.length ? donutVegNonVeg : [{ name: 'No data', value: 1, color: '#e2e8f0' }]}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={45}
+                          outerRadius={65}
+                          paddingAngle={2}
+                          dataKey="value"
+                        >
+                          {(donutVegNonVeg.length ? donutVegNonVeg : [{ name: 'No data', value: 1, color: '#e2e8f0' }]).map((entry, i) => (
+                            <Cell key={i} fill={entry.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip contentStyle={{ fontSize: 11, borderRadius: 6 }} formatter={(v: unknown, name?: string, props?: { payload?: { pct?: number } }) => [`${v} (${props?.payload?.pct ?? 0}%)`, name ?? '']} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+                  <ChartCardHeader
+                    title="Order lifecycle funnel"
+                    dateRange={dateRangeLabel || '—'}
+                    onFilterClick={() => setChartFilterOpen(prev => prev === 'funnel' ? null : 'funnel')}
+                    filterOpen={chartFilterOpen === 'funnel'}
+                  />
+                  {chartFilterOpen === 'funnel' && (
+                    <ChartFilterPopover
+                      open
+                      onClose={() => setChartFilterOpen(null)}
+                      dateFrom={chartDateFrom}
+                      dateTo={chartDateTo}
+                      onDateFromChange={setChartDateFrom}
+                      onDateToChange={setChartDateTo}
+                      orderType={chartOrderType}
+                      onOrderTypeChange={setChartOrderType}
+                      onApply={() => fetchCharts()}
+                    />
+                  )}
+                  <div className="h-[180px] flex flex-col justify-center gap-1">
+                    {(funnelData.length ? funnelData : [
+                      { stage: 'Placed', value: 0, fill: '#f97316' },
+                      { stage: 'Accepted', value: 0, fill: '#3b82f6' },
+                      { stage: 'Preparing', value: 0, fill: '#8b5cf6' },
+                      { stage: 'Out for Delivery', value: 0, fill: '#06b6d4' },
+                      { stage: 'Delivered', value: 0, fill: '#10b981' },
+                    ]).map((item) => {
+                      const data = funnelData.length ? funnelData : [
+                        { stage: 'Placed', value: 0, fill: '#f97316' },
+                        { stage: 'Accepted', value: 0, fill: '#3b82f6' },
+                        { stage: 'Preparing', value: 0, fill: '#8b5cf6' },
+                        { stage: 'Out for Delivery', value: 0, fill: '#06b6d4' },
+                        { stage: 'Delivered', value: 0, fill: '#10b981' },
+                      ]
+                      const topVal = data[0]?.value ?? 1
+                      const pct = topVal > 0 ? (item.value / topVal) * 100 : 0
+                      return (
+                        <div key={item.stage} className="flex items-center gap-2">
+                          <span className="text-xs font-medium text-gray-700 w-24 shrink-0">{item.stage}</span>
+                          <div className="flex-1 h-6 rounded bg-gray-100 overflow-hidden">
+                            <div className="h-full rounded transition-all duration-500 flex items-center justify-end pr-1" style={{ width: `${Math.max(pct, 4)}%`, backgroundColor: item.fill }}>
+                              <span className="text-[10px] font-bold text-white">{item.value}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
               </div>
 
@@ -1162,13 +1750,16 @@ function DashboardContent() {
                         {statusLog.length === 0 ? (
                           <tr><td colSpan={3} className="py-4 px-2 text-gray-500 text-center">No activity yet. Store open/close will appear here.</td></tr>
                         ) : (
-                          statusLog.map((log) => (
-                            <tr key={log.id} className="border-b border-gray-100 hover:bg-gray-50/50">
+                          [...statusLog]
+                            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                            .map((log, index) => (
+                            <tr key={`${log.id}-${index}`} className="border-b border-gray-100 hover:bg-gray-50/50">
                               <td className="py-2 px-2 text-gray-500 whitespace-nowrap">{new Date(log.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}</td>
                               <td className="py-2 px-2">
-                                <span className={log.action === 'OPEN' ? 'text-emerald-600 font-medium' : 'text-red-600 font-medium'}>{log.action === 'OPEN' ? 'Store opened' : 'Store closed'}</span>
-                                {log.restriction_type && <span className="text-gray-500 ml-1">({log.restriction_type.replace('_', ' ')})</span>}
-                                {log.action === 'CLOSED' && log.close_reason && <span className="text-gray-500 ml-1">· {log.close_reason}</span>}
+                                <span className={log.action === 'Store opened' || log.action === 'OPEN' ? 'text-emerald-600 font-medium' : log.action === 'Store closed' || log.action === 'CLOSED' ? 'text-red-600 font-medium' : 'text-gray-700 font-medium'}>{log.action}</span>
+                                {log.restriction_type && <span className="text-gray-500 ml-1">({log.restriction_type.replace(/_/g, ' ')})</span>}
+                                {log.action_field && <span className="text-gray-500 ml-1">· {log.action_field.replace(/_/g, ' ')}</span>}
+                                {(log.action === 'CLOSED' || log.action === 'Store closed') && log.close_reason && <span className="text-gray-500 ml-1">· {log.close_reason}</span>}
                               </td>
                               <td className="py-2 px-2 text-gray-700">{log.performed_by_name || log.performed_by_email || '—'}{log.performed_by_id ? ` (${log.performed_by_id})` : ''}</td>
                             </tr>
@@ -1196,10 +1787,13 @@ function DashboardContent() {
                         {statusLog.length === 0 ? (
                           <tr><td colSpan={3} className="py-4 px-2 text-gray-500 text-center">No audit entries yet.</td></tr>
                         ) : (
-                          statusLog.slice(0, 15).map((log) => (
-                            <tr key={log.id} className="border-b border-gray-100 hover:bg-gray-50/50">
+                          [...statusLog]
+                            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                            .slice(0, 15)
+                            .map((log, index) => (
+                            <tr key={`${log.id}-${index}`} className="border-b border-gray-100 hover:bg-gray-50/50">
                               <td className="py-2 px-2 font-medium text-gray-900">{log.performed_by_name || log.performed_by_email || 'System'}{log.performed_by_id ? ` (ID: ${log.performed_by_id})` : ''}</td>
-                              <td className="py-2 px-2 text-gray-700">{log.action === 'OPEN' ? 'Store opened' : 'Store closed'}{log.restriction_type ? ` · ${log.restriction_type}` : ''}{log.action === 'CLOSED' && log.close_reason ? ` · ${log.close_reason}` : ''}</td>
+                              <td className="py-2 px-2 text-gray-700">{log.action}{log.action_field ? ` · ${log.action_field.replace(/_/g, ' ')}` : log.restriction_type ? ` · ${log.restriction_type.replace(/_/g, ' ')}` : ''}</td>
                               <td className="py-2 px-2 text-gray-500">{new Date(log.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}</td>
                             </tr>
                           ))
@@ -1210,8 +1804,8 @@ function DashboardContent() {
                 </div>
               </div>
 
-              {/* ═══ PERFORMANCE INSIGHTS (from orders_food KPIs) + QUICK ACTIONS ═══ */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* ═══ PERFORMANCE INSIGHTS (from orders_food KPIs) ═══ */}
+              <div>
                 <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4">
                   <h3 className="text-sm font-bold text-gray-900 mb-3">Performance insights</h3>
                   <div className="overflow-x-auto">
@@ -1232,26 +1826,6 @@ function DashboardContent() {
                         <tr><td className="py-2 px-2 text-gray-700">Acceptance rate</td><td className="py-2 px-2 text-right font-medium text-emerald-600">{acceptanceRate}%</td></tr>
                       </tbody>
                     </table>
-                  </div>
-                </div>
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4">
-                  <h3 className="text-sm font-bold text-gray-900 mb-3">Quick actions</h3>
-                  <div className="flex flex-wrap gap-2">
-                    <button className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-sm font-medium text-gray-700 transition-colors">
-                      <Pause size={16} /> Pause orders
-                    </button>
-                    <button onClick={() => router.push('/mx/menu')} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-orange-200 bg-orange-50 hover:bg-orange-100 text-sm font-medium text-orange-700 transition-colors">
-                      <UtensilsCrossed size={16} /> Update menu
-                    </button>
-                    <button onClick={() => router.push('/mx/offers')} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-violet-200 bg-violet-50 hover:bg-violet-100 text-sm font-medium text-violet-700 transition-colors">
-                      <Tag size={16} /> Add offer
-                    </button>
-                    <button className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-sm font-medium text-gray-700 transition-colors">
-                      <FileBarChart size={16} /> View reports
-                    </button>
-                    <button onClick={handleSwitchOrderMode} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-amber-200 bg-amber-50 hover:bg-amber-100 text-sm font-medium text-amber-700 transition-colors">
-                      <Monitor size={16} /> Switch ordering mode
-                    </button>
                   </div>
                 </div>
               </div>

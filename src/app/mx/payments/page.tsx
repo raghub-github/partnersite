@@ -12,6 +12,7 @@ import {
 import { CreditCard, TrendingUp, Package, X, Wallet, ArrowDownToLine } from 'lucide-react'
 import { PageSkeletonGeneric } from '@/components/PageSkeleton'
 import { Toaster, toast } from 'sonner'
+import { MobileHamburgerButton } from '@/components/MobileHamburgerButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -104,15 +105,18 @@ function PaymentsContent() {
         <div className="min-h-screen bg-white px-4 sm:px-6 lg:px-8 py-8">
           <div className="max-w-7xl mx-auto">
             {/* Header with Wallet */}
-            <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 mb-8">
-              {/* Spacer for hamburger menu on left (mobile) */}
-              <div className="md:hidden w-12"></div>
-              {/* Heading on right for mobile, left for desktop */}
-              <div className="ml-auto md:ml-0">
-                <h1 className="text-3xl font-bold text-gray-900">Payments & Wallet</h1>
-                <p className="text-sm text-gray-600">Track revenue and manage your store wallet</p>
-              </div>
-              <div className="flex flex-col sm:flex-row gap-3">
+            <div className="bg-white border-b border-gray-200 shadow-sm -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 py-4 md:py-5 mb-8">
+              <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+                <div className="flex items-center gap-3 w-full lg:w-auto">
+                  {/* Hamburger menu on left (mobile) */}
+                  <MobileHamburgerButton />
+                  {/* Heading - properly aligned */}
+                  <div className="flex-1 min-w-0">
+                    <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-900">Payments & Wallet</h1>
+                    <p className="text-sm text-gray-600 mt-0.5">Track revenue and manage your store wallet</p>
+                  </div>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-3 w-full lg:w-auto">
                 <button
                   onClick={() => setShowWithdrawal(true)}
                   className="px-4 py-2.5 rounded-lg font-medium transition-colors bg-emerald-600 text-white hover:bg-emerald-700 flex items-center gap-2"
@@ -131,6 +135,7 @@ function PaymentsContent() {
                   {showAnalytics ? '📊 Hide Analytics' : '📊 View Analytics'}
                 </button>
               </div>
+            </div>
             </div>
 
             {/* Withdrawal Modal */}

@@ -24,6 +24,13 @@ function getTodaySlots(
   const today_date = dateFormatter.format(now);
 
   const slots: { start: string; end: string }[] = [];
+  
+  // Check if day is in closed_days array
+  const closedDays = oh?.closed_days as string[] | null;
+  if (closedDays && Array.isArray(closedDays) && closedDays.includes(dayStr)) {
+    return { today_date, today_slots: slots }; // Day is explicitly closed
+  }
+  
   if (!oh || oh[`${dayStr}_open`] !== true) {
     return { today_date, today_slots: slots };
   }
@@ -78,6 +85,13 @@ function isWithinOperatingHours(
     ? getStoreLocalTime(now, storeTimezone)
     : { dayIndex: now.getDay(), nowMinutes: now.getHours() * 60 + now.getMinutes() };
   const day = dayNames[dayIndex];
+  
+  // Check if day is in closed_days array
+  const closedDays = oh.closed_days as string[] | null;
+  if (closedDays && Array.isArray(closedDays) && closedDays.includes(day)) {
+    return false; // Day is explicitly closed
+  }
+  
   const isOpen = oh[`${day}_open`] === true;
   if (!isOpen) return false;
   if (oh.is_24_hours === true) return true;
@@ -116,9 +130,20 @@ function getNextOpenAt(
     const [h, m] = t.split(':').map(Number);
     return (h ?? 0) * 60 + (m ?? 0);
   };
+  
+  // Get closed_days array
+  const closedDays = oh.closed_days as string[] | null;
+  
   for (let offset = 0; offset < 8; offset++) {
     const dayIdx = (dayIndex + offset) % 7;
     const day = dayNames[dayIdx];
+    
+    // Skip if day is explicitly closed
+    if (closedDays && Array.isArray(closedDays) && closedDays.includes(day)) {
+      continue;
+    }
+    
+    // Skip if day is not open
     if (oh[`${day}_open`] !== true) continue;
     const s1 = oh[`${day}_slot1_start`] as string | null;
     const s2 = oh[`${day}_slot2_start`] as string | null;
@@ -192,14 +217,21 @@ export async function GET(req: NextRequest) {
       : false;
 
     // Strict: do NOT auto-open when block_auto_open (Until I manually turn it ON)
+    // Also check if today is a closed day - if so, don't auto-open
+    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const { dayIndex: currentDayIndex } = getStoreLocalTime(now, storeTz);
+    const currentDay = dayNames[currentDayIndex];
+    const closedDays = oh?.closed_days as string[] | null;
+    const isTodayClosed = closedDays && Array.isArray(closedDays) && closedDays.includes(currentDay);
+    
     // Re-fetch store status to avoid overwriting a concurrent manual open (which would show "Auto on" instead of "Opened by X")
     let availFinal = avail;
-    if (!blockAutoOpen && !manualCloseUntil && effectiveStatus === 'CLOSED' && (avail?.auto_open_from_schedule !== false) && withinHours) {
+    if (!blockAutoOpen && !manualCloseUntil && !isTodayClosed && effectiveStatus === 'CLOSED' && (avail?.auto_open_from_schedule !== false) && withinHours) {
       const { data: storeRecheck } = await db.from('merchant_stores').select('operational_status').eq('id', storeInternalId).single();
       if ((storeRecheck?.operational_status as string) === 'OPEN') {
         effectiveStatus = 'OPEN';
         const { data: availRecheck } = await db.from('merchant_store_availability').select('last_toggled_by_email, last_toggled_by_name, last_toggled_by_id, last_toggle_type, last_toggled_at').eq('store_id', storeInternalId).single();
-        if (availRecheck) availFinal = availRecheck;
+        if (availRecheck && avail) availFinal = { ...avail, ...availRecheck };
       } else {
         await db.from('merchant_stores').update({
           operational_status: 'OPEN',
@@ -270,10 +302,26 @@ export async function GET(req: NextRequest) {
 
     const { today_date, today_slots } = getTodaySlots(oh as Record<string, unknown> | null, storeTz);
 
+    // Check if today is a scheduled closed day (reuse closedDays from above)
+    const dayNamesCheck = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const { dayIndex: currentDayIndexCheck } = getStoreLocalTime(now, storeTz);
+    const currentDayCheck = dayNamesCheck[currentDayIndexCheck];
+    const closedDaysCheck = oh?.closed_days as string[] | null;
+    const isTodayScheduledClosed = closedDaysCheck && Array.isArray(closedDaysCheck) && closedDaysCheck.includes(currentDayCheck);
+    
+    // Also check if today's _open flag is false
+    const isTodayOpenFlagFalse = oh && oh[`${currentDayCheck}_open`] !== true;
+    const isTodayClosedBySchedule = isTodayScheduledClosed || isTodayOpenFlagFalse;
+
     const nowAfterLogic = new Date();
+    // If today is scheduled closed, don't show opens_at - show null to indicate scheduled closure
     const opens_at: string | null =
       effectiveStatus === 'CLOSED'
-        ? (manualCloseUntil ? manualCloseUntil.toISOString() : getNextOpenAt(oh as Record<string, unknown> | null, storeTz, nowAfterLogic))
+        ? (isTodayClosedBySchedule 
+            ? null // Scheduled closed - no auto-open countdown
+            : (manualCloseUntil 
+                ? manualCloseUntil.toISOString() 
+                : getNextOpenAt(oh as Record<string, unknown> | null, storeTz, nowAfterLogic)))
         : null;
 
     const withinHoursButRestricted = withinHours && effectiveStatus === 'CLOSED' && (blockAutoOpen || manualCloseUntil);
@@ -288,6 +336,7 @@ export async function GET(req: NextRequest) {
       restriction_type: availFinal?.restriction_type ?? avail?.restriction_type ?? null,
       today_date,
       today_slots,
+      is_today_scheduled_closed: isTodayClosedBySchedule, // New field: indicates if today is a scheduled closed day
       last_toggled_by_email: availFinal?.last_toggled_by_email ?? null,
       last_toggled_by_name: availFinal?.last_toggled_by_name ?? null,
       last_toggled_by_id: availFinal?.last_toggled_by_id ?? null,
@@ -357,6 +406,13 @@ export async function POST(req: NextRequest) {
 
     await ensureAvailabilityRow(db, storeInternalId);
 
+    // Get current availability state for reference
+    const { data: avail } = await db
+      .from('merchant_store_availability')
+      .select('*')
+      .eq('store_id', storeInternalId)
+      .single();
+
     const now = new Date();
     const activityPayload = {
       last_toggled_by_email: toggledByEmail,
@@ -377,6 +433,25 @@ export async function POST(req: NextRequest) {
         performed_by_name: toggledByName,
       });
     };
+
+    if (action === 'update_manual_lock') {
+      // Update manual activation lock (block_auto_open)
+      const blockAutoOpen = body.block_auto_open === true;
+      
+      await db.from('merchant_store_availability').update({
+        block_auto_open: blockAutoOpen,
+        restriction_type: blockAutoOpen ? 'MANUAL_HOLD' : (avail?.restriction_type === 'MANUAL_HOLD' ? null : avail?.restriction_type || null),
+        ...activityPayload,
+      }).eq('store_id', storeInternalId);
+      
+      // Log the action
+      await insertStatusLog(blockAutoOpen ? 'MANUAL_LOCK_ENABLED' : 'MANUAL_LOCK_DISABLED', blockAutoOpen ? 'MANUAL_HOLD' : null);
+      
+      return NextResponse.json({
+        success: true,
+        block_auto_open: blockAutoOpen,
+      });
+    }
 
     if (action === 'manual_open') {
       await db.from('merchant_stores').update({

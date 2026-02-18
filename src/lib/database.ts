@@ -41,7 +41,7 @@ export const fetchMenuCategories = async (storeId: string) => {
       .from('merchant_menu_categories')
       .select('*')
       .eq('store_id', storeData.id)
-      .order('display_order', { ascending: true });
+      .order('category_name', { ascending: true });
     if (error) throw error;
     return data || [];
   } catch (error) {
@@ -229,12 +229,9 @@ export const updateStoreInfo = async (storeId: string, updates: Partial<Merchant
     if (error) throw error;
     return true;
   } catch (error: any) {
-    // Log more details for debugging
-    console.error('Error updating store:', {
-      message: error?.message,
-      stack: error?.stack,
-      error
-    });
+    const msg = error?.message ?? (typeof error === 'string' ? error : 'Unknown error');
+    const code = error?.code ?? error?.details;
+    console.error('Error updating store:', msg, code ? String(code) : '', error?.details ?? '');
     return false;
   }
 }
@@ -693,10 +690,7 @@ export const createMenuItem = async (itemData: any) => {
         is_recommended: itemData.is_recommended ?? false,
         preparation_time_minutes: itemData.preparation_time_minutes ?? 15,
         serves: itemData.serves ?? 1,
-        display_order: itemData.display_order ?? 0,
         is_active: itemData.is_active ?? true,
-        item_metadata: itemData.item_metadata || {},
-        nutritional_info: itemData.nutritional_info || {},
         allergens: itemData.allergens || null
       }])
       .select()
@@ -740,10 +734,7 @@ export const updateMenuItem = async (itemId: string, itemData: any) => {
       is_recommended: itemData.is_recommended ?? false,
       preparation_time_minutes: itemData.preparation_time_minutes ?? 15,
       serves: itemData.serves ?? 1,
-      display_order: itemData.display_order ?? 0,
       is_active: itemData.is_active ?? true,
-      item_metadata: itemData.item_metadata || {},
-      nutritional_info: itemData.nutritional_info || {},
       allergens: itemData.allergens || null,
       updated_at: new Date().toISOString(),
     };
@@ -811,34 +802,273 @@ export const deleteMenuItem = async (itemId: string) => {
   }
 }
 
+/** Fetch all menu items for a store (management view – includes inactive) */
+export const fetchMenuItemsForManagement = async (storeId: string) => {
+  try {
+    const { data: storeData, error: storeError } = await supabase
+      .from('merchant_stores')
+      .select('id')
+      .eq('store_id', storeId)
+      .single();
+    if (storeError || !storeData) return [];
+    const { data, error } = await supabase
+      .from('merchant_menu_items')
+      .select('*')
+      .eq('store_id', storeData.id)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  } catch (e: any) {
+    console.error('fetchMenuItemsForManagement:', e?.message);
+    return [];
+  }
+}
+
+/** Customizations for a menu item */
+export const fetchCustomizationsForMenuItem = async (menuItemId: number) => {
+  try {
+    const { data, error } = await supabase
+      .from('merchant_menu_item_customizations')
+      .select('*')
+      .eq('menu_item_id', menuItemId)
+      .order('display_order', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  } catch (e: any) {
+    console.error('fetchCustomizationsForMenuItem:', e?.message);
+    return [];
+  }
+}
+
+/** Addons for a customization */
+export const fetchAddonsForCustomization = async (customizationId: number) => {
+  try {
+    const { data, error } = await supabase
+      .from('merchant_menu_item_addons')
+      .select('*')
+      .eq('customization_id', customizationId)
+      .order('display_order', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  } catch (e: any) {
+    console.error('fetchAddonsForCustomization:', e?.message);
+    return [];
+  }
+}
+
+/** Variants for a menu item */
+export const fetchVariantsForMenuItem = async (menuItemId: number) => {
+  try {
+    const { data, error } = await supabase
+      .from('merchant_menu_item_variants')
+      .select('*')
+      .eq('menu_item_id', menuItemId)
+      .order('display_order', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  } catch (e: any) {
+    console.error('fetchVariantsForMenuItem:', e?.message);
+    return [];
+  }
+}
+
+export const createCustomization = async (payload: {
+  menu_item_id: number;
+  customization_id?: string;
+  customization_title: string;
+  customization_type?: string;
+  is_required?: boolean;
+  min_selection?: number;
+  max_selection?: number;
+  display_order?: number;
+}) => {
+  const { data, error } = await supabase
+    .from('merchant_menu_item_customizations')
+    .insert([{
+      menu_item_id: payload.menu_item_id,
+      customization_id: payload.customization_id || `GMC-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      customization_title: payload.customization_title,
+      customization_type: payload.customization_type ?? null,
+      is_required: payload.is_required ?? false,
+      min_selection: payload.min_selection ?? 0,
+      max_selection: payload.max_selection ?? 1,
+      display_order: payload.display_order ?? 0,
+    }])
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export const updateCustomization = async (id: number, updates: Record<string, unknown>) => {
+  const { data, error } = await supabase
+    .from('merchant_menu_item_customizations')
+    .update({ ...updates, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export const deleteCustomization = async (id: number) => {
+  const { error } = await supabase
+    .from('merchant_menu_item_customizations')
+    .delete()
+    .eq('id', id);
+  if (error) throw error;
+}
+
+export const createAddon = async (payload: {
+  customization_id: number;
+  addon_id?: string;
+  addon_name: string;
+  addon_price?: number;
+  addon_image_url?: string;
+  in_stock?: boolean;
+  display_order?: number;
+}) => {
+  const { data, error } = await supabase
+    .from('merchant_menu_item_addons')
+    .insert([{
+      customization_id: payload.customization_id,
+      addon_id: payload.addon_id || `GMA-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      addon_name: payload.addon_name,
+      addon_price: payload.addon_price ?? 0,
+      addon_image_url: payload.addon_image_url ?? null,
+      in_stock: payload.in_stock ?? true,
+      display_order: payload.display_order ?? 0,
+    }])
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export const updateAddon = async (id: number, updates: Record<string, unknown>) => {
+  const { data, error } = await supabase
+    .from('merchant_menu_item_addons')
+    .update({ ...updates, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export const deleteAddon = async (id: number) => {
+  const { error } = await supabase
+    .from('merchant_menu_item_addons')
+    .delete()
+    .eq('id', id);
+  if (error) throw error;
+}
+
+export const createVariant = async (payload: {
+  menu_item_id: number;
+  variant_id?: string;
+  variant_name: string;
+  variant_type?: string;
+  variant_price: number;
+  price_difference?: number;
+  in_stock?: boolean;
+  available_quantity?: number;
+  display_order?: number;
+  is_default?: boolean;
+}) => {
+  const { data, error } = await supabase
+    .from('merchant_menu_item_variants')
+    .insert([{
+      menu_item_id: payload.menu_item_id,
+      variant_id: payload.variant_id || `GMV-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      variant_name: payload.variant_name,
+      variant_type: payload.variant_type ?? null,
+      variant_price: payload.variant_price,
+      price_difference: payload.price_difference ?? 0,
+      in_stock: payload.in_stock ?? true,
+      available_quantity: payload.available_quantity ?? null,
+      display_order: payload.display_order ?? 0,
+      is_default: payload.is_default ?? false,
+    }])
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export const updateVariant = async (id: number, updates: Record<string, unknown>) => {
+  const { data, error } = await supabase
+    .from('merchant_menu_item_variants')
+    .update({ ...updates, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export const deleteVariant = async (id: number) => {
+  const { error } = await supabase
+    .from('merchant_menu_item_variants')
+    .delete()
+    .eq('id', id);
+  if (error) throw error;
+}
+
+/** Delete all customizations for a menu item (addons cascade via FK) */
+export const deleteCustomizationsByMenuItemId = async (menuItemId: number) => {
+  const { error } = await supabase
+    .from('merchant_menu_item_customizations')
+    .delete()
+    .eq('menu_item_id', menuItemId);
+  if (error) throw error;
+}
+
+/** Delete all variants for a menu item */
+export const deleteVariantsByMenuItemId = async (menuItemId: number) => {
+  const { error } = await supabase
+    .from('merchant_menu_item_variants')
+    .delete()
+    .eq('menu_item_id', menuItemId);
+  if (error) throw error;
+}
+
 // ============================================
 // IMAGE UPLOAD STATUS
 // ============================================
 
 export const getImageUploadCount = async (storeId: string): Promise<number> => {
   try {
-    // First get the store's internal ID
+    const { total } = await getStoreImageCount(storeId);
+    return total;
+  } catch (error: any) {
+    console.error('Error getting image count:', error.message);
+    return 0;
+  }
+}
+
+/** Count of images used by store (menu items with image + categories with image) for plan limits */
+export const getStoreImageCount = async (storeId: string): Promise<{ itemImages: number; categoryImages: number; total: number }> => {
+  try {
     const { data: storeData, error: storeError } = await supabase
       .from('merchant_stores')
       .select('id')
       .eq('store_id', storeId)
       .single();
 
-    if (storeError || !storeData) {
-      console.error('Store not found for ID:', storeId);
-      return 0;
-    }
+    if (storeError || !storeData) return { itemImages: 0, categoryImages: 0, total: 0 };
 
-    const { data, error } = await supabase
-      .from('merchant_menu_items')
-      .select('item_id')
-      .eq('store_id', storeData.id);
+    const [itemsRes, categoriesRes] = await Promise.all([
+      supabase.from('merchant_menu_items').select('id').eq('store_id', storeData.id).not('item_image_url', 'is', null),
+      supabase.from('merchant_menu_categories').select('id').eq('store_id', storeData.id).not('category_image_url', 'is', null),
+    ]);
 
-    if (error) throw error;
-    return data?.length || 0;
+    const itemImages = itemsRes.data?.length ?? 0;
+    const categoryImages = categoriesRes.data?.length ?? 0;
+    return { itemImages, categoryImages, total: itemImages + categoryImages };
   } catch (error: any) {
-    console.error('Error getting image count:', error.message);
-    return 0;
+    console.error('Error getting store image count:', error.message);
+    return { itemImages: 0, categoryImages: 0, total: 0 };
   }
 }
 
@@ -846,8 +1076,9 @@ export const getImageUploadStatus = async (storeId: string) => {
   try {
     const count = await getImageUploadCount(storeId);
     
-    const TIER_1_LIMIT = 10;
-    const TIER_2_LIMIT = 7;
+    // Premium plan: 50 menu images total (tier1 + tier2)
+    const TIER_1_LIMIT = 25;
+    const TIER_2_LIMIT = 25;
     const TOTAL_FREE = TIER_1_LIMIT + TIER_2_LIMIT;
 
     const tier1Used = Math.min(count, TIER_1_LIMIT);
