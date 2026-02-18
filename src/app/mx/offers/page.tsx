@@ -7,6 +7,7 @@ import { fetchStoreById, fetchStoreByName, fetchAllOffers, createOffer, updateOf
 import { Plus, Edit2, Trash2, Zap, X, Calendar, Percent, DollarSign, Tag, Gift, User, Clock, ShoppingBag, CheckCircle, ChevronDown, Copy, Search, Check, Sparkles, ExternalLink, ChevronRight, Star, Shield, Award, Target, TrendingUp } from 'lucide-react'
 import { PageSkeletonGeneric } from '@/components/PageSkeleton'
 import { Toaster, toast } from 'sonner'
+import { MobileHamburgerButton } from '@/components/MobileHamburgerButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -629,19 +630,20 @@ function OffersContent() {
       <MXLayoutWhite restaurantName={store?.store_name || "Offers"} restaurantId={storeId || ""}>
         <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
           {/* Header */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between px-4 md:px-6 pt-6 pb-4 gap-4">
-            {/* Spacer for hamburger menu on left (mobile) */}
-            <div className="md:hidden w-12"></div>
-            {/* Heading on right for mobile, left for desktop */}
-            <div className="ml-auto md:ml-0">
-              <h1 className="text-2xl md:text-3xl font-bold text-gray-900 bg-gradient-to-r from-orange-600 to-red-600 bg-clip-text text-transparent">
-                Offers & Promotions
-              </h1>
-              <p className="text-gray-600 mt-1 text-sm md:text-base flex items-center gap-2">
-                <ShoppingBag size={16} />
-                Manage offers for <span className="font-semibold text-orange-600">{store?.store_name || 'your store'}</span>
-              </p>
-            </div>
+          <div className="bg-white border-b border-gray-200 shadow-sm px-4 md:px-6 py-4 md:py-5">
+            <div className="flex items-center gap-3 md:gap-4">
+              {/* Hamburger menu on left (mobile) */}
+              <MobileHamburgerButton />
+              {/* Heading - properly aligned */}
+              <div className="flex-1 min-w-0">
+                <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-900 bg-gradient-to-r from-orange-600 to-red-600 bg-clip-text text-transparent">
+                  Offers & Promotions
+                </h1>
+                <p className="text-gray-600 mt-1 text-sm md:text-base flex items-center gap-2">
+                  <ShoppingBag size={16} />
+                  Manage offers for <span className="font-semibold text-orange-600">{store?.store_name || 'your store'}</span>
+                </p>
+              </div>
             <button
               onClick={() => handleOpenModal()}
               className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-orange-500 to-red-500 text-white font-bold rounded-lg hover:from-orange-600 hover:to-red-600 transition-all text-sm shadow-lg hover:shadow-xl"
@@ -649,6 +651,7 @@ function OffersContent() {
               <Plus size={18} />
               Create Offer
             </button>
+            </div>
           </div>
 
           {/* Offers Grid - REDESIGNED CARDS */}
@@ -1582,23 +1585,6 @@ function OffersContent() {
           </div>
         )}
       </MXLayoutWhite>
-
-      {/* Add global CSS for hiding scrollbars */}
-      <style dangerouslySetInnerHTML={{ __html: `
-        .hide-scrollbar {
-          -ms-overflow-style: none;  /* IE and Edge */
-          scrollbar-width: none;      /* Firefox */
-        }
-        .hide-scrollbar::-webkit-scrollbar {
-          display: none;              /* Chrome, Safari and Opera */
-        }
-        .line-clamp-2 {
-          display: -webkit-box;
-          -webkit-line-clamp: 2;
-          -webkit-box-orient: vertical;
-          overflow: hidden;
-        }
-      `}} />
     </>
   )
 }

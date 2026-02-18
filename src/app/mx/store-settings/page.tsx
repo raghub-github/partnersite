@@ -1,17 +1,36 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, Suspense } from 'react'
+import { createPortal } from 'react-dom'
 import { useSearchParams } from 'next/navigation'
 import { MXLayoutWhite } from '@/components/MXLayoutWhite'
 import { supabase } from '@/lib/supabase';
 import { fetchRestaurantById as fetchStoreById, fetchRestaurantByName as fetchStoreByName } from '@/lib/database'
 import { MerchantStore } from '@/lib/merchantStore'
 import { DEMO_RESTAURANT_ID as DEMO_STORE_ID } from '@/lib/constants'
-import { Clock, Phone, Save, AlertCircle, CheckCircle2, X, Zap, Shield, BarChart3, Bell, Crown, Star, Check, MapPin, Settings, Calendar, Copy, Power, Plus, Trash2, ChevronDown, ChevronUp, Gift, Target, Globe, Users, Package, CreditCard, Sparkles, Smartphone } from 'lucide-react'
+import { Clock, Phone, Save, AlertCircle, CheckCircle2, X, Zap, Shield, BarChart3, Bell, Crown, Star, Check, MapPin, Calendar, Copy, Power, Plus, Trash2, ChevronDown, ChevronUp, Gift, Target, Globe, Users, Package, CreditCard, Sparkles, Smartphone, Lock, Unlock, Activity, FileText, Mail, MessageSquare, Radio, TrendingUp, Database, Eye, EyeOff, ShoppingBag, ChefHat, CheckCircle, XCircle, Image, Layers, BarChart2, Headphones, UserCheck } from 'lucide-react'
 import { PageSkeletonGeneric } from '@/components/PageSkeleton'
 import { Toaster, toast } from 'sonner'
+import { MobileHamburgerButton } from '@/components/MobileHamburgerButton'
 
 export const dynamic = 'force-dynamic'
+
+// Razorpay types
+declare global {
+  interface Window {
+    Razorpay?: new (options: {
+      key: string;
+      amount: number;
+      order_id: string;
+      name: string;
+      description: string;
+      handler: (res: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) => void;
+      prefill?: { email?: string; contact?: string };
+      theme?: { color?: string };
+      on?: (event: string, handler: (response: any) => void) => void;
+    }) => { open: () => void };
+  }
+}
 
 // Day types
 type DayType = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday'
@@ -40,19 +59,20 @@ function StoreSettingsContent() {
   const [isLoading, setIsLoading] = useState(true)
   const [storeId, setStoreId] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
-  const [activeTab, setActiveTab] = useState<'basic' | 'premium' | 'timings' | 'gatimitra' | 'pos'>(() => {
+  const [activeTab, setActiveTab] = useState<'plans' | 'timings' | 'operations' | 'menu-capacity' | 'delivery' | 'pos' | 'notifications' | 'audit' | 'gatimitra'>(() => {
     if (typeof window !== 'undefined') {
       const urlTab = new URLSearchParams(window.location.search).get('tab')
-      if (urlTab === 'premium' || urlTab === 'timings' || urlTab === 'gatimitra' || urlTab === 'pos') return urlTab as any
+      const validTabs = ['plans', 'timings', 'operations', 'menu-capacity', 'delivery', 'pos', 'notifications', 'audit', 'gatimitra']
+      if (urlTab && validTabs.includes(urlTab)) return urlTab as any
     }
-    return 'basic'
+    return 'plans'
   })
 
   // Sync tab with URL
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search)
-      if (activeTab !== (params.get('tab') || 'basic')) {
+      if (activeTab !== (params.get('tab') || 'plans')) {
         params.set('tab', activeTab)
         const newUrl = `${window.location.pathname}?${params.toString()}`
         window.history.replaceState({}, '', newUrl)
@@ -86,6 +106,18 @@ function StoreSettingsContent() {
   const [storeAddress, setStoreAddress] = useState('')
   const [storeDescription, setStoreDescription] = useState('')
 
+  // Plans & Subscription state
+  const [plans, setPlans] = useState<any[]>([])
+  const [currentSubscription, setCurrentSubscription] = useState<any>(null)
+  const [currentPlan, setCurrentPlan] = useState<any>(null)
+  const [paymentHistory, setPaymentHistory] = useState<any[]>([])
+  const [loadingPlans, setLoadingPlans] = useState(false)
+  const [upgradingPlanId, setUpgradingPlanId] = useState<number | null>(null)
+  const [onboardingPayments, setOnboardingPayments] = useState<any[]>([])
+  const [autoRenew, setAutoRenew] = useState(false)
+  const [showAutoRenewConfirm, setShowAutoRenewConfirm] = useState(false)
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null)
+  
   // Premium Benefits state
   const [analyticsEnabled, setAnalyticsEnabled] = useState(false)
   const [smartPricing, setSmartPricing] = useState(false)
@@ -94,6 +126,33 @@ function StoreSettingsContent() {
   const [promoNotifications, setPromoNotifications] = useState(true)
   const [marketingAutomation, setMarketingAutomation] = useState(false)
   const [subscriptionPlan, setSubscriptionPlan] = useState<'free' | 'pro' | 'enterprise'>('pro')
+  
+  // Store Operations state
+  const [autoAcceptOrders, setAutoAcceptOrders] = useState(false)
+  const [preparationBufferMinutes, setPreparationBufferMinutes] = useState(15)
+  const [manualActivationLock, setManualActivationLock] = useState(false)
+  
+  // Menu & Capacity Controls state
+  const [currentMenuItemsCount, setCurrentMenuItemsCount] = useState(0)
+  const [currentCuisinesCount, setCurrentCuisinesCount] = useState(0)
+  const [maxMenuItems, setMaxMenuItems] = useState<number | null>(null)
+  const [maxCuisines, setMaxCuisines] = useState<number | null>(null)
+  const [imageUploadAllowed, setImageUploadAllowed] = useState(false)
+  
+  // Delivery Settings state
+  const [gatimitraDeliveryEnabled, setGatimitraDeliveryEnabled] = useState(true)
+  const [selfDeliveryEnabled, setSelfDeliveryEnabled] = useState(false)
+  const [deliveryRadiusKm, setDeliveryRadiusKm] = useState(5)
+  const [showSelfDeliveryConfirm, setShowSelfDeliveryConfirm] = useState(false)
+  
+  // Notifications & Alerts state
+  const [smsAlerts, setSmsAlerts] = useState(true)
+  const [appAlerts, setAppAlerts] = useState(true)
+  const [operationalWarnings, setOperationalWarnings] = useState(true)
+  
+  // Audit & Activity state
+  const [actionTrackingEnabled, setActionTrackingEnabled] = useState(true)
+  const [staffPermissionsEnabled, setStaffPermissionsEnabled] = useState(false)
 
   // Outlet timings state - Loaded from Supabase
   const [applyMondayToAll, setApplyMondayToAll] = useState(false)
@@ -143,6 +202,12 @@ function StoreSettingsContent() {
 
   // Store timing schedule state
   const [storeSchedule, setStoreSchedule] = useState<DaySchedule[]>(initialSchedule)
+  
+  // Track manual time changes per day (to show save button)
+  const [manualTimeChanges, setManualTimeChanges] = useState<Set<DayType>>(new Set())
+  
+  // Last updated info state
+  const [lastUpdatedBy, setLastUpdatedBy] = useState<{ email?: string; at?: string } | null>(null)
 
   // Load timings from merchant_store_operating_hours on page load
   const fetchTimings = async () => {
@@ -151,14 +216,26 @@ function StoreSettingsContent() {
       // Get store bigint id from merchant_stores
       const storeRes = await fetch(`/api/store-id?store_id=${storeId}`);
       if (!storeRes.ok) return;
-      const storeData = await storeRes.json();
+      let storeData;
+      try {
+        storeData = await storeRes.json();
+      } catch (jsonError) {
+        console.error('Failed to parse store data JSON:', jsonError);
+        return;
+      }
       if (!storeData || !storeData.id) return;
       const storeBigIntId = storeData.id;
 
       // Fetch timings from merchant_store_operating_hours
       const res = await fetch(`/api/outlet-timings?store_id=${storeBigIntId}`);
       if (!res.ok) return;
-      const data = await res.json();
+      let data;
+      try {
+        data = await res.json();
+      } catch (jsonError) {
+        console.error('Failed to parse timings data JSON:', jsonError);
+        return;
+      }
       if (!data || data.error) return;
 
       // Debug: Log fetched timings
@@ -212,6 +289,14 @@ function StoreSettingsContent() {
       setApplyMondayToAll(!!data.same_for_all_days);
       setForce24Hours(!!data.is_24_hours);
       setClosedDay((data.closed_days && data.closed_days.length > 0) ? data.closed_days[0] : null);
+      
+      // Set last updated info
+      if (data.updated_by_email || data.updated_by_at) {
+        setLastUpdatedBy({
+          email: data.updated_by_email,
+          at: data.updated_by_at,
+        });
+      }
       // Do NOT override toggles based on other logic, always use DB values
     } catch (error) {
       console.error('Error loading timings:', error);
@@ -294,15 +379,27 @@ function StoreSettingsContent() {
     loadStore()
   }, [storeId])
 
-  // Load store operations (open/closed, manual_close_until)
+  // Load store operations (open/closed, manual_close_until, block_auto_open)
   const fetchStoreOperations = async () => {
     if (!storeId) return
     try {
       const res = await fetch(`/api/store-operations?store_id=${encodeURIComponent(storeId)}`)
-      const data = await res.json()
+      let data;
+      try {
+        data = await res.json()
+      } catch (jsonError) {
+        console.error('Failed to parse store operations JSON:', jsonError);
+        // fallback from store if loaded
+        if (store) {
+          setIsStoreOpen((store as MerchantStore).operational_status === 'OPEN' || !!(store as MerchantStore).is_accepting_orders)
+        }
+        return;
+      }
       if (res.ok) {
         setIsStoreOpen(data.operational_status === 'OPEN')
         setManualCloseUntil(data.manual_close_until || null)
+        // Load manual activation lock state from block_auto_open
+        setManualActivationLock(data.block_auto_open === true)
       }
     } catch {
       // fallback from store if loaded
@@ -314,6 +411,18 @@ function StoreSettingsContent() {
   useEffect(() => {
     if (storeId) fetchStoreOperations()
   }, [storeId])
+
+  // Add/remove body class when modal opens/closes to blur sidebar
+  useEffect(() => {
+    if (showAutoRenewConfirm) {
+      document.body.classList.add('modal-open-blur')
+    } else {
+      document.body.classList.remove('modal-open-blur')
+    }
+    return () => {
+      document.body.classList.remove('modal-open-blur')
+    }
+  }, [showAutoRenewConfirm])
 
   useEffect(() => {
     if (!storeId || isStoreOpen || !manualCloseUntil) return
@@ -327,7 +436,15 @@ function StoreSettingsContent() {
     const load = async () => {
       try {
         const res = await fetch(`/api/merchant/pos-integration?storeId=${encodeURIComponent(storeId)}`)
-        const data = await res.json()
+        let data;
+        try {
+          data = await res.json()
+        } catch (jsonError) {
+          console.error('Failed to parse POS integration JSON:', jsonError);
+          setPosStatus(null)
+          setPosIntegrationActive(false)
+          return;
+        }
         if (res.ok) {
           setPosPartner(data.pos_partner || '')
           setPosStoreId(data.pos_store_id || '')
@@ -340,6 +457,126 @@ function StoreSettingsContent() {
       }
     }
     load()
+  }, [storeId])
+
+  // Load plans and subscription
+  useEffect(() => {
+    if (!storeId) return
+    const loadPlansAndSubscription = async () => {
+      setLoadingPlans(true)
+      try {
+        // Load available plans
+        const plansRes = await fetch('/api/merchant/plans')
+        let plansData;
+        try {
+          plansData = await plansRes.json()
+        } catch (jsonError) {
+          console.error('Failed to parse plans JSON:', jsonError);
+        }
+        if (plansRes.ok && plansData?.plans) {
+          setPlans(plansData.plans)
+        }
+
+        // Load current subscription
+        const subRes = await fetch(`/api/merchant/subscription?storeId=${encodeURIComponent(storeId)}`)
+        let subData;
+        try {
+          subData = await subRes.json()
+        } catch (jsonError) {
+          console.error('Failed to parse subscription JSON:', jsonError);
+        }
+        if (subRes.ok && subData) {
+          setCurrentSubscription(subData.subscription)
+          setCurrentPlan(subData.plan)
+          // Auto-renew should be off by default
+          setAutoRenew(subData.subscription?.auto_renew === true ? true : false)
+          if (subData.plan?.plan_code) {
+            setSubscriptionPlan(subData.plan.plan_code.toLowerCase() as 'free' | 'pro' | 'enterprise')
+            setMaxMenuItems(subData.plan.max_menu_items)
+            setMaxCuisines(subData.plan.max_cuisines)
+            setImageUploadAllowed(subData.plan.image_upload_allowed || false)
+            setAnalyticsEnabled(subData.plan.analytics_access || false)
+            setAdvancedSecurity(subData.plan.advanced_analytics || false)
+            setPrioritySupport(subData.plan.priority_support || false)
+            setMarketingAutomation(subData.plan.marketing_automation || false)
+          }
+        }
+
+        // Load payment history
+        const paymentsRes = await fetch(`/api/merchant/subscription/payments?storeId=${encodeURIComponent(storeId)}`)
+        let paymentsData;
+        try {
+          paymentsData = await paymentsRes.json()
+        } catch (jsonError) {
+          console.error('Failed to parse payments JSON:', jsonError);
+        }
+        if (paymentsRes.ok && paymentsData?.payments) {
+          setPaymentHistory(paymentsData.payments)
+        }
+
+        // Load onboarding payments
+        const onboardingRes = await fetch(`/api/merchant/onboarding-payments?storeId=${encodeURIComponent(storeId)}`)
+        let onboardingData;
+        try {
+          onboardingData = await onboardingRes.json()
+        } catch (jsonError) {
+          console.error('Failed to parse onboarding payments JSON:', jsonError);
+        }
+        if (onboardingRes.ok && onboardingData?.payments) {
+          setOnboardingPayments(onboardingData.payments)
+        }
+      } catch (error) {
+        console.error('Error loading plans/subscription:', error)
+      } finally {
+        setLoadingPlans(false)
+      }
+    }
+    loadPlansAndSubscription()
+  }, [storeId])
+
+  // Load menu items count for capacity display
+  useEffect(() => {
+    if (!storeId) return
+    const loadMenuStats = async () => {
+      try {
+        const res = await fetch(`/api/menu?storeId=${encodeURIComponent(storeId)}`)
+        if (!res.ok) {
+          console.warn('Menu API returned non-ok status:', res.status);
+          return;
+        }
+        
+        // Check if response has content before parsing
+        const contentType = res.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          console.warn('Menu API response is not JSON');
+          return;
+        }
+        
+        const text = await res.text();
+        if (!text || text.trim().length === 0) {
+          console.warn('Menu API returned empty response');
+          return;
+        }
+        
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch (jsonError) {
+          console.error('Failed to parse menu JSON:', jsonError, 'Response text:', text.substring(0, 100));
+          return;
+        }
+        
+        if (data?.items && Array.isArray(data.items)) {
+          setCurrentMenuItemsCount(data.items.length || 0)
+          // Count unique cuisines
+          const cuisines = new Set(data.items.map((item: any) => item.cuisine_type).filter(Boolean))
+          setCurrentCuisinesCount(cuisines.size)
+        }
+      } catch (error) {
+        console.error('Error loading menu stats:', error)
+      }
+    }
+    loadMenuStats()
   }, [storeId])
 
   const savePosIntegration = async () => {
@@ -358,7 +595,14 @@ function StoreSettingsContent() {
           pos_store_id: posStoreId.trim() || undefined,
         }),
       })
-      const data = await res.json()
+      let data;
+      try {
+        data = await res.json()
+      } catch (jsonError) {
+        console.error('Failed to parse POS save JSON:', jsonError);
+        toast.error('Failed to save POS integration - invalid response')
+        return;
+      }
       if (res.ok && data.success) {
         setPosStatus('PENDING')
         setPosIntegrationActive(false)
@@ -377,7 +621,14 @@ function StoreSettingsContent() {
     if (!storeId) return
     try {
       const res = await fetch(`/api/merchant/pos-integration?storeId=${encodeURIComponent(storeId)}&status=ACTIVE`, { method: 'PATCH' })
-      const data = await res.json()
+      let data;
+      try {
+        data = await res.json()
+      } catch (jsonError) {
+        console.error('Failed to parse POS status JSON:', jsonError);
+        toast.error('Failed to update status - invalid response')
+        return;
+      }
       if (res.ok && data.success) {
         setPosStatus('ACTIVE')
         setPosIntegrationActive(true)
@@ -400,7 +651,14 @@ function StoreSettingsContent() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ store_id: storeId, action: 'manual_open' }),
         })
-        const data = await res.json()
+        let data;
+        try {
+          data = await res.json()
+        } catch (jsonError) {
+          console.error('Failed to parse store open JSON:', jsonError);
+          toast.error('Failed to open store - invalid response')
+          return;
+        }
         if (res.ok && data.success) {
           setIsStoreOpen(true)
           setManualCloseUntil(null)
@@ -427,7 +685,14 @@ function StoreSettingsContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ store_id: storeId, action: 'manual_close', duration_minutes: duration }),
       })
-      const data = await res.json()
+      let data;
+      try {
+        data = await res.json()
+      } catch (jsonError) {
+        console.error('Failed to parse store close JSON:', jsonError);
+        toast.error('Failed to close store - invalid response')
+        return;
+      }
       if (res.ok && data.success) {
         setIsStoreOpen(false)
         setManualCloseUntil(data.manual_close_until || null)
@@ -454,7 +719,8 @@ function StoreSettingsContent() {
   }
 
   const handleSaveSettings = async () => {
-    if (!phone || !latitude || !longitude) {
+    // Delivery tab does not require phone/lat/long; only enforce on tabs that use them
+    if (activeTab !== 'delivery' && (!phone || !latitude || !longitude)) {
       toast.error('⚠️ Please fill in all required fields')
       return
     }
@@ -479,48 +745,497 @@ function StoreSettingsContent() {
     return true
   }
 
-  const handleUpgradePlan = (plan: 'pro' | 'enterprise') => {
-    setSubscriptionPlan(plan)
-    if (plan === 'pro') {
-      setAnalyticsEnabled(true)
-      setSmartPricing(true)
-      setPrioritySupport(true)
-    } else {
-      setAnalyticsEnabled(true)
-      setSmartPricing(true)
-      setPrioritySupport(true)
-      setAdvancedSecurity(true)
-      setMarketingAutomation(true)
+  // Load Razorpay script
+  const loadRazorpayScript = () => {
+    return new Promise((resolve) => {
+      if (typeof window !== 'undefined' && (window as any).Razorpay) {
+        resolve(true);
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.onload = () => resolve(true);
+      script.onerror = () => resolve(false);
+      document.body.appendChild(script);
+    });
+  };
+
+  const handleAutoRenewToggle = async (value: boolean) => {
+    if (!storeId) return;
+    
+    // If turning ON, show confirmation popup
+    if (value && !autoRenew) {
+      setShowAutoRenewConfirm(true);
+      return;
     }
-    toast.success(`🎉 Upgraded to ${plan === 'pro' ? 'Pro' : 'Enterprise'} plan!`)
+    
+    // If turning OFF, proceed directly
+    await updateAutoRenew(value);
+  };
+
+  const updateAutoRenew = async (value: boolean) => {
+    if (!storeId) return;
+    try {
+      const res = await fetch('/api/merchant/subscription/auto-renew', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId, autoRenew: value }),
+      });
+      let data;
+      try {
+        data = await res.json();
+      } catch (jsonError) {
+        console.error('Failed to parse auto-renew JSON:', jsonError);
+        toast.error('Failed to update auto-renew');
+        return;
+      }
+      if (res.ok && data.success) {
+        setAutoRenew(value);
+        toast.success(`Auto-renew ${value ? 'enabled' : 'disabled'}`);
+        setShowAutoRenewConfirm(false);
+      } else {
+        toast.error(data.error || 'Failed to update auto-renew');
+      }
+    } catch (error) {
+      console.error('Error updating auto-renew:', error);
+      toast.error('Failed to update auto-renew');
+    }
+  };
+
+  const reloadSubscriptionData = async () => {
+    if (!storeId) return;
+    try {
+      const subRes = await fetch(`/api/merchant/subscription?storeId=${encodeURIComponent(storeId)}`);
+      let subData;
+      try {
+        subData = await subRes.json();
+      } catch (jsonError) {
+        console.error('Failed to parse subscription reload JSON:', jsonError);
+        return;
+      }
+      if (subRes.ok && subData) {
+        setCurrentSubscription(subData.subscription);
+        setCurrentPlan(subData.plan);
+        // Auto-renew should be off by default
+        setAutoRenew(subData.subscription?.auto_renew === true ? true : false);
+        if (subData.plan?.plan_code) {
+          setSubscriptionPlan(subData.plan.plan_code.toLowerCase() as 'free' | 'pro' | 'enterprise');
+          setMaxMenuItems(subData.plan.max_menu_items);
+          setMaxCuisines(subData.plan.max_cuisines);
+          setImageUploadAllowed(subData.plan.image_upload_allowed || false);
+        }
+      }
+
+      // Reload payment history
+      const paymentsRes = await fetch(`/api/merchant/subscription/payments?storeId=${encodeURIComponent(storeId)}`);
+      let paymentsData;
+      try {
+        paymentsData = await paymentsRes.json();
+      } catch (jsonError) {
+        console.error('Failed to parse payments JSON:', jsonError);
+      }
+      if (paymentsRes.ok && paymentsData?.payments) {
+        setPaymentHistory(paymentsData.payments);
+      }
+    } catch (error) {
+      console.error('Error reloading subscription data:', error);
+    }
+  };
+
+  const handleUpgradePlan = async (planId: number) => {
+    if (!storeId) return;
+    
+    const selectedPlan = plans.find(p => p.id === planId);
+    if (!selectedPlan) {
+      toast.error('Plan not found');
+      return;
+    }
+
+    // Prevent downgrading to free plan if there's an active paid subscription
+    if ((selectedPlan.price === 0 || selectedPlan.price === null) && currentPlan && currentPlan.price > 0) {
+      const expiryDate = currentSubscription?.expiry_date ? new Date(currentSubscription.expiry_date) : null;
+      const isExpired = expiryDate ? expiryDate < new Date() : false;
+      
+      if (!isExpired) {
+        toast.error(`⚠️ आपका ${currentPlan.plan_name} plan अभी भी active है। Free plan पर move करने के लिए पहले current plan expire होना चाहिए।`);
+        toast.error(`⚠️ Your ${currentPlan.plan_name} plan is still active. Please wait until it expires to move to Free plan.`);
+        return;
+      }
+    }
+
+    // If plan is free, activate directly without payment
+    if (selectedPlan.price === 0 || selectedPlan.price === null) {
+      setUpgradingPlanId(planId);
+      try {
+        const res = await fetch('/api/merchant/subscription', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            storeId,
+            planId,
+            paymentGatewayId: `free_${Date.now()}`,
+          }),
+        });
+        let data;
+        try {
+          data = await res.json();
+        } catch (jsonError) {
+          console.error('Failed to parse subscription activation JSON:', jsonError);
+          toast.error('Failed to activate subscription - invalid response');
+          return;
+        }
+        if (res.ok && data.success) {
+          toast.success('🎉 Subscription activated successfully!');
+          await reloadSubscriptionData();
+        } else {
+          const errorMsg = data.errorEn || data.error || 'Failed to activate subscription';
+          toast.error(errorMsg);
+        }
+      } catch (error) {
+        console.error('Error activating subscription:', error);
+        toast.error('Failed to activate subscription');
+      } finally {
+        setUpgradingPlanId(null);
+      }
+      return;
+    }
+
+    // For paid plans, use Razorpay
+    setUpgradingPlanId(planId);
+    try {
+      // Load Razorpay script
+      await loadRazorpayScript();
+
+      // Create payment order
+      const orderRes = await fetch('/api/merchant/subscription/create-payment-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId, planId }),
+      });
+
+      let orderData;
+      try {
+        orderData = await orderRes.json();
+      } catch (jsonError) {
+        console.error('Failed to parse order JSON:', jsonError);
+        toast.error('Failed to create payment order');
+        setUpgradingPlanId(null);
+        return;
+      }
+
+      if (!orderRes.ok || !orderData.success) {
+        toast.error(orderData.error || 'Failed to create payment order');
+        setUpgradingPlanId(null);
+        return;
+      }
+
+      // Zero-amount upgrade (proration covers full price): confirm upgrade without Razorpay
+      if (orderData.skipPayment) {
+        const upgradeRes = await fetch('/api/merchant/subscription/upgrade', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ storeId, newPlanId: planId, skipPayment: true }),
+        });
+        const upgradeData = await upgradeRes.json().catch(() => ({}));
+        if (upgradeRes.ok && upgradeData.success) {
+          toast.success('🎉 Upgrade complete! Your new plan is active.');
+          await reloadSubscriptionData();
+        } else {
+          toast.error(upgradeData.error || 'Upgrade failed');
+        }
+        setUpgradingPlanId(null);
+        return;
+      }
+
+      const isUpgrade = !!orderData.isUpgrade;
+      if (isUpgrade && orderData.amountToCharge != null) {
+        toast.info(`You will be charged ₹${Number(orderData.amountToCharge).toFixed(2)} after adjusting unused time from your current plan.`, { duration: 5000 });
+      }
+
+      const clearProcessing = () => {
+        setUpgradingPlanId((current) => (current === planId ? null : current));
+      };
+
+      // Open Razorpay checkout
+      const rzp = new (window as any).Razorpay({
+        key: orderData.keyId,
+        amount: orderData.amount,
+        order_id: orderData.orderId,
+        name: 'GatiMitra Growth Plans ⭐',
+        description: isUpgrade
+          ? `${selectedPlan.plan_name} – ₹${Number(orderData.amountToCharge || 0).toFixed(2)} (credit applied)`
+          : `${selectedPlan.plan_name} - ₹${selectedPlan.price}/${selectedPlan.billing_cycle?.toLowerCase() || 'month'}`,
+        theme: {
+          color: '#f97316',
+        },
+        modal: {
+          ondismiss: () => {
+            toast.info('ℹ️ Payment cancelled by user');
+            clearProcessing();
+          },
+        },
+        handler: async (response: any) => {
+          try {
+            const apiUrl = isUpgrade ? '/api/merchant/subscription/upgrade' : '/api/merchant/subscription/verify-payment';
+            const body = isUpgrade
+              ? { storeId, newPlanId: planId, razorpay_order_id: response.razorpay_order_id, razorpay_payment_id: response.razorpay_payment_id, razorpay_signature: response.razorpay_signature }
+              : { storeId, planId, razorpay_order_id: response.razorpay_order_id, razorpay_payment_id: response.razorpay_payment_id, razorpay_signature: response.razorpay_signature };
+            const verifyRes = await fetch(apiUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+
+            let verifyData;
+            try {
+              verifyData = await verifyRes.json();
+            } catch (jsonError) {
+              console.error('Failed to parse verification JSON:', jsonError);
+              toast.error('Payment verification failed');
+              clearProcessing();
+              return;
+            }
+
+            if (verifyRes.ok && verifyData.success) {
+              toast.success(isUpgrade ? '🎉 Upgrade successful! Your new plan is active.' : '🎉 Payment successful! Subscription activated.');
+              await reloadSubscriptionData();
+            } else {
+              toast.error(verifyData.error || 'Payment verification failed');
+            }
+          } catch (error) {
+            console.error('Error verifying payment:', error);
+            toast.error('Payment verification failed');
+          } finally {
+            clearProcessing();
+          }
+        },
+        prefill: {
+          email: store?.email || '',
+          contact: store?.phone || '',
+        },
+      });
+
+      rzp.on('payment.failed', (response: any) => {
+        toast.error(`Payment failed: ${response.error?.description || 'Unknown error'}`);
+        clearProcessing();
+      });
+
+      rzp.on('modal.close', () => clearProcessing());
+
+      rzp.open();
+
+      // Safety: clear "Processing..." after 60s if modal was closed without firing events
+      setTimeout(clearProcessing, 60000);
+    } catch (error) {
+      console.error('Error initiating payment:', error);
+      toast.error('Failed to initiate payment');
+      setUpgradingPlanId(null);
+    }
   }
+
+  // Helper function to log activities
+  const logActivity = async (activityType: string, description: string, metadata?: any) => {
+    if (!storeId) return;
+    try {
+      await fetch('/api/merchant/store-settings-activity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storeId,
+          activityType,
+          description,
+          metadata,
+        }),
+      });
+    } catch (error) {
+      console.error('Failed to log activity:', error);
+      // Don't show error to user, just log it
+    }
+  };
+
+  // Save manual activation lock to database
+  const saveManualActivationLock = async (enabled: boolean) => {
+    if (!storeId) return;
+    try {
+      const res = await fetch('/api/store-operations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          store_id: storeId,
+          action: 'update_manual_lock',
+          block_auto_open: enabled,
+        }),
+      });
+
+      if (!res.ok) {
+        let errorText = 'Failed to save';
+        try {
+          const errorData = await res.json();
+          errorText = errorData.error || errorText;
+        } catch (e) {
+          errorText = await res.text() || errorText;
+        }
+        console.error('Failed to save manual activation lock:', errorText);
+        toast.error('Failed to save manual activation lock setting');
+        // Revert toggle on error
+        setManualActivationLock(!enabled);
+        return;
+      }
+
+      const result = await res.json();
+      if (result.success) {
+        toast.success(enabled ? '🔒 Manual activation lock enabled' : '🔓 Manual activation lock disabled');
+        // Log activity
+        await logActivity('MANUAL_LOCK_TOGGLE', `Manual activation lock ${enabled ? 'enabled' : 'disabled'}`, {
+          enabled,
+          block_auto_open: enabled,
+        });
+      }
+    } catch (error) {
+      console.error('Error saving manual activation lock:', error);
+      toast.error('Failed to save manual activation lock setting');
+      // Revert toggle on error
+      setManualActivationLock(!enabled);
+    }
+  };
+
+  // Helper function to save complete timings state
+  const saveCompleteTimings = async (overrideSchedule?: DaySchedule[], overrideSameForAll?: boolean, override24Hours?: boolean, overrideClosedDay?: DayType | null) => {
+    if (!storeId) return false;
+    try {
+      const scheduleToUse = overrideSchedule || storeSchedule;
+      const sameForAllToUse = overrideSameForAll !== undefined ? overrideSameForAll : applyMondayToAll;
+      const force24HoursToUse = override24Hours !== undefined ? override24Hours : force24Hours;
+      const closedDayToUse = overrideClosedDay !== undefined ? overrideClosedDay : closedDay;
+      
+      // Calculate closed_days array from all closed days
+      const closedDaysArray: string[] = [];
+      scheduleToUse.forEach(day => {
+        if (!day.isOpen || day.isOutletClosed) {
+          closedDaysArray.push(day.day);
+        }
+      });
+      
+      const timings: any = { 
+        store_id: storeId,
+        same_for_all: sameForAllToUse,
+        force_24_hours: force24HoursToUse,
+        closed_day: closedDayToUse, // Keep for backward compatibility
+        closed_days: closedDaysArray.length > 0 ? closedDaysArray : null, // New: array of all closed days
+      };
+      
+      // Add all day states
+      scheduleToUse.forEach(day => {
+        const prefix = day.day;
+        timings[`${prefix}_open`] = day.isOpen && !day.isOutletClosed;
+        if (day.is24Hours) {
+          // For 24 hours, use 00:00 to 23:59 to satisfy the constraint (end > start)
+          // Alternatively, we could set both to NULL, but using actual times is clearer
+          timings[`${prefix}_slot1_start`] = '00:00';
+          timings[`${prefix}_slot1_end`] = '23:59';
+          timings[`${prefix}_slot2_start`] = null;
+          timings[`${prefix}_slot2_end`] = null;
+          timings[`${prefix}_total_duration_minutes`] = 24 * 60;
+        } else if (day.isOutletClosed) {
+          timings[`${prefix}_slot1_start`] = null;
+          timings[`${prefix}_slot1_end`] = null;
+          timings[`${prefix}_slot2_start`] = null;
+          timings[`${prefix}_slot2_end`] = null;
+          timings[`${prefix}_total_duration_minutes`] = 0;
+        } else {
+          timings[`${prefix}_slot1_start`] = day.slots[0]?.openingTime || null;
+          timings[`${prefix}_slot1_end`] = day.slots[0]?.closingTime || null;
+          timings[`${prefix}_slot2_start`] = day.slots[1]?.openingTime || null;
+          timings[`${prefix}_slot2_end`] = day.slots[1]?.closingTime || null;
+          timings[`${prefix}_total_duration_minutes`] = (day.operationalHours * 60 + day.operationalMinutes);
+        }
+      });
+      
+      const { data: { user } } = await supabase.auth.getUser();
+      timings.updated_by_email = user?.email || '';
+      timings.updated_by_at = new Date().toISOString();
+
+      const res = await fetch('/api/outlet-timings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(timings),
+      });
+
+      if (!res.ok) {
+        let errorText = 'Failed to save';
+        let errorDetails: any = null;
+        try {
+          const errorData = await res.json();
+          errorText = errorData.error || errorText;
+          errorDetails = errorData;
+        } catch (e) {
+          try {
+            errorText = await res.text() || errorText;
+          } catch (e2) {
+            errorText = `HTTP ${res.status} ${res.statusText}`;
+          }
+        }
+        
+        // Log the error to audit log
+        await logActivity('TIMING_SAVE_ERROR', `Failed to save timings: ${errorText}`, {
+          error: errorText,
+          errorDetails,
+          timingsData: timings,
+          scheduleState: {
+            sameForAll: sameForAllToUse,
+            force24Hours: force24HoursToUse,
+            closedDay: closedDayToUse,
+          },
+        });
+        
+        console.error('Failed to save timings:', errorText, errorDetails);
+        return false;
+      }
+
+      const result = await res.json();
+      const success = result.success !== false; // Return true if success is true or undefined
+      
+      // Log successful save
+      if (success) {
+        await logActivity('TIMING_SAVE_SUCCESS', 'Timings saved successfully', {
+          scheduleState: {
+            sameForAll: sameForAllToUse,
+            force24Hours: force24HoursToUse,
+            closedDay: closedDayToUse,
+          },
+        });
+      }
+      
+      return success;
+    } catch (error) {
+      console.error('Failed to save timings:', error);
+      return false;
+    }
+  };
 
   // Store timing functions
   const toggleDayExpansion = (day: DayType) => {
     setExpandedDay(expandedDay === day ? null : day)
   }
 
-  const handleDayToggle = (day: DayType) => {
-    setStoreSchedule(prev => prev.map(d => {
+  const handleDayToggle = async (day: DayType) => {
+    const daySchedule = storeSchedule.find(d => d.day === day);
+    if (!daySchedule) return;
+    
+    const oldValue = daySchedule.isOpen;
+    const newIsOpen = !oldValue;
+    
+    // Remove from manual changes since this is a toggle (auto-save)
+    setManualTimeChanges(prev => {
+      const newSet = new Set(prev);
+      newSet.delete(day);
+      return newSet;
+    });
+    
+    const newSchedule = storeSchedule.map(d => {
       if (d.day === day) {
-        const newIsOpen = !d.isOpen;
         const newSlots = (newIsOpen && !d.is24Hours && !d.isOutletClosed) ? [] : d.slots;
         const { hours, minutes } = calculateOperationalTime(newSlots);
-        
-        // Disable same for all when any day is modified
-        if (applyMondayToAll) {
-          setApplyMondayToAll(false);
-        }
-        
-        // Disable 24 hours when any day is modified
-        if (force24Hours) {
-          setForce24Hours(false);
-        }
-        
-        // If day is being opened, remove from closed day
-        if (newIsOpen && closedDay === day) {
-          setClosedDay(null);
-        }
         
         return {
           ...d,
@@ -533,52 +1248,125 @@ function StoreSettingsContent() {
         }
       }
       return d
-    }))
-    toast.success(`${day.charAt(0).toUpperCase() + day.slice(1)} ${storeSchedule.find(d => d.day === day)?.isOpen ? 'closed' : 'opened'}`)
+    });
+    
+    // Update state
+    setStoreSchedule(newSchedule);
+    
+    // Disable same for all when any day is modified
+    const newSameForAll = false; // Always false when individual day is modified
+    if (applyMondayToAll) {
+      setApplyMondayToAll(false);
+    }
+    
+    // Disable 24 hours when any day is modified
+    const newForce24Hours = false; // Always false when individual day is modified
+    if (force24Hours) {
+      setForce24Hours(false);
+    }
+    
+    // If day is being opened, remove from closed day
+    const newClosedDay = (newIsOpen && closedDay === day) ? null : closedDay;
+    if (newIsOpen && closedDay === day) {
+      setClosedDay(null);
+    }
+    
+    // Auto-save complete state immediately with updated values
+    const saved = await saveCompleteTimings(newSchedule, newSameForAll, newForce24Hours, newClosedDay);
+    if (saved) {
+          await logActivity('DAY_TOGGLE', `${day.toUpperCase()} ${newIsOpen ? 'opened' : 'closed'}`, {
+            day,
+            oldValue,
+            newValue: newIsOpen,
+          });
+          await fetchLastUpdatedInfo(); // Refresh last updated info
+    } else {
+      toast.error('Failed to save toggle state');
+    }
+    
+    toast.success(`${day.charAt(0).toUpperCase() + day.slice(1)} ${newIsOpen ? 'opened' : 'closed'}`)
   }
 
-  const handle24HoursToggle = (day: DayType) => {
-    setStoreSchedule(prev => prev.map(d => {
+  const handle24HoursToggle = async (day: DayType) => {
+    const daySchedule = storeSchedule.find(d => d.day === day);
+    if (!daySchedule) return;
+    
+    const oldValue = daySchedule.is24Hours;
+    const new24Hours = !oldValue;
+    
+    // Remove from manual changes since this is a toggle (auto-save)
+    setManualTimeChanges(prev => {
+      const newSet = new Set(prev);
+      newSet.delete(day);
+      return newSet;
+    });
+    
+    const newSchedule = storeSchedule.map(d => {
       if (d.day === day) {
-        const new24Hours = !d.is24Hours
-        
-        // Disable same for all when individual day is modified
-        if (applyMondayToAll) {
-          setApplyMondayToAll(false);
-        }
-        
-        // Disable force24Hours when individual day is modified
-        if (force24Hours) {
-          setForce24Hours(false);
-        }
-        
-        // Remove from closed day if enabling 24 hours
-        if (new24Hours && closedDay === day) {
-          setClosedDay(null);
-        }
-        
         return {
           ...d,
           is24Hours: new24Hours,
           isOutletClosed: false,
-          slots: new24Hours ? [{ id: '1', openingTime: '00:00', closingTime: '00:00' }] : [],
+          slots: new24Hours ? [{ id: '1', openingTime: '00:00', closingTime: '23:59' }] : [],
           duration: new24Hours ? '24.0 hrs' : '0.0 hrs',
           operationalHours: new24Hours ? 24 : 0,
           operationalMinutes: 0
         }
       }
       return d
-    }))
-    toast.success(`24 Hours ${storeSchedule.find(d => d.day === day)?.is24Hours ? 'disabled' : 'enabled'} for ${day}`)
+    });
+    
+    setStoreSchedule(newSchedule);
+    
+    // Disable same for all when individual day is modified
+    const newSameForAll = false; // Always false when individual day is modified
+    if (applyMondayToAll) {
+      setApplyMondayToAll(false);
+    }
+    
+    // Disable force24Hours when individual day is modified
+    const newForce24Hours = false; // Always false when individual day is modified
+    if (force24Hours) {
+      setForce24Hours(false);
+    }
+    
+    // Remove from closed day if enabling 24 hours
+    const newClosedDay = (new24Hours && closedDay === day) ? null : closedDay;
+    if (new24Hours && closedDay === day) {
+      setClosedDay(null);
+    }
+    
+    // Auto-save complete state immediately with updated values
+    const saved = await saveCompleteTimings(newSchedule, newSameForAll, newForce24Hours, newClosedDay);
+    if (saved) {
+      await logActivity('24H_TOGGLE', `24 Hours ${new24Hours ? 'enabled' : 'disabled'} for ${day.toUpperCase()}`, {
+        day,
+        oldValue,
+        newValue: new24Hours,
+      });
+      await fetchLastUpdatedInfo(); // Refresh last updated info
+    } else {
+      toast.error('Failed to save toggle state');
+    }
+    
+    toast.success(`24 Hours ${new24Hours ? 'enabled' : 'disabled'} for ${day}`)
   }
 
-  const handleOutletClosedToggle = (day: DayType) => {
+  const handleOutletClosedToggle = async (day: DayType) => {
     const daySchedule = storeSchedule.find(d => d.day === day)
     if (!daySchedule) return
     
-    const newOutletClosed = !daySchedule.isOutletClosed
+    const oldValue = daySchedule.isOutletClosed;
+    const newOutletClosed = !oldValue
     
-    setStoreSchedule(prev => prev.map(d => {
+    // Remove from manual changes since this is a toggle (auto-save)
+    setManualTimeChanges(prev => {
+      const newSet = new Set(prev);
+      newSet.delete(day);
+      return newSet;
+    });
+    
+    const newSchedule = storeSchedule.map(d => {
       if (d.day === day) {
         return {
           ...d,
@@ -591,15 +1379,40 @@ function StoreSettingsContent() {
         }
       }
       return d
-    }))
+    });
     
+    setStoreSchedule(newSchedule);
+    
+    const newClosedDay = newOutletClosed ? day : (closedDay === day ? null : closedDay);
     if (newOutletClosed) {
       setClosedDay(day)
-      // Disable same for all and 24 hours when any day is closed
-      setApplyMondayToAll(false);
-      setForce24Hours(false);
     } else if (closedDay === day) {
       setClosedDay(null)
+    }
+    
+    // Disable same for all and 24 hours when any day is closed
+    const newSameForAll = newOutletClosed ? false : applyMondayToAll;
+    const newForce24Hours = newOutletClosed ? false : force24Hours;
+    if (newOutletClosed) {
+      if (applyMondayToAll) {
+        setApplyMondayToAll(false);
+      }
+      if (force24Hours) {
+        setForce24Hours(false);
+      }
+    }
+    
+    // Auto-save complete state immediately with updated values
+    const saved = await saveCompleteTimings(newSchedule, newSameForAll, newForce24Hours, newClosedDay);
+    if (saved) {
+      await logActivity('OUTLET_CLOSED_TOGGLE', `Outlet ${newOutletClosed ? 'closed' : 'opened'} on ${day.toUpperCase()}`, {
+        day,
+        oldValue,
+        newValue: newOutletClosed,
+      });
+      await fetchLastUpdatedInfo(); // Refresh last updated info
+    } else {
+      toast.error('Failed to save toggle state');
     }
     
     toast.success(`Outlet ${newOutletClosed ? 'closed' : 'opened'} on ${day}`)
@@ -611,6 +1424,9 @@ function StoreSettingsContent() {
       toast.error('Maximum 2 slots allowed per day')
       return
     }
+    
+    // Mark this day as having manual time changes (to show save button)
+    setManualTimeChanges(prev => new Set(prev).add(day))
     
     const newSlot: TimeSlot = {
       id: Date.now().toString(),
@@ -653,6 +1469,9 @@ function StoreSettingsContent() {
       return
     }
     
+    // Mark this day as having manual time changes (to show save button)
+    setManualTimeChanges(prev => new Set(prev).add(day))
+    
     setStoreSchedule(prev => prev.map(d => {
       if (d.day === day) {
         const newSlots = d.slots.filter(s => s.id !== slotId)
@@ -681,7 +1500,42 @@ function StoreSettingsContent() {
     toast.success('Time slot removed')
   }
 
+  // Fetch last updated info from timings
+  const fetchLastUpdatedInfo = async () => {
+    if (!storeId) return;
+    try {
+      // Get store bigint id
+      const storeRes = await fetch(`/api/store-id?store_id=${storeId}`);
+      if (!storeRes.ok) return;
+      const storeData = await storeRes.json();
+      if (!storeData?.id) return;
+      const storeBigIntId = storeData.id;
+
+      // Fetch timings to get last updated info
+      const res = await fetch(`/api/outlet-timings?store_id=${storeBigIntId}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.updated_by_email || data?.updated_by_at) {
+          setLastUpdatedBy({
+            email: data.updated_by_email,
+            at: data.updated_by_at,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch last updated info:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (storeId && activeTab === 'timings') {
+      fetchLastUpdatedInfo();
+    }
+  }, [storeId, activeTab]);
+
   const updateTimeSlot = (day: DayType, slotId: string, field: 'openingTime' | 'closingTime', value: string) => {
+    // Mark this day as having manual time changes (to show save button)
+    setManualTimeChanges(prev => new Set(prev).add(day))
     setStoreSchedule(prev => {
       const newSchedule = prev.map(d => {
         if (d.day === day) {
@@ -816,8 +1670,15 @@ function StoreSettingsContent() {
         // Immediately refresh timings from Supabase
         await fetchTimings();
       } else {
-        const data = await res.json();
-        toast.error('Failed to save timings: ' + (data.error || 'Unknown error'));
+        let data;
+        try {
+          data = await res.json();
+        } catch (jsonError) {
+          console.error('Failed to parse timings save error JSON:', jsonError);
+          toast.error('Failed to save timings: Invalid response');
+          return;
+        }
+        toast.error('Failed to save timings: ' + (data?.error || 'Unknown error'));
       }
     } catch (err: any) {
       toast.error('Failed to save timings: ' + err.message);
@@ -833,7 +1694,12 @@ function StoreSettingsContent() {
     return `${displayHours}:${minutes.toString().padStart(2, '0')} ${period}`
   }
 
-  const handleClosedDayChange = (day: DayType) => {
+  const handleClosedDayChange = async (day: DayType) => {
+    const oldClosedDay = closedDay;
+    
+    // Clear manual changes since this is a dropdown change (auto-save)
+    setManualTimeChanges(new Set());
+    
     // First, open all days
     const updatedSchedule = storeSchedule.map(d => ({
       ...d,
@@ -857,14 +1723,37 @@ function StoreSettingsContent() {
     setClosedDay(day)
     
     // Disable same for all and 24 hours when a day is closed
-    setApplyMondayToAll(false);
-    setForce24Hours(false);
+    const newSameForAll = false; // Always false when day is closed
+    const newForce24Hours = false; // Always false when day is closed
+    if (applyMondayToAll) {
+      setApplyMondayToAll(false);
+    }
+    if (force24Hours) {
+      setForce24Hours(false);
+    }
+    
+    // Auto-save complete state immediately with updated values
+    const saved = await saveCompleteTimings(finalSchedule, newSameForAll, newForce24Hours, day);
+    if (saved) {
+      await logActivity('CLOSED_DAY_CHANGE', `Outlet closed on ${day.toUpperCase()}`, {
+        day,
+        oldClosedDay,
+        newClosedDay: day,
+      });
+      await fetchLastUpdatedInfo(); // Refresh last updated info
+    } else {
+      toast.error('Failed to save toggle state');
+    }
     
     toast.success(`Outlet closed on ${day.toUpperCase()}`)
   }
 
   const toggle24HoursForAll = async () => {
-    const newForce24Hours = !force24Hours;
+    const oldValue = force24Hours;
+    const newForce24Hours = !oldValue;
+    
+    // Clear manual changes since this is a toggle (auto-save)
+    setManualTimeChanges(new Set());
     
     if (newForce24Hours) {
       // Set all days to 24 hours (00:00-00:00)
@@ -873,7 +1762,7 @@ function StoreSettingsContent() {
         is24Hours: true,
         isOutletClosed: false,
         isOpen: true,
-        slots: [{ id: '1', openingTime: '00:00', closingTime: '00:00' }],
+        slots: [{ id: '1', openingTime: '00:00', closingTime: '23:59' }],
         duration: '24.0 hrs',
         operationalHours: 24,
         operationalMinutes: 0
@@ -884,35 +1773,61 @@ function StoreSettingsContent() {
       setApplyMondayToAll(true); // Auto-enable same for all
       setForce24Hours(true);
       
-      toast.success('24 hours enabled for all days');
+      // Auto-save complete state immediately with updated values
+      const saved = await saveCompleteTimings(newSchedule, true, true, null);
+      if (saved) {
+        await logActivity('24H_TOGGLE_ALL', '24 hours enabled for all days', {
+          reason: '24_hours_enabled',
+        });
+        await fetchLastUpdatedInfo(); // Refresh last updated info
+        toast.success('24 hours enabled for all days');
+      } else {
+        toast.error('Failed to save toggle state');
+      }
     } else {
       // Disable 24 hours for all
       setForce24Hours(false);
+      
+      // Auto-save complete state immediately with updated values
+      const saved = await saveCompleteTimings(undefined, applyMondayToAll, false, closedDay);
+      if (saved) {
+        await logActivity('24H_TOGGLE_ALL', '24 hours disabled for all days', {
+          reason: '24_hours_disabled',
+        });
+        await fetchLastUpdatedInfo(); // Refresh last updated info
+        toast.success('24 hours disabled for all days');
+      } else {
+        toast.error('Failed to save toggle state');
+      }
       // Don't reset schedule, let user modify individually
-      toast.success('24 hours disabled for all days');
     }
   }
 
-  const toggleSameForAllDays = () => {
-    const newSameForAll = !applyMondayToAll;
+  const toggleSameForAllDays = async () => {
+    const oldValue = applyMondayToAll;
+    const newSameForAll = !oldValue;
+    
+    // Clear manual changes since this is a toggle (auto-save)
+    setManualTimeChanges(new Set());
     
     if (newSameForAll) {
       const monday = storeSchedule.find(d => d.day === 'monday');
       if (monday) {
-        setStoreSchedule(prev =>
-          prev.map(d => ({
-            ...d,
-            slots: monday.slots,
-            is24Hours: monday.is24Hours,
-            isOutletClosed: monday.isOutletClosed,
-            isOpen: monday.isOpen,
-            duration: monday.duration,
-            operationalHours: monday.operationalHours,
-            operationalMinutes: monday.operationalMinutes
-          }))
-        );
+        const newSchedule = storeSchedule.map(d => ({
+          ...d,
+          slots: monday.slots,
+          is24Hours: monday.is24Hours,
+          isOutletClosed: monday.isOutletClosed,
+          isOpen: monday.isOpen,
+          duration: monday.duration,
+          operationalHours: monday.operationalHours,
+          operationalMinutes: monday.operationalMinutes
+        }));
+        
+        setStoreSchedule(newSchedule);
         
         // If Monday is closed, set closed day
+        const newClosedDay = monday.isOutletClosed ? 'monday' : null;
         if (monday.isOutletClosed) {
           setClosedDay('monday');
         } else {
@@ -920,18 +1835,41 @@ function StoreSettingsContent() {
         }
         
         // If Monday is 24 hours, enable force24Hours
+        const newForce24Hours = monday.is24Hours;
         if (monday.is24Hours) {
           setForce24Hours(true);
         } else {
           setForce24Hours(false);
         }
+        
+        setApplyMondayToAll(true);
+        
+        // Auto-save complete state immediately with updated values
+        const saved = await saveCompleteTimings(newSchedule, true, newForce24Hours, newClosedDay);
+        if (saved) {
+        await logActivity('SAME_FOR_ALL_TOGGLE', 'Same timings applied to all days', {
+          reason: 'same_for_all_enabled',
+        });
+        await fetchLastUpdatedInfo(); // Refresh last updated info
+          toast.success('Same timings applied to all days');
+        } else {
+          toast.error('Failed to save toggle state');
+        }
       }
-      
-      setApplyMondayToAll(true);
-      toast.success('Same timings applied to all days');
     } else {
       setApplyMondayToAll(false);
-      toast.success('Same timings disabled');
+      
+      // Auto-save complete state immediately with updated values
+      const saved = await saveCompleteTimings(undefined, false, force24Hours, closedDay);
+      if (saved) {
+        await logActivity('SAME_FOR_ALL_TOGGLE', 'Same timings disabled', {
+          reason: 'same_for_all_disabled',
+        });
+        await fetchLastUpdatedInfo(); // Refresh last updated info
+        toast.success('Same timings disabled');
+      } else {
+        toast.error('Failed to save toggle state');
+      }
     }
   }
 
@@ -951,288 +1889,827 @@ function StoreSettingsContent() {
     <>
       <Toaster />
       <MXLayoutWhite restaurantName={store?.store_name} restaurantId={storeId || DEMO_STORE_ID}>
-        <div className="min-h-screen bg-gray-50 px-4 sm:px-6 lg:px-8 py-8">
-          <div className="max-w-7xl mx-auto">
-            {/* Header with Tabs */}
-            <div className="mb-8">
-              {/* Spacer for hamburger menu on left (mobile) */}
-              <div className="md:hidden h-2"></div>
-              {/* Heading on right for mobile, left for desktop */}
-              <div className="space-y-1 mb-6 ml-auto md:ml-0">
-                <h1 className="text-3xl font-bold text-gray-900">Store Settings</h1>
-                <p className="text-sm text-gray-600">Manage your store and delivery configuration</p>
+        <div className="flex h-full min-h-0 bg-gray-50 overflow-hidden">
+          {/* Left: header + main content */}
+          <div className="flex flex-1 min-w-0 flex-col">
+            {/* Compact header – matches Orders page height */}
+            <header className="sticky top-0 z-20 bg-white border-b border-gray-200 shrink-0 shadow-sm">
+              <div className="w-full px-3 sm:px-4 py-2.5 sm:py-3">
+                <div className="flex items-center gap-3">
+                  {/* Hamburger menu on left (mobile) */}
+                  <MobileHamburgerButton />
+                  {/* Heading - properly aligned */}
+                  <div className="flex-1 min-w-0">
+                    <h1 className="text-base sm:text-lg md:text-xl font-bold text-gray-900">Store Settings</h1>
+                    <p className="text-xs sm:text-sm text-gray-600 mt-0.5 hidden sm:block">Manage store configuration and preferences</p>
+                  </div>
+                </div>
               </div>
-              
-              {/* Tabs */}
-              <div className="flex border-b border-gray-200">
-                <button
-                  onClick={() => setActiveTab('basic')}
-                  className={`px-6 py-3 font-semibold text-sm border-b-2 transition-colors flex items-center gap-2 ${
-                    activeTab === 'basic'
-                      ? 'border-orange-600 text-orange-700'
-                      : 'border-transparent text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  <Settings size={16} />
-                  Basic Settings
-                </button>
-                <button
-                  onClick={() => setActiveTab('premium')}
-                  className={`px-6 py-3 font-semibold text-sm border-b-2 transition-colors flex items-center gap-2 ${
-                    activeTab === 'premium'
-                      ? 'border-orange-600 text-orange-700'
-                      : 'border-transparent text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  <Crown size={16} />
-                  Premium Benefits
-                </button>
-                <button
-                  onClick={() => setActiveTab('timings')}
-                  className={`px-6 py-3 font-semibold text-sm border-b-2 transition-colors flex items-center gap-2 ${
-                    activeTab === 'timings'
-                      ? 'border-orange-600 text-orange-700'
-                      : 'border-transparent text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  <Clock size={16} />
-                  Outlet Timings
-                </button>
-                <button
-                  onClick={() => setActiveTab('gatimitra')}
-                  className={`px-6 py-3 font-semibold text-sm border-b-2 transition-colors flex items-center gap-2 ${
-                    activeTab === 'gatimitra'
-                      ? 'border-orange-600 text-orange-700'
-                      : 'border-transparent text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  <img src="/gstore.png" alt="Store" className="w-5 h-5" />
-                  Store on Gatimitra
-                </button>
-                <button
-                  onClick={() => setActiveTab('pos')}
-                  className={`px-6 py-3 font-semibold text-sm border-b-2 transition-colors flex items-center gap-2 ${
-                    activeTab === 'pos'
-                      ? 'border-orange-600 text-orange-700'
-                      : 'border-transparent text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  <Smartphone size={16} />
-                  POS
-                </button>
+            </header>
+            {/* Main Content Area - Scrollable */}
+            <div className="flex-1 overflow-y-auto overflow-x-hidden hide-scrollbar min-h-0">
+            <div className="px-4 sm:px-6 lg:px-8 py-4 sm:py-5">
+              <div className="max-w-6xl mx-auto w-full">
+              {/* Mobile Tabs */}
+              <div className="lg:hidden mb-4 -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8">
+                <div className="flex border-b border-gray-200 overflow-x-auto hide-scrollbar gap-2 pb-2">
+                  <button
+                    onClick={() => setActiveTab('plans')}
+                    className={`px-4 py-2 font-semibold text-xs border-b-2 transition-colors flex items-center gap-1 whitespace-nowrap ${
+                      activeTab === 'plans'
+                        ? 'border-orange-600 text-orange-700'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    <Crown size={14} />
+                    Plans
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('timings')}
+                    className={`px-4 py-2 font-semibold text-xs border-b-2 transition-colors flex items-center gap-1 whitespace-nowrap ${
+                      activeTab === 'timings'
+                        ? 'border-orange-600 text-orange-700'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    <Clock size={14} />
+                    Timings
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('operations')}
+                    className={`px-4 py-2 font-semibold text-xs border-b-2 transition-colors flex items-center gap-1 whitespace-nowrap ${
+                      activeTab === 'operations'
+                        ? 'border-orange-600 text-orange-700'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    <Power size={14} />
+                    Operations
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('menu-capacity')}
+                    className={`px-4 py-2 font-semibold text-xs border-b-2 transition-colors flex items-center gap-1 whitespace-nowrap ${
+                      activeTab === 'menu-capacity'
+                        ? 'border-orange-600 text-orange-700'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    <ChefHat size={14} />
+                    Menu
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('delivery')}
+                    className={`px-4 py-2 font-semibold text-xs border-b-2 transition-colors flex items-center gap-1 whitespace-nowrap ${
+                      activeTab === 'delivery'
+                        ? 'border-orange-600 text-orange-700'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    <Package size={14} />
+                    Delivery
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('pos')}
+                    className={`px-4 py-2 font-semibold text-xs border-b-2 transition-colors flex items-center gap-1 whitespace-nowrap ${
+                      activeTab === 'pos'
+                        ? 'border-orange-600 text-orange-700'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    <Smartphone size={14} />
+                    POS
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('notifications')}
+                    className={`px-4 py-2 font-semibold text-xs border-b-2 transition-colors flex items-center gap-1 whitespace-nowrap ${
+                      activeTab === 'notifications'
+                        ? 'border-orange-600 text-orange-700'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    <Bell size={14} />
+                    Alerts
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('audit')}
+                    className={`px-4 py-2 font-semibold text-xs border-b-2 transition-colors flex items-center gap-1 whitespace-nowrap ${
+                      activeTab === 'audit'
+                        ? 'border-orange-600 text-orange-700'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    <Activity size={14} />
+                    Audit
+                  </button>
+                </div>
               </div>
-            </div>
 
-            {activeTab === 'basic' && (
-              <div className="space-y-6">
-                {/* Store Status Card */}
-                <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-                  <div className="flex items-start gap-4">
-                    <div className="p-3 rounded-lg bg-gradient-to-br from-orange-50 to-amber-50">
-                      <Power size={20} className="text-orange-600" />
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-start justify-between mb-4">
+            {activeTab === 'plans' && (
+              <div className="space-y-3 sm:space-y-4">
+                {/* Current Plan Card - Compact */}
+                {currentPlan && (
+                  <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-lg border-2 border-orange-200 p-3 sm:p-4 shadow-sm">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex items-center gap-2 sm:gap-3">
+                        <Crown className="text-orange-600" size={18} />
                         <div>
-                          <h3 className="text-lg font-bold text-gray-900 mb-2">Store Status</h3>
-                          <p className="text-sm text-gray-600">Control your store availability</p>
-                        </div>
-                        <div className="text-right">
-                          <div className="flex items-center gap-2 mb-1">
-                            <div className={`w-2.5 h-2.5 rounded-full ${isStoreOpen ? 'bg-emerald-500' : 'bg-red-500'}`}></div>
-                            <span className={`text-sm font-semibold ${isStoreOpen ? 'text-emerald-700' : 'text-red-700'}`}>
-                              {isStoreOpen ? 'STORE OPEN' : 'STORE CLOSED'}
-                            </span>
-                          </div>
-                          {manualCloseUntil && !isStoreOpen && (
-                            <p className="text-xs text-gray-500">
-                              Reopens at {new Date(manualCloseUntil).toLocaleTimeString()} {new Date(manualCloseUntil) > new Date() ? '(auto if within hours)' : ''}
+                          <h2 className="text-base sm:text-lg font-bold text-gray-900">{currentPlan.plan_name}</h2>
+                          <p className="text-xs sm:text-sm text-gray-600">
+                            {currentPlan.price === 0 ? 'Free Plan' : `₹${currentPlan.price}/${currentPlan.billing_cycle.toLowerCase()}`}
+                          </p>
+                          {currentSubscription && (
+                            <p className="text-xs text-gray-500 mt-1">
+                              Activated: {new Date(currentSubscription.start_date).toLocaleDateString()} • 
+                              Expires: {new Date(currentSubscription.expiry_date).toLocaleDateString()}
                             </p>
                           )}
                         </div>
                       </div>
-                      
-                      <div className="flex gap-3">
-                        <button
-                          onClick={handleStoreToggle}
-                          className={`flex-1 py-3 px-4 rounded-lg font-semibold transition-all flex items-center justify-center gap-2 ${
-                            isStoreOpen
-                              ? 'bg-gradient-to-r from-red-50 to-orange-50 text-red-700 hover:from-red-100 hover:to-orange-100 border-2 border-red-200 hover:border-red-300'
-                              : 'bg-gradient-to-r from-emerald-50 to-green-50 text-emerald-700 hover:from-emerald-100 hover:to-green-100 border-2 border-emerald-200 hover:border-emerald-300'
-                          }`}
-                        >
-                          <Power size={16} />
-                          {isStoreOpen ? 'Close Store Temporarily' : 'Open Store'}
-                        </button>
-                        <button
-                          onClick={handleViewStore}
-                          className="py-3 px-4 bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 rounded-lg font-semibold hover:from-blue-100 hover:to-indigo-100 border-2 border-blue-200 hover:border-blue-300 transition-all"
-                        >
-                          View Store on GatiMitra
-                        </button>
+                      <div className="bg-white px-3 py-1 rounded-lg border border-orange-200">
+                        <span className="text-orange-700 font-bold text-xs">ACTIVE</span>
                       </div>
                     </div>
-                  </div>
-                </div>
-
-                {/* Store Information Card */}
-                <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-                  <div className="flex items-start gap-4">
-                    <div className="p-3 rounded-lg bg-blue-50">
-                      <Settings size={20} className="text-blue-600" />
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="text-lg font-bold text-gray-900 mb-4">Store Information</h3>
-                      
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Auto Renew Toggle */}
+                    {currentPlan.price > 0 && (
+                      <div className="flex items-center justify-between pt-3 border-t border-orange-200">
                         <div>
-                          <label className="block text-sm font-semibold text-gray-900 mb-2">Store Name</label>
+                          <p className="text-xs sm:text-sm font-semibold text-gray-900">Auto Renew</p>
+                          <p className="text-xs text-gray-600">Automatically renew subscription</p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
                           <input
-                            type="text"
-                            value={storeName}
-                            onChange={(e) => setStoreName(e.target.value)}
-                            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            placeholder="Enter store name"
+                            type="checkbox"
+                            checked={autoRenew}
+                            onChange={(e) => handleAutoRenewToggle(e.target.checked)}
+                            className="sr-only peer"
                           />
-                        </div>
-
-                        <div>
-                          <label className="block text-sm font-semibold text-gray-900 mb-2">Phone Number *</label>
-                          <div className="flex gap-2">
-                            <div className="flex items-center px-4 border border-gray-300 rounded-lg bg-gray-50">
-                              <Globe size={16} className="text-gray-500" />
-                              <span className="ml-2 text-gray-700">+91</span>
-                            </div>
-                            <input
-                              type="tel"
-                              value={phone}
-                              onChange={(e) => setPhone(e.target.value)}
-                              className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                              placeholder="Enter phone number"
-                            />
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="block text-sm font-semibold text-gray-900 mb-2">Address</label>
-                          <input
-                            type="text"
-                            value={storeAddress}
-                            onChange={(e) => setStoreAddress(e.target.value)}
-                            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            placeholder="Enter store address"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-sm font-semibold text-gray-900 mb-2">Description</label>
-                          <textarea
-                            value={storeDescription}
-                            onChange={(e) => setStoreDescription(e.target.value)}
-                            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            placeholder="Enter store description"
-                            rows={3}
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-sm font-semibold text-gray-900 mb-2">Latitude *</label>
-                          <input
-                            type="text"
-                            value={latitude}
-                            onChange={(e) => setLatitude(e.target.value)}
-                            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            placeholder="Enter latitude"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-sm font-semibold text-gray-900 mb-2">Longitude *</label>
-                          <input
-                            type="text"
-                            value={longitude}
-                            onChange={(e) => setLongitude(e.target.value)}
-                            className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            placeholder="Enter longitude"
-                          />
-                        </div>
+                          <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-600"></div>
+                        </label>
                       </div>
-                    </div>
+                    )}
                   </div>
-                </div>
+                )}
 
-                {/* Delivery Configuration Card */}
-                <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-                  <div className="flex items-start gap-4">
-                    <div className="p-3 rounded-lg bg-orange-50">
-                      <Package size={20} className="text-orange-600" />
+                {/* Plans Comparison - Premium SaaS-style */}
+                <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 shadow-sm">
+                  <h3 className="text-lg sm:text-xl font-bold text-gray-900 mb-4 sm:mb-6">Available Plans</h3>
+                  {loadingPlans ? (
+                    <div className="text-center py-8">
+                      <div className="animate-spin rounded-full h-8 w-8 border-2 border-orange-500 border-t-transparent mx-auto"></div>
+                      <p className="text-gray-600 mt-3 text-sm">Loading plans...</p>
                     </div>
-                    <div className="flex-1">
-                      <h3 className="text-lg font-bold text-gray-900 mb-4">Delivery Configuration</h3>
-                      
-                      <div className="space-y-4">
-                        <div className={`p-4 rounded-lg border-2 transition-colors ${
-                          mxDeliveryEnabled 
-                            ? 'border-orange-300 bg-orange-50' 
-                            : 'border-gray-200 hover:border-gray-300'
-                        }`}>
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <div className="flex items-center gap-2 mb-1">
-                                <Zap size={16} className="text-orange-600" />
-                                <p className="font-semibold text-gray-900">MX Self Delivery</p>
-                              </div>
-                              <p className="text-sm text-gray-600">Use your own delivery staff</p>
-                            </div>
-                            <label className="relative inline-flex items-center cursor-pointer">
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+                      {plans.map((plan) => {
+                        const isFreePlan = plan.price === 0 || plan.price === null;
+                        const hasActivePaidPlan = currentPlan && currentPlan.price > 0 && currentSubscription && new Date(currentSubscription.expiry_date) > new Date();
+                        const isDisabled = isFreePlan && hasActivePaidPlan;
+                        const planCode = (plan.plan_code || '').toUpperCase();
+                        const isEnterprise = planCode === 'ENTERPRISE' || planCode === 'PRO';
+                        const isPremium = planCode === 'PREMIUM' || planCode === 'GROWTH' || (plan.price > 0 && !isEnterprise);
+                        const tier = isEnterprise ? 'enterprise' : isPremium ? 'premium' : 'free';
+
+                        const cardStyles = {
+                          free: {
+                            wrapper: `rounded-2xl border-2 bg-gradient-to-br from-gray-50 to-gray-100 border-gray-200 shadow-md hover:shadow-lg hover:border-gray-300 hover:scale-[1.02] transition-all duration-300 ${selectedPlanId === plan.id ? 'ring-2 ring-gray-400 ring-offset-2' : ''} ${currentPlan?.id === plan.id ? 'ring-2 ring-gray-500 ring-offset-2' : ''}`,
+                            badge: null,
+                            priceColor: 'text-gray-800',
+                            featureValue: 'text-gray-700 font-semibold',
+                            cta: 'bg-slate-100 text-slate-700 border border-slate-300 hover:bg-slate-200 hover:border-slate-400 active:scale-[0.98] transition-all duration-200',
+                          },
+                          premium: {
+                            wrapper: `rounded-2xl border-2 bg-gradient-to-br from-orange-50 via-amber-50 to-yellow-50 border-orange-400 shadow-lg shadow-orange-100 hover:shadow-xl hover:shadow-orange-200 hover:border-orange-500 hover:scale-[1.02] transition-all duration-300 relative ${selectedPlanId === plan.id ? 'ring-2 ring-orange-500 ring-offset-2' : ''} ${currentPlan?.id === plan.id ? 'ring-2 ring-orange-500 ring-offset-2' : ''}`,
+                            badge: 'absolute -top-2.5 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full text-[10px] font-bold tracking-wide bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-md',
+                            priceColor: 'text-orange-700',
+                            featureValue: 'text-orange-700 font-semibold',
+                            cta: 'bg-gradient-to-r from-orange-500 to-amber-500 text-white border-0 shadow-md shadow-orange-200/60 hover:from-orange-600 hover:to-amber-600 hover:shadow-lg hover:shadow-orange-300/70 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200',
+                          },
+                          enterprise: {
+                            wrapper: `rounded-2xl border-2 bg-gradient-to-br from-indigo-50 to-purple-100 border-purple-400 shadow-lg shadow-purple-100 hover:shadow-xl hover:shadow-purple-200 hover:border-purple-500 hover:scale-[1.02] transition-all duration-300 relative ${selectedPlanId === plan.id ? 'ring-2 ring-purple-500 ring-offset-2' : ''} ${currentPlan?.id === plan.id ? 'ring-2 ring-purple-500 ring-offset-2' : ''}`,
+                            badge: 'absolute -top-2.5 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full text-[10px] font-bold tracking-wide bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md',
+                            priceColor: 'text-purple-800',
+                            featureValue: 'text-purple-700 font-semibold',
+                            cta: 'bg-transparent border-2 border-purple-600 text-purple-700 hover:bg-purple-600 hover:text-white hover:shadow-md hover:shadow-purple-200/50 active:scale-[0.98] transition-all duration-200',
+                          },
+                        };
+                        const style = cardStyles[tier];
+
+                        const imageCount = plan.max_image_uploads != null
+                          ? plan.max_image_uploads
+                          : plan.image_upload_allowed
+                          ? '∞'
+                          : 0;
+
+                        return (
+                        <div
+                          key={plan.id}
+                          onClick={() => {
+                            if (!isDisabled && currentPlan?.id !== plan.id) {
+                              setSelectedPlanId((prev) => (prev === plan.id ? null : plan.id));
+                            }
+                          }}
+                          className={`relative p-4 sm:p-4 cursor-pointer ${isDisabled ? 'opacity-70 cursor-not-allowed' : ''} ${style.wrapper}`}
+                        >
+                          {style.badge && (
+                            <span className={style.badge}>
+                              {tier === 'premium' ? '⭐ MOST POPULAR' : '🚀 ENTERPRISE'}
+                            </span>
+                          )}
+
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-1.5">
                               <input
                                 type="checkbox"
-                                checked={mxDeliveryEnabled}
-                                onChange={handleMXDeliveryToggle}
-                                className="sr-only peer"
+                                checked={selectedPlanId === plan.id || currentPlan?.id === plan.id}
+                                onChange={() => {
+                                  if (!isDisabled && currentPlan?.id !== plan.id) {
+                                    setSelectedPlanId((prev) => (prev === plan.id ? null : plan.id));
+                                  }
+                                }}
+                                disabled={isDisabled || currentPlan?.id === plan.id}
+                                className="w-3.5 h-3.5 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer disabled:opacity-50"
+                                onClick={(e) => e.stopPropagation()}
                               />
-                              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-600"></div>
-                            </label>
+                              <span className="text-[11px] font-medium text-gray-600">
+                                {currentPlan?.id === plan.id ? 'Current Plan' : 'Select Plan'}
+                              </span>
+                            </div>
                           </div>
-                        </div>
 
-                        <div className={`p-4 rounded-lg border-2 transition-colors ${
-                          !mxDeliveryEnabled 
-                            ? 'border-purple-300 bg-purple-50' 
-                            : 'border-gray-200 hover:border-gray-300'
-                        }`}>
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <div className="flex items-center gap-2 mb-1">
-                                <Users size={16} className="text-purple-600" />
-                                <p className="font-semibold text-gray-900">GatiMitra Delivery</p>
+                          <h4 className="text-base font-bold text-gray-900 mb-0.5">{plan.plan_name}</h4>
+                          <div className="mb-3 pb-3 border-b border-gray-200/80">
+                            <span className={`text-xl sm:text-2xl font-extrabold tracking-tight ${style.priceColor}`}>
+                              ₹{plan.price ?? 0}
+                            </span>
+                            <span className="text-xs text-gray-500 font-normal ml-0.5">/month</span>
+                          </div>
+
+                          <div className="space-y-1.5 text-xs mb-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <Layers className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                                <span className="text-gray-600 truncate">Menu items</span>
                               </div>
-                              <p className="text-sm text-gray-600">Partner with external delivery service</p>
+                              <span className={style.featureValue}>{plan.max_menu_items != null ? plan.max_menu_items : '∞'}</span>
                             </div>
-                            <div className={`px-3 py-1 rounded-full text-sm font-medium ${
-                              !mxDeliveryEnabled 
-                                ? 'bg-purple-600 text-white' 
-                                : 'bg-gray-100 text-gray-600'
-                            }`}>
-                              {!mxDeliveryEnabled ? 'Active' : 'Inactive'}
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <ChefHat className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                                <span className="text-gray-600 truncate">Cuisines</span>
+                              </div>
+                              <span className={style.featureValue}>{plan.max_cuisines != null ? plan.max_cuisines : '∞'}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <Layers className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                                <span className="text-gray-600 truncate">Menu categories</span>
+                              </div>
+                              <span className={style.featureValue}>{plan.max_menu_categories != null ? plan.max_menu_categories : '∞'}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <Image className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                                <span className="text-gray-600 truncate">Images</span>
+                              </div>
+                              <span className={`font-semibold ${(plan.max_image_uploads ?? 0) > 0 ? 'text-green-600' : 'text-gray-500'}`}>
+                                {imageCount}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <BarChart2 className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                                <span className="text-gray-600 truncate">Analytics</span>
+                              </div>
+                              {plan.analytics_access ? <CheckCircle className="w-3.5 h-3.5 text-green-500 shrink-0" /> : <XCircle className="w-3.5 h-3.5 text-gray-400 shrink-0" />}
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <BarChart3 className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                                <span className="text-gray-600 truncate">Advanced Analytics</span>
+                              </div>
+                              {plan.advanced_analytics ? <CheckCircle className="w-3.5 h-3.5 text-green-500 shrink-0" /> : <XCircle className="w-3.5 h-3.5 text-gray-400 shrink-0" />}
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <Headphones className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                                <span className="text-gray-600 truncate">Priority Support</span>
+                              </div>
+                              {plan.priority_support ? <CheckCircle className="w-3.5 h-3.5 text-green-500 shrink-0" /> : <XCircle className="w-3.5 h-3.5 text-gray-400 shrink-0" />}
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <UserCheck className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                                <span className="text-gray-600 truncate">Dedicated Manager</span>
+                              </div>
+                              {plan.dedicated_account_manager ? <CheckCircle className="w-3.5 h-3.5 text-green-500 shrink-0" /> : <XCircle className="w-3.5 h-3.5 text-gray-400 shrink-0" />}
                             </div>
                           </div>
+
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (selectedPlanId === plan.id || currentPlan?.id !== plan.id) {
+                                handleUpgradePlan(plan.id);
+                              }
+                            }}
+                            disabled={
+                              currentPlan?.id === plan.id ||
+                              upgradingPlanId === plan.id ||
+                              isDisabled ||
+                              (selectedPlanId !== plan.id && currentPlan?.id !== plan.id)
+                            }
+                            className={`w-full py-2 rounded-xl font-semibold text-xs sm:text-sm transition-all duration-200 flex items-center justify-center gap-2 ${style.cta} ${
+                              currentPlan?.id === plan.id ? '!bg-gray-100 !text-gray-700 !border !border-gray-300 cursor-not-allowed hover:!scale-100' : ''
+                            } ${upgradingPlanId === plan.id ? '!bg-orange-400 !text-white cursor-wait' : ''} ${
+                              isDisabled || (selectedPlanId !== plan.id && currentPlan?.id !== plan.id) ? '!bg-gray-100 !text-gray-700 !border !border-gray-300 cursor-not-allowed hover:!scale-100' : ''
+                            }`}
+                            title={
+                              isDisabled
+                                ? 'Active paid plan expire होने तक Free plan पर move नहीं कर सकते'
+                                : selectedPlanId !== plan.id && currentPlan?.id !== plan.id
+                                ? 'Please select this plan first'
+                                : undefined
+                            }
+                          >
+                            {upgradingPlanId === plan.id ? (
+                              <>
+                                <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                                Processing...
+                              </>
+                            ) : currentPlan?.id === plan.id ? (
+                              'Current Plan'
+                            ) : isDisabled ? (
+                              'Not Available'
+                            ) : selectedPlanId === plan.id ? (
+                              'Upgrade Selected'
+                            ) : (
+                              'Select to Upgrade'
+                            )}
+                          </button>
                         </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Payment History - Store Specific */}
+                {paymentHistory.length > 0 && (
+                  <div className="bg-white rounded-lg border border-gray-200 p-3 sm:p-4 shadow-sm">
+                    <h3 className="text-base sm:text-lg font-bold text-gray-900 mb-3">Plan Purchase History</h3>
+                    <div className="space-y-2">
+                      {paymentHistory.slice(0, 10).map((payment: any) => (
+                        <div key={payment.id} className="p-2.5 bg-gray-50 rounded-lg border border-gray-100">
+                          <div className="flex items-start justify-between mb-2">
+                            <div className="flex-1">
+                              <p className="font-semibold text-sm text-gray-900">
+                                {payment.merchant_plans?.plan_name || 'Plan Payment'}
+                              </p>
+                              <p className="text-xs text-gray-600 mt-0.5">
+                                Purchased: {new Date(payment.payment_date).toLocaleDateString('en-IN', { 
+                                  day: 'numeric', 
+                                  month: 'short', 
+                                  year: 'numeric' 
+                                })}
+                                {payment.billing_period_start && (
+                                  <span className="ml-2">• Activated: {new Date(payment.billing_period_start).toLocaleDateString('en-IN', { 
+                                    day: 'numeric', 
+                                    month: 'short', 
+                                    year: 'numeric' 
+                                  })}</span>
+                                )}
+                              </p>
+                            </div>
+                            <div className="text-right ml-3">
+                              <p className="font-bold text-sm text-gray-900">₹{payment.amount}</p>
+                              <span className={`text-xs px-2 py-0.5 rounded ${
+                                payment.payment_status === 'PAID' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                              }`}>
+                                {payment.payment_status}
+                              </span>
+                            </div>
+                          </div>
+                          {/* Payment Transaction Details */}
+                          {(payment.payment_gateway_id || payment.payment_gateway_response) && (
+                            <div className="pt-2 border-t border-gray-200 mt-2">
+                              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600">
+                                {payment.payment_gateway_id && (
+                                  <div>
+                                    <span className="font-semibold">Transaction ID:</span>{' '}
+                                    <span className="font-mono">{payment.payment_gateway_id}</span>
+                                  </div>
+                                )}
+                                {payment.payment_gateway_response?.razorpay_payment_id && (
+                                  <div>
+                                    <span className="font-semibold">Payment ID:</span>{' '}
+                                    <span className="font-mono">{payment.payment_gateway_response.razorpay_payment_id}</span>
+                                  </div>
+                                )}
+                                {payment.payment_gateway_response?.razorpay_order_id && (
+                                  <div>
+                                    <span className="font-semibold">Order ID:</span>{' '}
+                                    <span className="font-mono">{payment.payment_gateway_response.razorpay_order_id}</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Onboarding Payments - Store Specific */}
+                {onboardingPayments.length > 0 && (
+                  <div className="bg-white rounded-lg border border-gray-200 p-3 sm:p-4 shadow-sm">
+                    <h3 className="text-base sm:text-lg font-bold text-gray-900 mb-3">Onboarding Fee</h3>
+                    <div className="space-y-2">
+                      {onboardingPayments.slice(0, 5).map((payment: any) => (
+                        <div key={payment.id} className="flex items-center justify-between p-2.5 bg-gray-50 rounded-lg border border-gray-100">
+                          <div className="flex-1">
+                            <p className="font-semibold text-sm text-gray-900">
+                              {payment.plan_name || 'Onboarding Fee'}
+                            </p>
+                            <p className="text-xs text-gray-600 mt-0.5">
+                              Paid: {new Date(payment.created_at).toLocaleDateString('en-IN', { 
+                                day: 'numeric', 
+                                month: 'short', 
+                                year: 'numeric' 
+                              })}
+                              {payment.captured_at && (
+                                <span className="ml-2">• Confirmed: {new Date(payment.captured_at).toLocaleDateString('en-IN', { 
+                                  day: 'numeric', 
+                                  month: 'short', 
+                                  year: 'numeric' 
+                                })}</span>
+                              )}
+                              {payment.razorpay_payment_id && (
+                                <span className="ml-2 text-gray-500">• {payment.razorpay_payment_id.slice(-8)}</span>
+                              )}
+                            </p>
+                          </div>
+                          <div className="text-right ml-3">
+                            <p className="font-bold text-sm text-gray-900">₹{(payment.amount_paise / 100).toFixed(2)}</p>
+                            <span className={`text-xs px-2 py-0.5 rounded ${
+                              payment.status === 'captured' ? 'bg-green-100 text-green-700' :
+                              payment.status === 'failed' ? 'bg-red-100 text-red-700' :
+                              'bg-yellow-100 text-yellow-700'
+                            }`}>
+                              {payment.status === 'captured' ? 'PAID' : payment.status.toUpperCase()}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'operations' && (
+              <div className="space-y-4 sm:space-y-6">
+                <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-gray-900">Store Operations</h3>
+                    <button
+                      onClick={handleSaveSettings}
+                      disabled={isSaving}
+                      className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-all font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      <Save size={16} />
+                      {isSaving ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                      <div>
+                        <p className="font-semibold text-gray-900">Auto Accept Orders</p>
+                        <p className="text-sm text-gray-600">Automatically accept incoming orders</p>
                       </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={autoAcceptOrders}
+                          onChange={(e) => setAutoAcceptOrders(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-600"></div>
+                      </label>
+                    </div>
+                    <div className="p-4 bg-gray-50 rounded-lg">
+                      <label className="block text-sm font-semibold text-gray-900 mb-2">
+                        Preparation Buffer Time (minutes)
+                      </label>
+                      <input
+                        type="number"
+                        value={preparationBufferMinutes}
+                        onChange={(e) => setPreparationBufferMinutes(parseInt(e.target.value) || 15)}
+                        min="0"
+                        max="120"
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">Extra time added to estimated preparation time</p>
+                    </div>
+                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                      <div>
+                        <p className="font-semibold text-gray-900">Manual Activation Lock</p>
+                        <p className="text-sm text-gray-600">Prevent automatic store opening</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={manualActivationLock}
+                          onChange={async (e) => {
+                            const newValue = e.target.checked;
+                            setManualActivationLock(newValue);
+                            // Save to database immediately
+                            await saveManualActivationLock(newValue);
+                          }}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
+                      </label>
                     </div>
                   </div>
                 </div>
+              </div>
+            )}
 
-                {/* Save Button */}
-                <div className="sticky bottom-4 bg-white rounded-xl border border-gray-200 p-4 shadow-lg">
-                  <button
-                    onClick={handleSaveSettings}
-                    disabled={isSaving}
-                    className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-orange-600 to-orange-500 text-white rounded-lg hover:from-orange-700 hover:to-orange-600 transition-all font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <Save size={18} />
-                    {isSaving ? 'Saving Settings...' : 'Save All Settings'}
-                  </button>
+            {activeTab === 'menu-capacity' && (
+              <div className="space-y-4 sm:space-y-6">
+                <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-gray-900">Menu & Capacity Controls</h3>
+                    <button
+                      onClick={handleSaveSettings}
+                      disabled={isSaving}
+                      className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-all font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      <Save size={16} />
+                      {isSaving ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                  <div className="space-y-4">
+                    <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-semibold text-gray-900">Menu Items</span>
+                        <span className={`text-sm font-bold ${
+                          maxMenuItems && currentMenuItemsCount >= maxMenuItems ? 'text-red-600' : 'text-green-600'
+                        }`}>
+                          {currentMenuItemsCount} / {maxMenuItems || '∞'}
+                        </span>
+                      </div>
+                      {maxMenuItems && (
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div
+                            className={`h-2 rounded-full ${
+                              currentMenuItemsCount >= maxMenuItems ? 'bg-red-500' : 'bg-blue-500'
+                            }`}
+                            style={{ width: `${Math.min((currentMenuItemsCount / maxMenuItems) * 100, 100)}%` }}
+                          ></div>
+                        </div>
+                      )}
+                      {maxMenuItems && currentMenuItemsCount >= maxMenuItems && (
+                        <p className="text-xs text-red-600 mt-2 flex items-center gap-1">
+                          <Lock size={12} />
+                          Limit reached. Upgrade plan to add more items.
+                        </p>
+                      )}
+                    </div>
+                    <div className="p-4 bg-purple-50 rounded-lg border border-purple-200">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-semibold text-gray-900">Cuisines</span>
+                        <span className={`text-sm font-bold ${
+                          maxCuisines && currentCuisinesCount >= maxCuisines ? 'text-red-600' : 'text-green-600'
+                        }`}>
+                          {currentCuisinesCount} / {maxCuisines || '∞'}
+                        </span>
+                      </div>
+                      {maxCuisines && (
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div
+                            className={`h-2 rounded-full ${
+                              currentCuisinesCount >= maxCuisines ? 'bg-red-500' : 'bg-purple-500'
+                            }`}
+                            style={{ width: `${Math.min((currentCuisinesCount / maxCuisines) * 100, 100)}%` }}
+                          ></div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                      <div>
+                        <p className="font-semibold text-gray-900">Image Uploads</p>
+                        <p className="text-sm text-gray-600">Upload images for menu items</p>
+                      </div>
+                      {imageUploadAllowed ? (
+                        <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium">
+                          Enabled
+                        </span>
+                      ) : (
+                        <span className="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-sm font-medium flex items-center gap-1">
+                          <Lock size={14} />
+                          Locked
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'delivery' && (
+              <div className="space-y-4 sm:space-y-6">
+                <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-gray-900">Delivery Settings</h3>
+                    <button
+                      onClick={handleSaveSettings}
+                      disabled={isSaving}
+                      className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-all font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      <Save size={16} />
+                      {isSaving ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                  <div className="space-y-4">
+                    <div className={`p-4 rounded-lg border-2 transition-colors ${
+                      gatimitraDeliveryEnabled ? 'border-purple-300 bg-purple-50' : 'border-gray-200'
+                    }`}>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-semibold text-gray-900">GatiMitra Delivery</p>
+                          <p className="text-sm text-gray-600">Use platform delivery service</p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={gatimitraDeliveryEnabled}
+                            onChange={(e) => {
+                              setGatimitraDeliveryEnabled(e.target.checked)
+                              if (e.target.checked) setSelfDeliveryEnabled(false)
+                            }}
+                            className="sr-only peer"
+                          />
+                          <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                        </label>
+                      </div>
+                    </div>
+                    <div className={`p-4 rounded-lg border-2 transition-colors ${
+                      selfDeliveryEnabled ? 'border-orange-300 bg-orange-50' : 'border-gray-200'
+                    }`}>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-semibold text-gray-900">Self Delivery</p>
+                          <p className="text-sm text-gray-600">Use your own delivery staff</p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selfDeliveryEnabled}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setShowSelfDeliveryConfirm(true)
+                              } else {
+                                setSelfDeliveryEnabled(false)
+                                setGatimitraDeliveryEnabled(true)
+                              }
+                            }}
+                            className="sr-only peer"
+                          />
+                          <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-600"></div>
+                        </label>
+                      </div>
+                    </div>
+                    <div className="p-4 bg-gray-50 rounded-lg">
+                      <label className="block text-sm font-semibold text-gray-900 mb-2">
+                        Delivery Radius (km)
+                      </label>
+                      <input
+                        type="number"
+                        value={deliveryRadiusKm}
+                        onChange={(e) => setDeliveryRadiusKm(parseInt(e.target.value) || 5)}
+                        min="1"
+                        max="50"
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'notifications' && (
+              <div className="space-y-4 sm:space-y-6">
+                <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-gray-900">Notifications & Alerts</h3>
+                    <button
+                      onClick={handleSaveSettings}
+                      disabled={isSaving}
+                      className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-all font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      <Save size={16} />
+                      {isSaving ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                      <div>
+                        <p className="font-semibold text-gray-900">SMS Alerts</p>
+                        <p className="text-sm text-gray-600">Receive SMS notifications for orders</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={smsAlerts}
+                          onChange={(e) => setSmsAlerts(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                      </label>
+                    </div>
+                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                      <div>
+                        <p className="font-semibold text-gray-900">App Alerts</p>
+                        <p className="text-sm text-gray-600">Push notifications in the app</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={appAlerts}
+                          onChange={(e) => setAppAlerts(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                      </label>
+                    </div>
+                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                      <div>
+                        <p className="font-semibold text-gray-900">Operational Warnings</p>
+                        <p className="text-sm text-gray-600">Alerts for store status changes</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={operationalWarnings}
+                          onChange={(e) => setOperationalWarnings(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-600"></div>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'audit' && (
+              <div className="space-y-4 sm:space-y-6">
+                <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-gray-900">Audit & Activity Settings</h3>
+                    <button
+                      onClick={handleSaveSettings}
+                      disabled={isSaving}
+                      className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-all font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      <Save size={16} />
+                      {isSaving ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                      <div>
+                        <p className="font-semibold text-gray-900">Action Tracking</p>
+                        <p className="text-sm text-gray-600">Track all store actions and changes</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={actionTrackingEnabled}
+                          onChange={(e) => setActionTrackingEnabled(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                      </label>
+                    </div>
+                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                      <div>
+                        <p className="font-semibold text-gray-900">Staff Permissions</p>
+                        <p className="text-sm text-gray-600">Enable role-based access control</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={staffPermissionsEnabled}
+                          onChange={(e) => setStaffPermissionsEnabled(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                      </label>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -1349,7 +2826,10 @@ function StoreSettingsContent() {
                       </div>
                       
                       <button
-                        onClick={() => handleUpgradePlan('pro')}
+                        onClick={() => {
+                          const proPlan = plans.find(p => p.plan_code === 'PREMIUM')
+                          if (proPlan) handleUpgradePlan(proPlan.id)
+                        }}
                         className={`w-full py-3 rounded-lg font-semibold transition-all ${
                           subscriptionPlan === 'pro'
                             ? 'bg-gradient-to-r from-orange-100 to-amber-100 text-orange-700'
@@ -1397,7 +2877,10 @@ function StoreSettingsContent() {
                       </div>
                       
                       <button
-                        onClick={() => handleUpgradePlan('enterprise')}
+                        onClick={() => {
+                          const enterprisePlan = plans.find(p => p.plan_code === 'ENTERPRISE')
+                          if (enterprisePlan) handleUpgradePlan(enterprisePlan.id)
+                        }}
                         className={`w-full py-3 rounded-lg font-semibold transition-all ${
                           subscriptionPlan === 'enterprise'
                             ? 'bg-gradient-to-r from-purple-100 to-indigo-100 text-purple-700'
@@ -1607,10 +3090,20 @@ function StoreSettingsContent() {
             )}
 
             {activeTab === 'timings' && (
-              <div className="space-y-6">
-                <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm space-y-5">
-                  {/* Refresh Timings button removed as requested */}
-                  <div className="flex flex-row flex-wrap gap-6 items-center">
+              <div className="space-y-3">
+                <div className="bg-white rounded-lg border border-gray-200 p-3 shadow-sm space-y-3">
+                  {/* Last Updated Info */}
+                  {lastUpdatedBy && (lastUpdatedBy.email || lastUpdatedBy.at) && (
+                    <div className="flex items-center justify-between text-xs text-gray-500 pb-2 border-b border-gray-100">
+                      <span>Last updated:</span>
+                      <span className="font-medium text-gray-700">
+                        {lastUpdatedBy.email ? `${lastUpdatedBy.email.split('@')[0]}` : 'System'}
+                        {lastUpdatedBy.at && ` • ${new Date(lastUpdatedBy.at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' })}`}
+                      </span>
+                    </div>
+                  )}
+                  
+                  <div className="flex flex-row flex-wrap gap-3 items-center">
                     {/* Same Timing Toggle */}
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-gray-700 whitespace-nowrap">
@@ -1679,125 +3172,117 @@ function StoreSettingsContent() {
 
                     {/* Weekly Summary */}
                     <div className="flex items-center gap-2">
-                      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded border border-blue-200 p-1 min-w-[180px] flex flex-col justify-center">
-                        <div className="flex flex-row items-center justify-between gap-7">
+                      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded border border-blue-200 p-2 min-w-[160px] flex flex-col justify-center">
+                        <div className="flex flex-row items-center justify-between gap-4">
                           <div>
-                            <h4 className="font-semibold text-gray-900 text-[10px] leading-tight mb-0">Weekly Operational Summary</h4>
-                            <p className="text-[9px] text-gray-600 leading-tight mb-0">Total operating hours this week</p>
+                            <h4 className="font-semibold text-gray-900 text-[10px] leading-tight mb-0">Weekly Summary</h4>
+                            <p className="text-[9px] text-gray-600 leading-tight mb-0">Total hours this week</p>
                           </div>
                           <div className="text-center">
-                            <div className="text-lg font-bold text-blue-700 leading-tight">
-                              {storeSchedule.reduce((total, day) => total + day.operationalHours, 0)} hrs
+                            <div className="text-base font-bold text-blue-700 leading-tight">
+                              {storeSchedule.reduce((total, day) => total + day.operationalHours, 0)}h
                             </div>
                             <div className="text-[9px] text-gray-600 leading-tight">
-                              {storeSchedule.reduce((total, day) => total + day.operationalMinutes, 0)} minutes
+                              {storeSchedule.reduce((total, day) => total + day.operationalMinutes, 0)}m
                             </div>
                           </div>
                         </div>
                       </div>
-                      <button
-                        onClick={saveStoreTimings}
-                        disabled={isSaving}
-                        className="flex items-center gap-4.5 px-1 py-0.5 bg-blue-600 text-white rounded hover:bg-blue-700 transition-all font-medium disabled:opacity-50 disabled:cursor-not-allowed text-[12px]"
-                      >
-                        <Save size={25} />
-                        {isSaving ? 'Saving...' : 'Save All Outlet Timings'}
-                      </button>
                     </div>
                   </div>
                 </div>
 
                 {/* Compact Days Grid - 7 Cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                   {storeSchedule.map((daySchedule) => (
-                    <div key={daySchedule.day} className="bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-all">
+                    <div key={daySchedule.day} className="bg-white rounded-lg border border-gray-200 p-3 hover:shadow-sm transition-all">
                       {/* Day Header with Open Store Toggle */}
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <div className={`w-8 h-8 rounded-md flex items-center justify-center ${
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-1.5">
+                          <div className={`w-7 h-7 rounded flex items-center justify-center ${
                             daySchedule.isOutletClosed ? 'bg-red-100' : daySchedule.is24Hours ? 'bg-blue-100' : daySchedule.isOpen ? 'bg-emerald-100' : 'bg-red-100'
                           }`}>
                             {daySchedule.isOutletClosed ? (
-                              <X size={14} className="text-red-600" />
+                              <X size={12} className="text-red-600" />
                             ) : daySchedule.is24Hours ? (
-                              <Clock size={14} className="text-blue-600" />
+                              <Clock size={12} className="text-blue-600" />
                             ) : daySchedule.isOpen ? (
-                              <CheckCircle2 size={14} className="text-emerald-600" />
+                              <CheckCircle2 size={12} className="text-emerald-600" />
                             ) : (
-                              <X size={14} className="text-red-600" />
+                              <X size={12} className="text-red-600" />
                             )}
                           </div>
                           <div>
-                            <h3 className="font-bold text-gray-900 text-sm">{daySchedule.label}</h3>
-                            <p className="text-xs text-gray-500">{daySchedule.duration}</p>
+                            <h3 className="font-bold text-gray-900 text-xs">{daySchedule.label}</h3>
+                            <p className="text-[10px] text-gray-500">{daySchedule.duration}</p>
                           </div>
                         </div>
                         {/* Open Store Toggle */}
-                        <label className="relative inline-flex items-center cursor-pointer ml-2">
+                        <label className="relative inline-flex items-center cursor-pointer ml-1">
                           <input
                             type="checkbox"
                             checked={daySchedule.isOpen && !daySchedule.isOutletClosed}
                             onChange={() => handleDayToggle(daySchedule.day)}
                             className="sr-only peer"
                           />
-                          <div className="w-8 h-4 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-emerald-600"></div>
+                          <div className="w-7 h-3.5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-2.5 after:w-2.5 after:transition-all peer-checked:bg-emerald-600"></div>
                         </label>
                       </div>
 
                       {/* Status Badge */}
-                      <div className="mb-3">
+                      <div className="mb-2">
                         {daySchedule.isOutletClosed ? (
-                          <span className="inline-block px-2 py-1 bg-red-50 text-red-700 rounded text-xs font-medium border border-red-200">
-                            🔴 OUTLET CLOSED
+                          <span className="inline-block px-1.5 py-0.5 bg-red-50 text-red-700 rounded text-[10px] font-medium border border-red-200">
+                            🔴 CLOSED
                           </span>
                         ) : daySchedule.is24Hours ? (
-                          <span className="inline-block px-2 py-1 bg-blue-50 text-blue-700 rounded text-xs font-medium border border-blue-200">
-                            ⚡ 24 HOURS OPEN
+                          <span className="inline-block px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-medium border border-blue-200">
+                            ⚡ 24H
                           </span>
                         ) : daySchedule.isOpen ? (
-                          <span className="inline-block px-2 py-1 bg-emerald-50 text-emerald-700 rounded text-xs font-medium border border-emerald-200">
-                            🟢 STORE OPEN
+                          <span className="inline-block px-1.5 py-0.5 bg-emerald-50 text-emerald-700 rounded text-[10px] font-medium border border-emerald-200">
+                            🟢 OPEN
                           </span>
                         ) : (
-                          <span className="inline-block px-2 py-1 bg-red-50 text-red-700 rounded text-xs font-medium border border-red-200">
-                            🔴 STORE CLOSED
+                          <span className="inline-block px-1.5 py-0.5 bg-red-50 text-red-700 rounded text-[10px] font-medium border border-red-200">
+                            🔴 CLOSED
                           </span>
                         )}
                       </div>
 
                       {/* Time Slots - Direct Editing */}
                       {!daySchedule.isOutletClosed && !daySchedule.is24Hours && daySchedule.isOpen && (
-                        <div className="space-y-2 mb-3">
+                        <div className="space-y-1.5 mb-2">
                           {daySchedule.slots.map((slot, index) => (
                             <div key={slot.id} className="space-y-1">
                               <div className="flex items-center justify-between">
-                                <span className="text-xs font-medium text-gray-500">Slot {index + 1}</span>
+                                <span className="text-[10px] font-medium text-gray-500">Slot {index + 1}</span>
                                 {daySchedule.slots.length > 1 && (
                                   <button
                                     onClick={() => removeTimeSlot(daySchedule.day, slot.id)}
-                                    className="text-gray-400 hover:text-red-600 text-xs"
+                                    className="text-gray-400 hover:text-red-600 text-[10px]"
                                   >
-                                    <Trash2 size={12} />
+                                    <Trash2 size={10} />
                                   </button>
                                 )}
                               </div>
-                              <div className="grid grid-cols-2 gap-2">
+                              <div className="grid grid-cols-2 gap-1.5">
                                 <div>
-                                  <label className="text-xs text-gray-600 mb-1 block">From</label>
+                                  <label className="text-[10px] text-gray-600 mb-0.5 block">From</label>
                                   <input
                                     type="time"
                                     value={slot.openingTime}
                                     onChange={(e) => updateTimeSlot(daySchedule.day, slot.id, 'openingTime', e.target.value)}
-                                    className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                    className="w-full px-1.5 py-1 text-[10px] border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
                                   />
                                 </div>
                                 <div>
-                                  <label className="text-xs text-gray-600 mb-1 block">To</label>
+                                  <label className="text-[10px] text-gray-600 mb-0.5 block">To</label>
                                   <input
                                     type="time"
                                     value={slot.closingTime}
                                     onChange={(e) => updateTimeSlot(daySchedule.day, slot.id, 'closingTime', e.target.value)}
-                                    className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                    className="w-full px-1.5 py-1 text-[10px] border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
                                   />
                                 </div>
                               </div>
@@ -1810,20 +3295,87 @@ function StoreSettingsContent() {
                       {!daySchedule.isOutletClosed && !daySchedule.is24Hours && daySchedule.isOpen && daySchedule.slots.length < 2 && (
                         <button
                           onClick={() => addTimeSlot(daySchedule.day)}
-                          className="w-full mb-3 text-xs px-2 py-1.5 border border-dashed border-gray-300 rounded hover:border-blue-400 hover:bg-blue-50 text-blue-600 flex items-center justify-center gap-1"
+                          className="w-full mb-2 text-[10px] px-2 py-1 border border-dashed border-gray-300 rounded hover:border-blue-400 hover:bg-blue-50 text-blue-600 flex items-center justify-center gap-1"
                         >
-                          <Plus size={12} />
-                          Add Another Slot (Max 2)
+                          <Plus size={10} />
+                          Add Slot (Max 2)
+                        </button>
+                      )}
+
+                      {/* Save Button - Only show when manual time changes */}
+                      {manualTimeChanges.has(daySchedule.day) && (
+                        <button
+                          onClick={async () => {
+                            setIsSaving(true)
+                            try {
+                              // Save only this day's timings
+                              const dayData = storeSchedule.find(d => d.day === daySchedule.day)
+                              if (dayData && storeId) {
+                                const timings: any = { store_id: storeId }
+                                const prefix = dayData.day
+                                timings[`${prefix}_open`] = dayData.isOpen && !dayData.isOutletClosed
+                                timings[`${prefix}_slot1_start`] = dayData.slots[0]?.openingTime || null
+                                timings[`${prefix}_slot1_end`] = dayData.slots[0]?.closingTime || null
+                                timings[`${prefix}_slot2_start`] = dayData.slots[1]?.openingTime || null
+                                timings[`${prefix}_slot2_end`] = dayData.slots[1]?.closingTime || null
+                                timings[`${prefix}_total_duration_minutes`] = dayData.is24Hours ? 24 * 60 : (dayData.operationalHours * 60 + dayData.operationalMinutes)
+                                
+                                const { data: { user } } = await supabase.auth.getUser()
+                                timings.updated_by_email = user?.email || ''
+                                timings.updated_by_at = new Date().toISOString()
+
+                                const res = await fetch('/api/outlet-timings', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify(timings),
+                                })
+                                
+                                if (res.ok) {
+                                  toast.success(`✅ ${daySchedule.label} saved!`)
+                                  await fetchTimings()
+                                  
+                                  // Remove from manual changes after save
+                                  setManualTimeChanges(prev => {
+                                    const newSet = new Set(prev);
+                                    newSet.delete(daySchedule.day);
+                                    return newSet;
+                                  });
+                                  
+                                  // Log activity
+                                  await logActivity('TIMING_UPDATE', `Updated ${daySchedule.label} timings`, {
+                                    day: daySchedule.day,
+                                    isOpen: dayData.isOpen,
+                                    is24Hours: dayData.is24Hours,
+                                    isOutletClosed: dayData.isOutletClosed,
+                                    slots: dayData.slots,
+                                  })
+                                  await fetchLastUpdatedInfo(); // Refresh last updated info
+                                  await fetchTimings(); // Refresh timings to get updated info
+                                } else {
+                                  toast.error('Failed to save timings')
+                                }
+                              }
+                            } catch (error) {
+                              toast.error('Failed to save timings')
+                            } finally {
+                              setIsSaving(false)
+                            }
+                          }}
+                          disabled={isSaving}
+                          className="w-full mt-2 px-2 py-1.5 bg-blue-600 text-white rounded text-[10px] font-semibold hover:bg-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
+                        >
+                          <Save size={12} />
+                          {isSaving ? 'Saving...' : 'Save'}
                         </button>
                       )}
 
                       {/* Quick Actions */}
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex flex-wrap gap-1.5 mt-1.5">
                         <button
                           onClick={() => toggleDayExpansion(daySchedule.day)}
-                          className="flex-1 text-xs px-2 py-1.5 bg-gray-100 hover:bg-gray-200 rounded text-gray-700"
+                          className="flex-1 text-[10px] px-1.5 py-1 bg-gray-100 hover:bg-gray-200 rounded text-gray-700"
                         >
-                          {expandedDay === daySchedule.day ? 'Hide Options' : 'More Options'}
+                          {expandedDay === daySchedule.day ? 'Hide' : 'More'}
                         </button>
                       </div>
 
@@ -1883,7 +3435,6 @@ function StoreSettingsContent() {
                   ))}
                 </div>
 
-                {/* Save Button */}
               </div>
             )}
 
@@ -1904,12 +3455,22 @@ function StoreSettingsContent() {
             )}
 
             {activeTab === 'pos' && (
-              <div className="space-y-6">
+              <div className="space-y-4 sm:space-y-6">
                 <div className="bg-white rounded-xl border border-sky-200/80 shadow-sm overflow-hidden">
                   <div className="p-6 flex items-start justify-between gap-4">
-                    <div>
-                      <h3 className="text-lg font-bold text-gray-900">Point of sale system [POS]</h3>
-                      <p className="text-sm text-gray-600 mt-1">Configure and integrate your external POS</p>
+                    <div className="flex-1">
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-lg font-bold text-gray-900">Point of sale system [POS]</h3>
+                        <button
+                          onClick={savePosIntegration}
+                          disabled={posSaving || !posPartner.trim()}
+                          className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-all font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                        >
+                          <Save size={16} />
+                          {posSaving ? 'Saving...' : 'Save'}
+                        </button>
+                      </div>
+                      <p className="text-sm text-gray-600">Configure and integrate your external POS</p>
                     </div>
                     <div className="p-2.5 rounded-lg bg-sky-100">
                       <Smartphone size={22} className="text-sky-600" />
@@ -1978,20 +3539,139 @@ function StoreSettingsContent() {
                 </div>
               </div>
             )}
+              </div>
+            </div>
+          </div>
+          </div>
+
+          {/* Right Sidebar Navigation */}
+          <div className="hidden lg:flex lg:flex-col lg:w-64 lg:shrink-0 bg-white border-l border-gray-200">
+            <div className="sticky top-0 h-screen overflow-y-auto hide-scrollbar p-4">
+              <div className="space-y-1">
+                <h2 className="text-lg font-bold text-gray-900 mb-4 px-3">Settings</h2>
+                <button
+                  onClick={() => setActiveTab('plans')}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                    activeTab === 'plans'
+                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <Crown size={18} />
+                  Plans & Subscription
+                </button>
+                <button
+                  onClick={() => setActiveTab('timings')}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                    activeTab === 'timings'
+                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <Clock size={18} />
+                  Outlet Timings
+                </button>
+                <button
+                  onClick={() => setActiveTab('operations')}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                    activeTab === 'operations'
+                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <Power size={18} />
+                  Store Operations
+                </button>
+                <button
+                  onClick={() => setActiveTab('menu-capacity')}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                    activeTab === 'menu-capacity'
+                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <ChefHat size={18} />
+                  Menu & Capacity
+                </button>
+                <button
+                  onClick={() => setActiveTab('delivery')}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                    activeTab === 'delivery'
+                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <Package size={18} />
+                  Delivery Settings
+                </button>
+                <button
+                  onClick={() => setActiveTab('pos')}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                    activeTab === 'pos'
+                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <Smartphone size={18} />
+                  POS Integration
+                </button>
+                <button
+                  onClick={() => setActiveTab('notifications')}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                    activeTab === 'notifications'
+                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <Bell size={18} />
+                  Notifications
+                </button>
+                <button
+                  onClick={() => setActiveTab('audit')}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                    activeTab === 'audit'
+                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <Activity size={18} />
+                  Audit & Activity
+                </button>
+                <button
+                  onClick={() => setActiveTab('gatimitra')}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                    activeTab === 'gatimitra'
+                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <img src="/gstore.png" alt="Store" className="w-5 h-5" />
+                  Store on Gatimitra
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Temp Off Modal */}
-        {showTempOffModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl max-w-sm w-full">
+        {/* Temp Off Modal - portaled so backdrop blurs sidebar */}
+        {typeof document !== 'undefined' && showTempOffModal && createPortal(
+          <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: 10000 }}>
+            <div
+              className="fixed inset-0 bg-black/50 pointer-events-auto"
+              onClick={() => setShowTempOffModal(false)}
+              style={{
+                backdropFilter: 'blur(12px)',
+                WebkitBackdropFilter: 'blur(12px)',
+                zIndex: 9999
+              }}
+            />
+            <div className="bg-white rounded-xl max-w-sm w-full pointer-events-auto relative z-[10001]">
               <div className="flex items-center justify-between p-6 border-b border-gray-200">
                 <h2 className="text-lg font-bold text-gray-900">Close Store Temporarily</h2>
                 <button onClick={() => setShowTempOffModal(false)} className="text-gray-500 hover:text-gray-900">
                   <X size={20} />
                 </button>
               </div>
-
               <div className="p-6 space-y-4">
                 <p className="text-sm text-gray-600">For how many minutes do you want to close the store?</p>
                 <div>
@@ -2006,7 +3686,6 @@ function StoreSettingsContent() {
                   />
                   <p className="text-xs text-gray-500 mt-1">Default: 30 minutes</p>
                 </div>
-
                 <div className="space-y-2">
                   <button
                     onClick={handleTempOff}
@@ -2023,14 +3702,124 @@ function StoreSettingsContent() {
                 </div>
               </div>
             </div>
-          </div>
+          </div>,
+          document.body
+        )}
+
+        {/* Auto Renew Confirmation Modal - portaled so backdrop blurs sidebar */}
+        {typeof document !== 'undefined' && showAutoRenewConfirm && createPortal(
+          (
+            <>
+              <div
+                className="fixed inset-0 bg-black/50"
+                onClick={() => setShowAutoRenewConfirm(false)}
+                style={{
+                  backdropFilter: 'blur(12px)',
+                  WebkitBackdropFilter: 'blur(12px)',
+                  zIndex: 9999
+                }}
+              />
+              <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: 10000 }}>
+                <div className="bg-white rounded-xl max-w-md w-full pointer-events-auto shadow-2xl">
+                  <div className="flex items-center justify-between p-6 border-b border-gray-200">
+                    <h2 className="text-lg font-bold text-gray-900">Enable Auto Renew</h2>
+                    <button onClick={() => setShowAutoRenewConfirm(false)} className="text-gray-500 hover:text-gray-900">
+                      <X size={20} />
+                    </button>
+                  </div>
+                  <div className="p-6 space-y-4">
+                    <div className="flex items-start gap-3 p-4 bg-orange-50 border border-orange-200 rounded-lg">
+                      <AlertCircle className="text-orange-600 flex-shrink-0 mt-0.5" size={20} />
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900 mb-1">Auto-Debit Notice</p>
+                        <p className="text-sm text-gray-700">
+                          If you enable Auto Renew, the amount will be automatically debited as soon as the bill is generated.
+                          You can turn it off anytime later.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => updateAutoRenew(true)}
+                        className="w-full px-4 py-2.5 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-semibold transition-colors"
+                      >
+                        ✓ Enable Auto Renew
+                      </button>
+                      <button
+                        onClick={() => setShowAutoRenewConfirm(false)}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg hover:bg-gray-50 font-semibold"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          ),
+          document.body
+        )}
+
+        {/* Self Delivery Confirmation Modal - portaled so backdrop blurs sidebar too */}
+        {typeof document !== 'undefined' && showSelfDeliveryConfirm && createPortal(
+          (
+            <>
+              <div
+                className="fixed inset-0 bg-black/50"
+                onClick={() => setShowSelfDeliveryConfirm(false)}
+                style={{
+                  backdropFilter: 'blur(12px)',
+                  WebkitBackdropFilter: 'blur(12px)',
+                  zIndex: 9999
+                }}
+              />
+              <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: 10000 }}>
+                <div className="bg-white rounded-xl max-w-md w-full pointer-events-auto shadow-2xl">
+                  <div className="flex items-center justify-between p-6 border-b border-gray-200">
+                    <h2 className="text-lg font-bold text-gray-900">Enable Self Delivery</h2>
+                    <button onClick={() => setShowSelfDeliveryConfirm(false)} className="text-gray-500 hover:text-gray-900">
+                      <X size={20} />
+                    </button>
+                  </div>
+                  <div className="p-6 space-y-4">
+                    <div className="flex items-start gap-3 p-4 bg-orange-50 border border-orange-200 rounded-lg">
+                      <AlertCircle className="text-orange-600 flex-shrink-0 mt-0.5" size={20} />
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900 mb-1">Self Delivery</p>
+                        <p className="text-sm text-gray-700">
+                          GatiMitra delivery will be disabled. You will use your own delivery staff and manage deliveries yourself. You can switch back to GatiMitra delivery anytime.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => {
+                          setSelfDeliveryEnabled(true);
+                          setGatimitraDeliveryEnabled(false);
+                          setShowSelfDeliveryConfirm(false);
+                        }}
+                        className="w-full px-4 py-2.5 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-semibold transition-colors"
+                      >
+                        Confirm — Enable Self Delivery
+                      </button>
+                      <button
+                        onClick={() => setShowSelfDeliveryConfirm(false)}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg hover:bg-gray-50 font-semibold"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          ),
+          document.body
         )}
       </MXLayoutWhite>
     </>
   )
 }
-
-import { Suspense } from 'react';
 
 export default function StoreSettingsPage() {
   return (
@@ -2044,5 +3833,5 @@ export default function StoreSettingsPage() {
     }>
       <StoreSettingsContent />
     </Suspense>
-  );
+  )
 }

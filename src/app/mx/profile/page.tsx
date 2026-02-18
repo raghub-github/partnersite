@@ -2,8 +2,8 @@
 
 import React, { useEffect, useState, useRef } from "react";
 import { MXLayoutWhite } from "@/components/MXLayoutWhite";
+import { R2Image } from "@/components/R2Image";
 import { fetchRestaurantById as fetchStoreById, updateStoreInfo } from "@/lib/database";
-import { uploadImageToR2 } from "@/lib/uploadImageToR2";
 import { MerchantStore } from "@/lib/merchantStore";
 import { Toaster, toast } from "sonner";
 import { 
@@ -30,9 +30,9 @@ import {
   Lock,
   Globe,
   Image as ImageIcon,
-  Menu
 } from "lucide-react";
 import { PageSkeletonProfile } from "@/components/PageSkeleton";
+import { MobileHamburgerButton } from "@/components/MobileHamburgerButton";
 
 export const dynamic = "force-dynamic";
 
@@ -65,23 +65,77 @@ class ProfileErrorBoundary extends React.Component<{ children: React.ReactNode }
 function OperatingDaysCard({ storeId }: { storeId: string | null }) {
   const [days, setDays] = useState<any[]>([]);
   const [totalMinutes, setTotalMinutes] = useState(0);
+  const [loading, setLoading] = useState(true);
   
   useEffect(() => {
-    if (!storeId) return;
-    import("@/lib/database").then(mod => {
-      mod.fetchStoreOperatingHours(storeId)
-        .then((result) => {
-          if (Array.isArray(result)) {
-            setDays(result);
-            setTotalMinutes(result.reduce((sum: number, d: any) => sum + (d.total_duration_minutes || 0), 0));
-          }
-        })
-        .catch((err) => {
-          console.error('Error loading operating hours:', err);
+    if (!storeId) {
+      setLoading(false);
+      return;
+    }
+    
+    const fetchOperatingDays = async () => {
+      try {
+        setLoading(true);
+        // First get the numeric store ID from the API
+        const storeIdRes = await fetch(`/api/store-id?store_id=${encodeURIComponent(storeId)}`);
+        if (!storeIdRes.ok) {
+          throw new Error('Failed to get store ID');
+        }
+        const storeIdData = await storeIdRes.json();
+        const numericStoreId = storeIdData.id;
+        
+        if (!numericStoreId) {
+          throw new Error('Store ID not found');
+        }
+        
+        // Fetch operating hours using the numeric ID
+        const res = await fetch(`/api/outlet-timings?store_id=${numericStoreId}`);
+        if (!res.ok) {
+          throw new Error('Failed to fetch operating hours');
+        }
+        
+        const data = await res.json();
+        
+        if (!data) {
           setDays([]);
           setTotalMinutes(0);
-        });
-    });
+          setLoading(false);
+          return;
+        }
+        
+        // Transform to array of days
+        const dayList = [
+          { key: 'monday', label: 'Monday' },
+          { key: 'tuesday', label: 'Tuesday' },
+          { key: 'wednesday', label: 'Wednesday' },
+          { key: 'thursday', label: 'Thursday' },
+          { key: 'friday', label: 'Friday' },
+          { key: 'saturday', label: 'Saturday' },
+          { key: 'sunday', label: 'Sunday' }
+        ];
+        
+        const transformedDays = dayList.map(day => ({
+          day_label: day.label,
+          open: data[`${day.key}_open`] ?? false,
+          slot1_start: data[`${day.key}_slot1_start`] ?? null,
+          slot1_end: data[`${day.key}_slot1_end`] ?? null,
+          slot2_start: data[`${day.key}_slot2_start`] ?? null,
+          slot2_end: data[`${day.key}_slot2_end`] ?? null,
+          total_duration_minutes: data[`${day.key}_total_duration_minutes`] ?? 0,
+        }));
+        
+        setDays(transformedDays);
+        setTotalMinutes(transformedDays.reduce((sum: number, d: any) => sum + (d.total_duration_minutes || 0), 0));
+      } catch (err) {
+        console.error('Error loading operating hours:', err);
+        setDays([]);
+        setTotalMinutes(0);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchOperatingDays();
   }, [storeId]);
 
   function formatSlot(start: string, end: string) {
@@ -121,31 +175,44 @@ function OperatingDaysCard({ storeId }: { storeId: string | null }) {
           </span>
         )}
       </div>
-      <div className="grid grid-cols-1 gap-1.5">
-        {days.map((day: any) => (
-          <div key={day.day_label} className="flex items-center justify-between text-xs py-1 px-2 rounded border border-gray-100 bg-white">
-            <span className="font-medium w-16 text-gray-900">{abbreviateDayLabel(day.day_label)}</span>
-            {day.open ? (
-              <span className="text-green-700 font-semibold">Open</span>
-            ) : (
-              <span className="text-red-500 font-semibold">Closed</span>
-            )}
-            <span className="text-gray-700 flex flex-col items-start min-w-[120px]">
-              {day.open && (
-                <>
-                  {formatSlot(day.slot1_start, day.slot1_end) && (
-                    <span className="text-xs leading-tight">{formatSlot(day.slot1_start, day.slot1_end)}</span>
-                  )}
-                  {formatSlot(day.slot2_start, day.slot2_end) && (
-                    <span className="text-xs leading-tight mt-0.5">{formatSlot(day.slot2_start, day.slot2_end)}</span>
-                  )}
-                  <span className="text-xs text-gray-500 mt-0.5">({minutesToHours(day.total_duration_minutes)})</span>
-                </>
+      {loading ? (
+        <div className="text-center py-4">
+          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600 mx-auto"></div>
+          <p className="text-xs text-gray-500 mt-2">Loading operating days...</p>
+        </div>
+      ) : days.length === 0 ? (
+        <div className="text-center py-4">
+          <p className="text-xs text-gray-500">No operating hours configured</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-1.5">
+          {days.map((day: any) => (
+            <div key={day.day_label} className="flex items-center justify-between text-xs py-1 px-2 rounded border border-gray-100 bg-white">
+              <span className="font-medium w-16 text-gray-900">{abbreviateDayLabel(day.day_label)}</span>
+              {day.open ? (
+                <span className="text-green-700 font-semibold">Open</span>
+              ) : (
+                <span className="text-red-500 font-semibold">Closed</span>
               )}
-            </span>
-          </div>
-        ))}
-      </div>
+              <span className="text-gray-700 flex flex-col items-start min-w-[120px]">
+                {day.open && (
+                  <>
+                    {formatSlot(day.slot1_start, day.slot1_end) && (
+                      <span className="text-xs leading-tight">{formatSlot(day.slot1_start, day.slot1_end)}</span>
+                    )}
+                    {formatSlot(day.slot2_start, day.slot2_end) && (
+                      <span className="text-xs leading-tight mt-0.5">{formatSlot(day.slot2_start, day.slot2_end)}</span>
+                    )}
+                    {day.total_duration_minutes > 0 && (
+                      <span className="text-xs text-gray-500 mt-0.5">({minutesToHours(day.total_duration_minutes)})</span>
+                    )}
+                  </>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -157,7 +224,6 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true);
   const [confirmSave, setConfirmSave] = useState(false);
   const [editingField, setEditingField] = useState<string | null>(null);
-  const [showImageUploadModal, setShowImageUploadModal] = useState(false);
   const [uploadingImages, setUploadingImages] = useState<string[]>([]);
   const [bankVerification, setBankVerification] = useState<{
     verified: boolean;
@@ -169,7 +235,8 @@ export default function ProfilePage() {
   const [operatingHours, setOperatingHours] = useState<any[]>([]);
   const [storeDocuments, setStoreDocuments] = useState<any>(null);
   const [bankAccounts, setBankAccounts] = useState<any[]>([]);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [areaManager, setAreaManager] = useState<{ id?: number | null; name: string; email: string; mobile: string } | null>(null);
+  const [loadingAreaManager, setLoadingAreaManager] = useState(false);
   const bannerInputRef = useRef<HTMLInputElement>(null);
   const adsInputRef = useRef<HTMLInputElement>(null);
 
@@ -183,6 +250,61 @@ export default function ProfilePage() {
     setStoreId(id);
   }, []);
 
+  /* ===== CONVERT R2 URLs TO SIGNED URLs ===== */
+  const convertR2UrlToSigned = async (url: string | null | undefined): Promise<string | null> => {
+    if (!url) return null;
+    // If already a signed URL (has query params with X-Amz-*), return as-is
+    if (url.includes('X-Amz-') || url.includes('X-Amz-Algorithm')) return url;
+    // If it's an R2 URL (r2.cloudflarestorage.com), convert to signed URL
+    if (url.includes('r2.cloudflarestorage.com') || url.includes('merchant-assets/')) {
+      try {
+        const res = await fetch(`/api/images/signed-url?url=${encodeURIComponent(url)}`);
+        const data = await res.json();
+        if (res.ok && data.url) return data.url;
+      } catch (err) {
+        console.error('Failed to get signed URL:', err);
+      }
+    }
+    return url; // Return original if conversion fails
+  };
+
+  /* ===== FETCH AREA MANAGER (via API to bypass RLS / auth issues) ===== */
+  useEffect(() => {
+    if (!storeId) {
+      setAreaManager(null);
+      return;
+    }
+
+    const fetchAreaManager = async () => {
+      try {
+        setLoadingAreaManager(true);
+        const res = await fetch(`/api/merchant/area-manager?storeId=${encodeURIComponent(storeId)}`);
+        const data = await res.json();
+        if (res.ok && data.success) {
+          if (data.areaManager) {
+            setAreaManager({
+              id: data.areaManager.id,
+              name: data.areaManager.name || 'Not set',
+              email: data.areaManager.email || 'Not set',
+              mobile: data.areaManager.mobile || 'Not set',
+            });
+          } else {
+            setAreaManager(null);
+          }
+        } else {
+          setAreaManager(null);
+        }
+      } catch (error) {
+        console.error('Error fetching area manager:', error);
+        setAreaManager(null);
+      } finally {
+        setLoadingAreaManager(false);
+      }
+    };
+
+    fetchAreaManager();
+  }, [storeId]);
+  
   /* ===== FETCH DATA ===== */
   useEffect(() => {
     if (!storeId) return;
@@ -218,11 +340,24 @@ export default function ProfilePage() {
         return { docs: null, banks: [] };
       })
     ])
-      .then(([storeData, hoursData, { docs, banks }]) => {
+      .then(async ([storeData, hoursData, { docs, banks }]) => {
         const store = storeData as MerchantStore | null;
         if (store) {
-          setStore(store);
-          setEditData(store);
+          console.log('Store loaded with area_manager_id:', (store as any).area_manager_id);
+          // Convert R2 URLs to signed URLs for images
+          const bannerUrl = await convertR2UrlToSigned(store.banner_url);
+          const adsImages = store.ads_images ? await Promise.all(store.ads_images.map(convertR2UrlToSigned)) : null;
+          const galleryImages = store.gallery_images ? await Promise.all(store.gallery_images.map(convertR2UrlToSigned)) : null;
+          const logoUrl = await convertR2UrlToSigned(store.logo_url);
+          const updatedStore = {
+            ...store,
+            banner_url: bannerUrl || store.banner_url,
+            ads_images: adsImages?.filter(Boolean) as string[] || store.ads_images,
+            gallery_images: galleryImages?.filter(Boolean) as string[] || store.gallery_images,
+            logo_url: logoUrl || store.logo_url,
+          };
+          setStore(updatedStore);
+          setEditData(updatedStore);
         }
         if (hoursData && Array.isArray(hoursData)) {
           setOperatingHours(hoursData);
@@ -397,61 +532,86 @@ export default function ProfilePage() {
     }
   };
 
+  /* ===== R2 UPLOAD (server-side, no Supabase Storage RLS) ===== */
+  const uploadFileToR2 = async (file: File, parentFolder: string, filename?: string): Promise<string | null> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const ext = file.name.split(".").pop() || "jpg";
+    formData.append("parent", `merchant-assets/${storeId}/${parentFolder}`);
+    formData.append("filename", filename || `${parentFolder}_${Date.now()}.${ext}`);
+    const res = await fetch("/api/upload/r2", { method: "POST", body: formData });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.error || data?.details || "Upload failed");
+    }
+    const data = await res.json();
+    return data?.url ?? null;
+  };
+
+  /* ===== UPDATE STORE MEDIA VIA API (bypasses RLS, uses service role on server) ===== */
+  const updateStoreMedia = async (updates: { banner_url?: string; logo_url?: string; ads_images?: string[]; gallery_images?: string[] }): Promise<boolean> => {
+    if (!storeId) return false;
+    const res = await fetch("/api/merchant/store-profile", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storeId, ...updates }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.error || "Failed to save");
+    }
+    return true;
+  };
+
   /* ===== IMAGE UPLOAD HANDLERS ===== */
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'banner' | 'ads' | 'logo' | 'gallery') => {
     const files = Array.from(e.target.files || []);
     if (!files.length || !storeId) return;
 
     setUploadingImages(files.map(file => URL.createObjectURL(file)));
+    e.target.value = "";
 
     try {
       if (type === 'banner') {
-        // Only one banner image
         const file = files[0];
-        const signedUrl = await uploadImageToR2(file, 'banners', storeId, 'merchant-assets');
-        if (!signedUrl) throw new Error('Banner upload failed');
-        await updateStoreInfo(storeId, { banner_url: signedUrl });
-        setStore(r => r ? { ...r, banner_url: signedUrl } : r);
-        setEditData(r => r ? { ...r, banner_url: signedUrl } : r);
+        const url = await uploadFileToR2(file, "banners");
+        if (!url) throw new Error("Banner upload failed");
+        await updateStoreMedia({ banner_url: url });
+        setStore(r => r ? { ...r, banner_url: url } : r);
+        setEditData(r => r ? { ...r, banner_url: url } : r);
         toast.success("Store banner updated!");
       } else if (type === 'logo') {
-        // Only one logo image
         const file = files[0];
-        const signedUrl = await uploadImageToR2(file, 'logos', storeId, 'merchant-assets');
-        if (!signedUrl) throw new Error('Logo upload failed');
-        await updateStoreInfo(storeId, { logo_url: signedUrl });
-        setStore(r => r ? { ...r, logo_url: signedUrl } : r);
-        setEditData(r => r ? { ...r, logo_url: signedUrl } : r);
+        const url = await uploadFileToR2(file, "logos");
+        if (!url) throw new Error("Logo upload failed");
+        await updateStoreMedia({ logo_url: url });
+        setStore(r => r ? { ...r, logo_url: url } : r);
+        setEditData(r => r ? { ...r, logo_url: url } : r);
         toast.success("Logo updated!");
       } else if (type === 'gallery') {
-        // Multiple gallery images
-        const uploadGallery = await Promise.all(files.map(file => uploadImageToR2(file, 'gallery', storeId, 'merchant-assets')));
-        const validUrls = uploadGallery.filter(Boolean) as string[];
+        const urls = await Promise.all(files.map((file, i) => uploadFileToR2(file, "gallery", `gallery_${Date.now()}_${i}.${file.name.split(".").pop() || "jpg"}`)));
+        const validUrls = urls.filter(Boolean) as string[];
         const currentGallery = store?.gallery_images || [];
-        const newGallery = [...currentGallery, ...validUrls].slice(0, 10); // Limit gallery size
-        await updateStoreInfo(storeId, { gallery_images: newGallery });
+        const newGallery = [...currentGallery, ...validUrls].slice(0, 10);
+        await updateStoreMedia({ gallery_images: newGallery });
         setStore(r => r ? { ...r, gallery_images: newGallery } : r);
         setEditData(r => r ? { ...r, gallery_images: newGallery } : r);
         toast.success("Gallery images updated!");
       } else if (type === 'ads') {
-        // Multiple ads images
-        const uploadAds = await Promise.all(files.map(file => uploadImageToR2(file, 'ads', storeId, 'merchant-assets')));
-        const validUrls = uploadAds.filter(Boolean) as string[];
+        const urls = await Promise.all(files.map((file, i) => uploadFileToR2(file, "ads", `ads_${Date.now()}_${i}.${file.name.split(".").pop() || "jpg"}`)));
+        const validUrls = urls.filter(Boolean) as string[];
         const currentAds = store?.ads_images || [];
-        const newAds = [...currentAds, ...validUrls].slice(0, 5); // Keep max 5 images
-        await updateStoreInfo(storeId, { ads_images: newAds });
+        const newAds = [...currentAds, ...validUrls].slice(0, 5);
+        await updateStoreMedia({ ads_images: newAds });
         setStore(r => r ? { ...r, ads_images: newAds } : r);
         setEditData(r => r ? { ...r, ads_images: newAds } : r);
-        toast.success("Ads images updated!");
+        toast.success("Gallery images updated!");
       }
 
       setUploadingImages([]);
-      if (type === 'ads' || type === 'gallery') {
-        setShowImageUploadModal(false);
-      }
     } catch (error) {
       console.error("Image upload error:", error);
-      toast.error("Image upload failed");
+      toast.error(error instanceof Error ? error.message : "Image upload failed");
       setUploadingImages([]);
     }
   };
@@ -464,7 +624,7 @@ export default function ProfilePage() {
     newAds.splice(index, 1);
 
     try {
-      await updateStoreInfo(storeId, { ads_images: newAds });
+      await updateStoreMedia({ ads_images: newAds });
       setStore(r => r ? { ...r, ads_images: newAds } : r);
       setEditData(r => r ? { ...r, ads_images: newAds } : r);
       toast.success("Image removed!");
@@ -553,8 +713,8 @@ export default function ProfilePage() {
           <header className="sticky top-0 z-20 bg-white border-b border-gray-200 flex-shrink-0">
             <div className="px-4 py-3 md:px-6 md:py-4">
               <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-                {/* Spacer for hamburger menu on left (mobile) */}
-                <div className="md:hidden w-12"></div>
+                {/* Hamburger menu on left (mobile) */}
+                <MobileHamburgerButton />
                 {/* Heading on right for mobile, left for desktop */}
                 <div className="min-w-0 flex-1 ml-auto md:ml-0">
                   <h1 className="text-lg md:text-2xl font-bold text-gray-900 truncate">Merchant Profile</h1>
@@ -563,32 +723,10 @@ export default function ProfilePage() {
                 <div className="flex items-center gap-2 shrink-0">
                   <button
                     onClick={() => setConfirmSave(true)}
-                    className="hidden md:inline-flex bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium text-sm"
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg font-medium text-xs sm:text-sm"
                   >
                     Save Changes
                   </button>
-                  <div className="md:hidden relative">
-                    <button
-                      onClick={() => setMobileMenuOpen((v) => !v)}
-                      className="p-2 rounded-lg hover:bg-gray-100 text-gray-600"
-                      aria-label="Menu"
-                    >
-                      <Menu size={22} />
-                    </button>
-                    {mobileMenuOpen && (
-                      <>
-                        <div className="fixed inset-0 z-40" onClick={() => setMobileMenuOpen(false)} aria-hidden="true" />
-                        <div className="absolute right-0 top-full mt-1 py-1 bg-white rounded-lg shadow-lg border border-gray-200 z-50 min-w-[140px]">
-                          <button
-                            onClick={() => { setConfirmSave(true); setMobileMenuOpen(false); }}
-                            className="w-full text-left px-4 py-2.5 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded"
-                          >
-                            Save Changes
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
                 </div>
               </div>
             </div>
@@ -837,32 +975,41 @@ export default function ProfilePage() {
                               <User size={16} className="text-blue-600" />
                               Area Manager
                             </h3>
-                            <div className="space-y-2">
-                              <CompactEditableRow
-                                label="AM Name"
-                                value={editData?.am_name || ''}
-                                isEditing={editingField === 'am_name'}
-                                onEdit={() => startEditing('am_name')}
-                                onSave={stopEditing}
-                                onChange={(v) => editData && setEditData({ ...editData, am_name: v })}
-                              />
-                              <CompactEditableRow
-                                label="AM Mobile"
-                                value={editData?.am_mobile || ''}
-                                isEditing={editingField === 'am_mobile'}
-                                onEdit={() => startEditing('am_mobile')}
-                                onSave={stopEditing}
-                                onChange={(v) => editData && setEditData({ ...editData, am_mobile: v })}
-                              />
-                              <CompactEditableRow
-                                label="AM Email"
-                                value={editData?.am_email || ''}
-                                isEditing={editingField === 'am_email'}
-                                onEdit={() => startEditing('am_email')}
-                                onSave={stopEditing}
-                                onChange={(v) => editData && setEditData({ ...editData, am_email: v })}
-                              />
-                            </div>
+                            {loadingAreaManager ? (
+                              <div className="text-center py-4">
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mx-auto"></div>
+                                <p className="text-xs text-gray-500 mt-2">Loading...</p>
+                              </div>
+                            ) : areaManager ? (
+                              <div className="space-y-2">
+                                {areaManager.id != null && (
+                                  <div className="flex flex-col">
+                                    <label className="text-xs font-medium text-gray-600 mb-1">AM ID</label>
+                                    <span className="text-sm text-gray-900 font-medium">{areaManager.id}</span>
+                                  </div>
+                                )}
+                                <div className="flex flex-col">
+                                  <label className="text-xs font-medium text-gray-600 mb-1">AM Name</label>
+                                  <span className="text-sm text-gray-900 font-medium">
+                                    {areaManager.name || 'Not set'}
+                                  </span>
+                                </div>
+                                <div className="flex flex-col">
+                                  <label className="text-xs font-medium text-gray-600 mb-1">AM Mobile</label>
+                                  <span className="text-sm text-gray-900 font-medium">
+                                    {areaManager.mobile || 'Not set'}
+                                  </span>
+                                </div>
+                                <div className="flex flex-col">
+                                  <label className="text-xs font-medium text-gray-600 mb-1">AM Email</label>
+                                  <span className="text-sm text-gray-900 font-medium">
+                                    {areaManager.email || 'Not set'}
+                                  </span>
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="text-xs text-gray-500">No area manager assigned</p>
+                            )}
                           </div>
 
                           <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
@@ -1337,7 +1484,7 @@ export default function ProfilePage() {
                           />
                         </div>
                         {store.banner_url ? (
-                          <img
+                          <R2Image
                             src={store.banner_url}
                             alt="Store Banner"
                             className="mt-2 rounded-lg w-full h-48 object-cover"
@@ -1366,51 +1513,70 @@ export default function ProfilePage() {
                           <button
                             type="button"
                             className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium"
-                            onClick={() => setShowImageUploadModal(true)}
+                            onClick={() => adsInputRef.current?.click()}
                             disabled={(store.ads_images?.length || 0) >= 5}
                           >
                             <Upload size={12} />
                             Upload Ads
                           </button>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            ref={adsInputRef}
+                            style={{ display: "none" }}
+                            onChange={(e) => handleImageUpload(e, 'ads')}
+                          />
                         </div>
                         
-                        {/* ADS IMAGES GRID */}
-                        <div className="grid grid-cols-2 gap-2 mt-3">
-                          {store.ads_images?.map((img, index) => (
-                            <div key={index} className="relative group">
-                              <img
-                                src={img}
-                                alt={`Ad ${index + 1}`}
-                                className="w-full h-24 object-cover rounded-lg"
-                              />
-                              <button
-                                onClick={() => handleRemoveAdImage(index)}
-                                className="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                        {/* ADS IMAGES GRID - 5 fixed boxes */}
+                        <div className="grid grid-cols-5 gap-2 mt-3">
+                          {Array.from({ length: 5 }).map((_, index) => {
+                            const ads = store.ads_images || [];
+                            const img = ads[index];
+                            const uploadingIndex = index - ads.length;
+                            const isUploading = uploadingIndex >= 0 && uploadingIndex < uploadingImages.length;
+                            const uploadingPreview = isUploading ? uploadingImages[uploadingIndex] : null;
+                            return (
+                              <div
+                                key={index}
+                                className="relative group aspect-square min-h-[80px] bg-gray-100 rounded-lg border border-gray-200 overflow-hidden flex items-center justify-center"
                               >
-                                ×
-                              </button>
-                            </div>
-                          ))}
-                          {uploadingImages.map((img, index) => (
-                            <div key={`uploading-${index}`} className="relative">
-                              <img
-                                src={img}
-                                alt="Uploading..."
-                                className="w-full h-24 object-cover rounded-lg opacity-50"
-                              />
-                              <div className="absolute inset-0 flex items-center justify-center">
-                                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                                {img ? (
+                                  <>
+                                    <R2Image
+                                      src={img}
+                                      alt={`Gallery ${index + 1}`}
+                                      className="w-full h-full object-cover"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveAdImage(index)}
+                                      className="absolute top-1 right-1 bg-red-500 hover:bg-red-600 text-white w-5 h-5 rounded-full flex items-center justify-center text-sm opacity-0 group-hover:opacity-100 transition-opacity"
+                                    >
+                                      ×
+                                    </button>
+                                  </>
+                                ) : uploadingPreview ? (
+                                  <div className="relative w-full h-full">
+                                    <img
+                                      src={uploadingPreview}
+                                      alt="Uploading..."
+                                      className="w-full h-full object-cover opacity-60"
+                                    />
+                                    <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                                      <div className="animate-spin rounded-full h-6 w-6 border-2 border-white border-t-transparent" />
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="text-center p-2">
+                                    <ImageIcon size={20} className="text-gray-400 mx-auto mb-1" />
+                                    <p className="text-[10px] text-gray-500">Slot {index + 1}</p>
+                                  </div>
+                                )}
                               </div>
-                            </div>
-                          ))}
-                          {(!store.ads_images || store.ads_images.length === 0) && uploadingImages.length === 0 && (
-                            <div className="col-span-2 h-48 bg-gray-100 rounded-lg flex items-center justify-center">
-                              <div className="text-center">
-                                <ImageIcon size={24} className="text-gray-400 mx-auto mb-2" />
-                                <p className="text-xs text-gray-500">No ads images</p>
-                              </div>
-                            </div>
-                          )}
+                            );
+                          })}
                         </div>
                       </div>
                     </div>
@@ -1422,55 +1588,6 @@ export default function ProfilePage() {
             </div>
           </div>
         </div>
-
-        {/* IMAGE UPLOAD MODAL */}
-        {showImageUploadModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4">
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">Upload Ads Images</h3>
-              <p className="text-sm text-gray-600 mb-4">
-                Upload promotional images (max 5 total). You can upload {5 - (store.ads_images?.length || 0)} more.
-              </p>
-              
-              <div className="mb-6">
-                <div className="flex items-center justify-center w-full">
-                  <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100">
-                    <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                      <Upload className="w-8 h-8 mb-3 text-gray-400" />
-                      <p className="mb-2 text-sm text-gray-500">
-                        <span className="font-semibold">Click to upload</span> or drag and drop
-                      </p>
-                      <p className="text-xs text-gray-500">PNG, JPG, GIF up to 10MB</p>
-                    </div>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      className="hidden"
-                      ref={adsInputRef}
-                      onChange={(e) => handleImageUpload(e, 'ads')}
-                    />
-                  </label>
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-2">
-                <button 
-                  onClick={() => setShowImageUploadModal(false)}
-                  className="px-4 py-2 text-sm text-gray-700 hover:text-gray-900"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => adsInputRef.current?.click()}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium"
-                >
-                  Select Images
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* SAVE CONFIRM MODAL */}
         {confirmSave && (

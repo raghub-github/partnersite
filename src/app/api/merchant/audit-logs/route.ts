@@ -22,7 +22,9 @@ async function resolveStoreId(db: ReturnType<typeof getSupabase>, storeIdParam: 
 
 /**
  * GET /api/merchant/audit-logs?storeId=GMMC1001&limit=100
- * Returns store status log from merchant_store_status_log (who opened/closed, when, restriction type).
+ * Returns combined audit logs from:
+ * 1. merchant_store_status_log (who opened/closed, when, restriction type)
+ * 2. merchant_audit_logs (settings changes, etc.)
  */
 export async function GET(req: NextRequest) {
   try {
@@ -36,16 +38,78 @@ export async function GET(req: NextRequest) {
     const internalId = await resolveStoreId(db, storeId);
     if (internalId === null) return NextResponse.json({ error: 'Store not found' }, { status: 404 });
 
-    const { data, error } = await db
+    // Fetch store status logs (open/close actions)
+    const { data: statusLogs, error: statusError } = await db
       .from('merchant_store_status_log')
       .select('id, action, restriction_type, performed_by_id, performed_by_email, performed_by_name, created_at')
       .eq('store_id', internalId)
       .order('created_at', { ascending: false })
       .limit(limit);
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (statusError) {
+      console.error('Error fetching status logs:', statusError);
+    }
 
-    return NextResponse.json({ logs: data ?? [] });
+    // Fetch audit logs (settings changes, etc.)
+    const { data: auditLogs, error: auditError } = await db
+      .from('merchant_audit_logs')
+      .select('id, action, action_field, performed_by_id, performed_by_email, performed_by_name, created_at, audit_metadata')
+      .eq('entity_type', 'STORE')
+      .eq('entity_id', internalId)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (auditError) {
+      console.error('Error fetching audit logs:', auditError);
+    }
+
+    // Combine and format logs
+    const combinedLogs: any[] = [];
+
+    // Format status logs
+    if (statusLogs) {
+      statusLogs.forEach((log: any) => {
+        combinedLogs.push({
+          id: `status-${log.id}`, // Prefix with type to ensure uniqueness
+          originalId: log.id,
+          action: log.action === 'OPEN' ? 'Store opened' : log.action === 'CLOSED' ? 'Store closed' : log.action,
+          action_field: log.restriction_type || null,
+          restriction_type: log.restriction_type || null,
+          performed_by_id: log.performed_by_id,
+          performed_by_email: log.performed_by_email,
+          performed_by_name: log.performed_by_name,
+          created_at: log.created_at,
+          type: 'status',
+        });
+      });
+    }
+
+    // Format audit logs (settings changes)
+    if (auditLogs) {
+      auditLogs.forEach((log: any) => {
+        const metadata = log.audit_metadata || {};
+        const description = metadata.description || (log.action_field ? `${log.action_field} updated` : `${log.action} updated`);
+        
+        combinedLogs.push({
+          id: `audit-${log.id}`, // Prefix with type to ensure uniqueness
+          originalId: log.id,
+          action: description,
+          action_field: log.action_field || null,
+          restriction_type: null, // For compatibility with old interface
+          performed_by_id: log.performed_by_id,
+          performed_by_email: log.performed_by_email,
+          performed_by_name: log.performed_by_name,
+          created_at: log.created_at,
+          type: 'settings',
+        });
+      });
+    }
+
+    // Sort by created_at descending and limit
+    combinedLogs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    const limitedLogs = combinedLogs.slice(0, limit);
+
+    return NextResponse.json({ logs: limitedLogs });
   } catch (err) {
     console.error('[audit-logs]', err);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

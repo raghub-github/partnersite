@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { supabase } from '@/lib/supabase';
 
 // ---------- R2 Client ----------
@@ -60,17 +61,26 @@ export async function POST(request: NextRequest) {
 
     await s3Client.send(uploadCommand);
 
-    // -------- Response URL / key --------
-    const publicUrl = `${process.env.R2_PUBLIC_BASE_URL}/${fullPath}`;
+    // -------- Generate signed URL (valid for 7 days) --------
+    const getObjectCommand = new GetObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: fullPath,
+    });
+    const signedUrl = await getSignedUrl(s3Client, getObjectCommand, { expiresIn: 60 * 60 * 24 * 7 }); // 7 days
+    
     // For ticket attachments, return key so Supabase can store key and proxy can serve (no auth/expiry issues).
     const isTicketAttachment = typeof parent === "string" && parent.startsWith("tickets/");
 
     // -------- Update Supabase (Optional) --------
-    if (menu_item_id) {
+    // Only update DB when parent is a known flow that uses a table we have (e.g. tickets).
+    // Menu items (parent 'menuitems') and categories use their own APIs to save the returned key.
+    // The table 'menu_items' does not exist in this schema; avoid touching it.
+    const isTicketFlow = typeof parent === 'string' && parent.startsWith('tickets/');
+    if (menu_item_id && isTicketFlow) {
       const { error } = await supabase
         .from('menu_items')
         .update({
-          image_url: publicUrl,
+          image_url: signedUrl,
           updated_at: new Date().toISOString(),
         })
         .eq('item_id', menu_item_id);
@@ -90,8 +100,9 @@ export async function POST(request: NextRequest) {
     // -------- Success --------
     return NextResponse.json({
       success: true,
-      url: isTicketAttachment ? fullPath : publicUrl,
+      url: isTicketAttachment ? fullPath : signedUrl,
       path: fullPath,
+      key: fullPath, // Always return key for future signed URL generation
       ...(isTicketAttachment ? { key: fullPath } : {}),
     });
 

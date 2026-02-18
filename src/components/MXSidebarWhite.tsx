@@ -45,6 +45,8 @@ interface MXSidebarWhiteProps {
   onCollapsedChange?: (collapsed: boolean) => void
   /** Optional content shown inside the mobile hamburger overlay (e.g. Avg Prep, Revenue, Completion) */
   mobileMenuExtra?: React.ReactNode
+  /** Optional filters/stats content shown in sidebar (desktop and mobile) */
+  sidebarFilters?: React.ReactNode
 }
 
 export const MXSidebarWhite: React.FC<MXSidebarWhiteProps> = ({
@@ -54,19 +56,23 @@ export const MXSidebarWhite: React.FC<MXSidebarWhiteProps> = ({
   collapsed = false,
   onCollapsedChange,
   mobileMenuExtra,
+  sidebarFilters,
 }) => {
   const isRight = position === 'right';
-  // Small/mobile: sidebar is always closed; only hamburger overlay, and it closes on any nav.
+  // Defer screen size until after mount to avoid hydration mismatch (server has no window).
   const [isSmallScreen, setIsSmallScreen] = useState(false);
+  const [hasMounted, setHasMounted] = useState(false);
   useEffect(() => {
+    setHasMounted(true);
     const mq = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`);
     setIsSmallScreen(mq.matches);
     const handler = () => setIsSmallScreen(mq.matches);
     mq.addEventListener('change', handler);
     return () => mq.removeEventListener('change', handler);
   }, []);
-  // On small/mobile: always collapsed (no sidebar strip). On desktop: use collapsed prop.
-  const effectiveCollapsed = isSmallScreen ? true : collapsed;
+  // On small/mobile: always collapsed. Use isSmallScreen only after mount so server and first client paint match.
+  const effectiveCollapsed = (hasMounted && isSmallScreen) ? true : collapsed;
+  const isDesktopSidebar = !(hasMounted && isSmallScreen);
   const router = useRouter();
   const pathname = usePathname();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -81,6 +87,22 @@ export const MXSidebarWhite: React.FC<MXSidebarWhiteProps> = ({
   }, [pathname]);
   useEffect(() => {
     setMobileMenuOpen(false);
+  }, []);
+
+  // Listen for custom event to close sidebar from filter buttons
+  useEffect(() => {
+    const handleCloseSidebar = () => {
+      setMobileMenuOpen(false);
+    };
+    const handleOpenSidebar = () => {
+      setMobileMenuOpen(true);
+    };
+    window.addEventListener('closeMobileSidebar', handleCloseSidebar);
+    window.addEventListener('openMobileSidebar', handleOpenSidebar);
+    return () => {
+      window.removeEventListener('closeMobileSidebar', handleCloseSidebar);
+      window.removeEventListener('openMobileSidebar', handleOpenSidebar);
+    };
   }, []);
 
   const merchantSession = useMerchantSession();
@@ -242,8 +264,17 @@ export const MXSidebarWhite: React.FC<MXSidebarWhiteProps> = ({
         ))}
       </nav>
 
+      {/* Sidebar Filters - shown when not collapsed */}
+      {sidebarFilters && !effectiveCollapsed && (
+        <div className="px-4 pb-3 border-t border-gray-200">
+          <div className="pt-3">
+            {sidebarFilters}
+          </div>
+        </div>
+      )}
+
       {/* Collapse/Expand – just above profile */}
-      {onCollapsedChange && !isSmallScreen && (
+      {onCollapsedChange && isDesktopSidebar && (
         <div className={`border-t border-gray-200 ${effectiveCollapsed ? 'flex justify-center py-2' : 'px-4 py-2'}`}>
           <button
             onClick={() => onCollapsedChange(!effectiveCollapsed)}
@@ -308,14 +339,7 @@ export const MXSidebarWhite: React.FC<MXSidebarWhiteProps> = ({
 
       {/* Mobile: hamburger + overlay only — visible on viewport < 768px from first paint */}
       <div className="md:hidden">
-        <button
-          type="button"
-          onClick={() => setMobileMenuOpen(true)}
-          className="fixed top-4 left-4 z-[60] p-2.5 rounded-lg bg-white border border-gray-200 text-gray-700 shadow-md hover:bg-gray-50"
-          aria-label="Open menu"
-        >
-          <Menu size={24} />
-        </button>
+        {/* Note: Hamburger button is now handled in the page header, not here */}
         {mobileMenuOpen && (
           <>
             <div
@@ -372,6 +396,11 @@ export const MXSidebarWhite: React.FC<MXSidebarWhiteProps> = ({
                   );
                 })}
               </nav>
+              {sidebarFilters && (
+                <div className="mx-3 mb-3 border-t border-gray-200 pt-3" data-mobile-sidebar>
+                  {sidebarFilters}
+                </div>
+              )}
               {mobileMenuExtra && (
                 <div className="mx-3 mb-3 p-3 rounded-xl border border-gray-200 bg-gray-50/90 shadow-sm">
                   {mobileMenuExtra}
