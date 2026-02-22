@@ -1,10 +1,12 @@
 /**
  * Session Management (same as main dashboard)
- * Session valid for 24h from last activity; max 7 days from first login.
+ * - 24h sliding window: session expires after 24h of inactivity.
+ * - Activity (each request) renews the window for another 24h.
+ * - 7-day cap: user must log in again at least once within 7 days of first login.
  */
 
-export const SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 hours
-export const MAX_SESSION_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 days
+export const SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 hours (sliding window)
+export const MAX_SESSION_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 days (must re-login after)
 export const INACTIVITY_TIMEOUT = 24 * 60 * 60 * 1000; // 24 hours
 
 const SESSION_START_COOKIE = "session_start_time";

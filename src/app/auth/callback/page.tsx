@@ -64,7 +64,18 @@ function AuthCallbackContent() {
 
   useEffect(() => {
     const run = async () => {
-      const next = typeof window !== "undefined" ? sessionStorage.getItem("auth_redirect") || "/auth/post-login" : "/auth/post-login";
+      let next = typeof window !== "undefined" ? sessionStorage.getItem("auth_redirect") || "/auth/post-login" : "/auth/post-login";
+      // Ensure we always redirect on the current origin (avoid redirecting to localhost from production)
+      if (typeof window !== "undefined" && next.startsWith("http")) {
+        try {
+          const nextUrl = new URL(next);
+          if (nextUrl.origin !== window.location.origin) {
+            next = nextUrl.pathname + nextUrl.search;
+          }
+        } catch {
+          next = "/auth/post-login";
+        }
+      }
 
       const error = searchParams?.get("error");
       const errorDescription = searchParams?.get("error_description");
@@ -94,7 +105,7 @@ function AuthCallbackContent() {
           }
           if (typeof window !== "undefined") {
             sessionStorage.removeItem("auth_redirect");
-            window.location.href = next;
+            window.location.href = next.startsWith("/") ? next : `/${next.replace(/^\//, "")}`;
           }
           return;
         }
@@ -120,7 +131,7 @@ function AuthCallbackContent() {
           }
           if (typeof window !== "undefined") {
             sessionStorage.removeItem("auth_redirect");
-            window.location.href = next;
+            window.location.href = next.startsWith("/") ? next : `/${next.replace(/^\//, "")}`;
           }
           return;
         }
@@ -144,7 +155,7 @@ function AuthCallbackContent() {
         }
         if (typeof window !== "undefined") {
           sessionStorage.removeItem("auth_redirect");
-          window.location.href = next;
+          window.location.href = next.startsWith("/") ? next : `/${next.replace(/^\//, "")}`;
         }
         return;
       }

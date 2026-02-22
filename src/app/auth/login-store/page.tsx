@@ -40,7 +40,7 @@ export default function LoginStorePage() {
   const handleGoogleLogin = async () => {
     setLoginModalOpen(false);
     if (typeof window !== "undefined") sessionStorage.setItem("auth_redirect", "/auth/search");
-    await signInWithGoogle(`${typeof window !== "undefined" ? window.location.origin : ""}/auth/callback`);
+    await signInWithGoogle(); // Uses app domain from NEXT_PUBLIC_APP_URL or current origin
   };
 
   // Handle store selection

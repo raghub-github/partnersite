@@ -213,7 +213,7 @@ const UserInsightsContent = () => {
 
   // Restore view from URL on load (strict refresh persistence)
   useEffect(() => {
-    const view = searchParams.get('view');
+    const view = searchParams?.get('view');
     if (view === 'inbox') setShowQueueView(true);
   }, [searchParams]);
 
@@ -227,7 +227,7 @@ const UserInsightsContent = () => {
   // Restore selected ticket from URL (priority) or localStorage after tickets load
   useEffect(() => {
     if (!showQueueView || tickets.length === 0 || selectedTicket) return;
-    const urlTicketId = searchParams.get('ticket');
+    const urlTicketId = searchParams?.get('ticket');
     const savedTicketId = typeof window !== 'undefined' ? localStorage.getItem('userInsights_selectedTicketId') : null;
     const ticketIdToRestore = urlTicketId || savedTicketId;
     if (ticketIdToRestore) {
@@ -317,7 +317,7 @@ const UserInsightsContent = () => {
             ...updated,
             status: normalizedTicketStatus((updated.status as string) || ''),
           };
-          setSelectedTicket((prev) => (prev && prev.id === ticketId ? { ...prev, ...normalized } : prev));
+          setSelectedTicket((prev: { id: number } | null) => (prev && prev.id === ticketId ? { ...prev, ...normalized } : prev));
           setTickets((prev) =>
             prev.map((t) => (t.id === ticketId ? { ...t, ...normalized } : t))
           );
@@ -358,7 +358,7 @@ const UserInsightsContent = () => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('userInsights_showQueueView', 'true');
     }
-    router.replace(`${pathname}?view=inbox`);
+    router.replace(`${pathname ?? '/mx/user-insights'}?view=inbox`);
     fetchTickets();
   };
 
@@ -370,7 +370,7 @@ const UserInsightsContent = () => {
       localStorage.setItem('userInsights_showQueueView', 'false');
       localStorage.removeItem('userInsights_selectedTicketId');
     }
-    router.replace(pathname);
+    router.replace(pathname ?? '/mx/user-insights');
   };
 
   const fetchTicketMessages = async (ticketId: number) => {
@@ -395,7 +395,7 @@ const UserInsightsContent = () => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('userInsights_selectedTicketId', ticket.id.toString());
     }
-    router.replace(`${pathname}?view=inbox&ticket=${ticket.id}`);
+    router.replace(`${pathname ?? '/mx/user-insights'}?view=inbox&ticket=${ticket.id}`);
     fetchTicketMessages(ticket.id);
     // Load existing rating if ticket is resolved
     if (normalizedTicketStatus(ticket.status) === 'RESOLVED' && ticket.satisfaction_rating) {
@@ -416,7 +416,7 @@ const UserInsightsContent = () => {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('userInsights_selectedTicketId');
     }
-    router.replace(`${pathname}?view=inbox`);
+    router.replace(`${pathname ?? '/mx/user-insights'}?view=inbox`);
   };
 
   const handleReopenTicket = async (ticketId: number) => {
@@ -538,7 +538,7 @@ const UserInsightsContent = () => {
       if (removed?.preview) {
         URL.revokeObjectURL(removed.preview);
       }
-      return prev.filter((_, i) => i !== index);
+      return prev.filter((_: ImagePreview, i: number) => i !== index);
     });
   };
 
@@ -644,7 +644,7 @@ const UserInsightsContent = () => {
       }
       return {
         ...prev,
-        [reviewId]: images.filter((_, i) => i !== index)
+        [reviewId]: images.filter((_: ImagePreview, i: number) => i !== index)
       };
     });
   };
@@ -1377,7 +1377,7 @@ const UserInsightsContent = () => {
                               <p className="text-[10px] sm:text-xs text-gray-700 mb-0.5 text-center">
                                 <span className="font-semibold">Thank you! You rated this ticket </span>
                                 <span className="inline-flex items-center gap-0.5">
-                                  {Array.from({ length: selectedTicket.satisfaction_rating }).map((_, i) => (
+                                  {Array.from({ length: selectedTicket.satisfaction_rating }).map((_: unknown, i: number) => (
                                     <Star key={i} size={12} className="text-yellow-400 fill-current" />
                                   ))}
                                 </span>
@@ -1569,7 +1569,7 @@ const UserInsightsContent = () => {
                     if (typeof window !== 'undefined') {
                       localStorage.setItem('userInsights_showQueueView', 'false');
                     }
-                    router.replace(pathname);
+                    router.replace(pathname ?? '/mx/user-insights');
                   }}
                   className="p-2.5 hover:bg-orange-100/80 rounded-xl transition-colors flex-shrink-0 text-gray-700 hover:text-orange-700"
                   aria-label="Back to User Insights"
@@ -1695,7 +1695,7 @@ const UserInsightsContent = () => {
             <div className="space-y-2 sm:space-y-2.5 overflow-y-auto flex-1 min-h-0 pb-2 scrollbar-hide">
               {ticketsLoading ? (
                 <div className="space-y-2">
-                  {Array.from({ length: 4 }).map((_, i) => (
+                  {Array.from({ length: 4 }).map((_: unknown, i: number) => (
                     <div key={i} className="animate-pulse bg-white rounded-lg border border-gray-200 p-2.5 sm:p-3 lg:p-4">
                       <div className="h-3 bg-gray-200 rounded w-1/3 mb-2"></div>
                       <div className="h-2.5 bg-gray-200 rounded w-full mb-1"></div>
@@ -1909,7 +1909,7 @@ const UserInsightsContent = () => {
         {/* Compact Reviews/Complaints List */}
         <div className="space-y-3 sm:space-y-4 overflow-y-auto flex-1 min-h-0 pb-2 scrollbar-hide">
           {loading ? (
-            Array.from({ length: 4 }).map((_, i) => <SkeletonReviewRow key={i} />)
+            Array.from({ length: 4 }).map((_: unknown, i: number) => <SkeletonReviewRow key={i} />)
           ) : filteredReviews.length > 0 ? (
             filteredReviews.map((review) => (
               <div 
@@ -1940,7 +1940,7 @@ const UserInsightsContent = () => {
                         )}
                         {review.rating && (
                           <div className="flex items-center gap-0.5">
-                            {[...Array(5)].map((_, i) => (
+                            {[...Array(5)].map((_: unknown, i: number) => (
                               <Star 
                                 key={i} 
                                 size={10} 

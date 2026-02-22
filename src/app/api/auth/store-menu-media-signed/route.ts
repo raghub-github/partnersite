@@ -68,19 +68,26 @@ export async function GET(req: NextRequest) {
 
     const { data: menuMedia } = await db
       .from("merchant_store_media_files")
-      .select("public_url, r2_key, source_entity")
+      .select("public_url, r2_key, source_entity, verification_status, created_at, uploaded_by")
       .eq("store_id", storeId)
       .eq("media_scope", "MENU_REFERENCE")
       .eq("is_active", true);
 
     if (!menuMedia || menuMedia.length === 0) {
-      return NextResponse.json({ success: true, menuSpreadsheetUrl: null, menuImageUrls: [] });
+      return NextResponse.json({
+        success: true,
+        menuSpreadsheetUrl: null,
+        menuImageUrls: [],
+        menuSpreadsheetVerificationStatus: null,
+        menuImageVerificationStatuses: [],
+        menuSpreadsheetUploadedAt: null,
+      });
     }
 
     const sheetRow = menuMedia.find((m: { source_entity?: string }) => m.source_entity === "ONBOARDING_MENU_SHEET");
     const imageRows = menuMedia.filter((m: { source_entity?: string }) => m.source_entity === "ONBOARDING_MENU_IMAGE");
-    const rawSheet = sheetRow?.public_url || sheetRow?.r2_key || null;
-    const rawImages = imageRows.map((r: { public_url?: string; r2_key?: string }) => r.public_url || r.r2_key).filter(Boolean) as string[];
+    const rawSheet = sheetRow?.r2_key || sheetRow?.public_url || null;
+    const rawImages = imageRows.map((r: { public_url?: string; r2_key?: string }) => r.r2_key || r.public_url).filter(Boolean) as string[];
 
     const menuSpreadsheetUrl = toProxyUrl(rawSheet);
     const menuImageUrls = rawImages.map((u) => toProxyUrl(u)).filter((u): u is string => !!u);
@@ -89,6 +96,9 @@ export async function GET(req: NextRequest) {
       success: true,
       menuSpreadsheetUrl: menuSpreadsheetUrl ?? null,
       menuImageUrls: menuImageUrls.filter((u): u is string => !!u),
+      menuSpreadsheetVerificationStatus: (sheetRow as { verification_status?: string })?.verification_status ?? null,
+      menuImageVerificationStatuses: imageRows.map((r: { verification_status?: string }) => r.verification_status ?? "PENDING"),
+      menuSpreadsheetUploadedAt: (sheetRow as { created_at?: string })?.created_at ?? null,
     });
   } catch (e) {
     console.error("[store-menu-media-signed]", e);

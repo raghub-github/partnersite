@@ -83,9 +83,10 @@ export async function GET(request: NextRequest) {
     }
 
     const client = getR2Client();
+    const objectKey = key.trim();
     const command = new GetObjectCommand({
       Bucket: bucket,
-      Key: key,
+      Key: objectKey,
     });
     const response = await client.send(command);
 
@@ -108,6 +109,42 @@ export async function GET(request: NextRequest) {
     });
   } catch (err: any) {
     if (err?.name === "NoSuchKey") {
+      const bucket = process.env.R2_BUCKET_NAME;
+      const keyParam = request.nextUrl.searchParams.get("key");
+      let key: string | null = keyParam ? decodeURIComponent(keyParam.trim()) : null;
+
+      const tryKey = async (objectKey: string): Promise<NextResponse | null> => {
+        try {
+          const client = getR2Client();
+          const response = await client.send(
+            new GetObjectCommand({ Bucket: bucket!, Key: objectKey })
+          );
+          if (response.Body) {
+            const contentType = response.ContentType ?? "application/octet-stream";
+            const headers = new Headers();
+            headers.set("Content-Type", contentType);
+            headers.set("Cache-Control", "private, max-age=3600");
+            if (response.ContentLength != null) headers.set("Content-Length", String(response.ContentLength));
+            headers.set("Access-Control-Allow-Origin", "*");
+            return new NextResponse(response.Body as any, { status: 200, headers });
+          }
+        } catch (e: any) {
+          if (e?.name !== "NoSuchKey") console.error("[attachments/proxy] Retry Error:", e);
+        }
+        return null;
+      };
+
+      if (key && bucket) {
+        if (key.startsWith(bucket + "/")) {
+          const res = await tryKey(key.slice(bucket.length + 1));
+          if (res) return res;
+        }
+        // Menu sheet keys from onboarding often stored without extension; R2 may have .csv
+        if (/\/menu_sheet_\d+$/.test(key)) {
+          const res = await tryKey(key + ".csv");
+          if (res) return res;
+        }
+      }
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     console.error("[attachments/proxy] Error:", err);

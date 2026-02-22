@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { MerchantSessionProvider } from "@/context/MerchantSessionContext";
+import { QueryProvider } from "@/components/QueryProvider";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -53,9 +54,11 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-white`}
         style={{ background: '#fff', minHeight: '100vh', width: '100vw', overflow: 'auto' }}
       >
-        <MerchantSessionProvider>
-          {children}
-        </MerchantSessionProvider>
+        <QueryProvider>
+          <MerchantSessionProvider>
+            {children}
+          </MerchantSessionProvider>
+        </QueryProvider>
       </body>
     </html>
   );

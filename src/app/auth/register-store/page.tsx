@@ -16,10 +16,12 @@ import OnboardingPlansPage from './plans';
 import AgreementContractPage from './agreement';
 import SignatureStepPage from './signature';
 import { MERCHANT_PARTNERSHIP_TERMS } from './terms-and-conditions';
+import { getOnboardingR2Path } from '@/lib/r2-paths';
 
-const StoreLocationMap = dynamic(() => import('@/components/StoreLocationMap'), { ssr: false });
+const StoreLocationMapboxGL = dynamic(() => import('@/components/StoreLocationMapboxGL'), { ssr: false });
 const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || '';
-type MapProvider = 'leaflet' | 'mapbox';
+/** Set to "true" to hide "Use current location" (avoids unreliable browser/IP geolocation). */
+const disableCurrentLocationButton = process.env.NEXT_PUBLIC_DISABLE_CURRENT_LOCATION === 'true';
 
 interface ParentStore {
   id: number;
@@ -135,7 +137,6 @@ const StoreRegistrationForm = () => {
   const [locationAccuracyMeters, setLocationAccuracyMeters] = useState<number | null>(null);
   const [locationNotice, setLocationNotice] = useState<string>('');
   const [storePhonesInput, setStorePhonesInput] = useState('');
-  const [mapProvider, setMapProvider] = useState<MapProvider>('mapbox');
   const [progressHydrated, setProgressHydrated] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [uploadLoading, setUploadLoading] = useState(false); // Separate loading for file uploads only
@@ -144,6 +145,7 @@ const StoreRegistrationForm = () => {
 
   const mapRef = useRef<any>(null);
   const searchRef = useRef<HTMLDivElement>(null);
+  const geolocateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchParams = useSearchParams();
   const selectedStorePublicId = searchParams?.get('store_id');
   const forceNewOnboarding = searchParams?.get('new') === '1';
@@ -279,18 +281,17 @@ const StoreRegistrationForm = () => {
       setFormData((prev) => ({ ...prev, ...saved.step2 }));
     }
 
-    // Step 3 data
-    if (saved.step3) {
-      if (saved.step3.menuUploadMode === 'CSV') setMenuUploadMode('CSV');
-      if (saved.step3.menuUploadMode === 'IMAGE') setMenuUploadMode('IMAGE');
-      if (Array.isArray(saved.step3.menuImageUrls)) setMenuUploadedImageUrls(saved.step3.menuImageUrls);
-      if (Array.isArray(saved.step3.menuImageNames)) setMenuUploadedImageNames(saved.step3.menuImageNames);
-      if (saved.step3.menuSpreadsheetUrl) setMenuUploadedSpreadsheetUrl(saved.step3.menuSpreadsheetUrl);
-      if (saved.step3.menuSpreadsheetName) setMenuUploadedSpreadsheetFileName(saved.step3.menuSpreadsheetName);
+    // Step 3 data — always set from saved so UI matches DB (clear when null/empty after remove or manual DB delete)
+    if (saved.step3 != null) {
+      setMenuUploadMode(saved.step3.menuUploadMode === 'CSV' ? 'CSV' : saved.step3.menuUploadMode === 'IMAGE' ? 'IMAGE' : 'CSV');
+      setMenuUploadedImageUrls(Array.isArray(saved.step3.menuImageUrls) ? saved.step3.menuImageUrls : []);
+      setMenuUploadedImageNames(Array.isArray(saved.step3.menuImageNames) ? saved.step3.menuImageNames : []);
+      setMenuUploadedSpreadsheetUrl(saved.step3.menuSpreadsheetUrl ?? null);
+      setMenuUploadedSpreadsheetFileName(saved.step3.menuSpreadsheetName ?? null);
     }
 
-    // Step 4 data
-    if (saved.step4) {
+    // Step 4 data — always set from saved so UI matches DB (clear URLs when null after remove or manual DB delete)
+    if (saved.step4 != null) {
       const s4 = saved.step4 as Record<string, unknown>;
       setDocuments((prev) => ({
         ...prev,
@@ -310,21 +311,21 @@ const StoreRegistrationForm = () => {
         other_document_number: saved.step4.other_document_number ?? prev.other_document_number,
         other_document_name: saved.step4.other_document_name ?? prev.other_document_name,
         other_document_expiry_date: saved.step4.other_document_expiry_date ?? prev.other_document_expiry_date,
-        pan_image_url: typeof s4.pan_image_url === 'string' ? s4.pan_image_url : (prev as any).pan_image_url,
-        aadhar_front_url: typeof s4.aadhar_front_url === 'string' ? s4.aadhar_front_url : (prev as any).aadhar_front_url,
-        aadhar_back_url: typeof s4.aadhar_back_url === 'string' ? s4.aadhar_back_url : (prev as any).aadhar_back_url,
-        fssai_image_url: typeof s4.fssai_image_url === 'string' ? s4.fssai_image_url : (prev as any).fssai_image_url,
-        gst_image_url: typeof s4.gst_image_url === 'string' ? s4.gst_image_url : (prev as any).gst_image_url,
-        drug_license_image_url: typeof s4.drug_license_image_url === 'string' ? s4.drug_license_image_url : (prev as any).drug_license_image_url,
-        pharmacist_certificate_url: typeof s4.pharmacist_certificate_url === 'string' ? s4.pharmacist_certificate_url : (prev as any).pharmacist_certificate_url,
-        pharmacy_council_registration_url: typeof s4.pharmacy_council_registration_url === 'string' ? s4.pharmacy_council_registration_url : (prev as any).pharmacy_council_registration_url,
-        other_document_file_url: typeof s4.other_document_file_url === 'string' ? s4.other_document_file_url : (prev as any).other_document_file_url,
+        pan_image_url: (typeof s4.pan_image_url === 'string' ? s4.pan_image_url : null) ?? null,
+        aadhar_front_url: (typeof s4.aadhar_front_url === 'string' ? s4.aadhar_front_url : null) ?? null,
+        aadhar_back_url: (typeof s4.aadhar_back_url === 'string' ? s4.aadhar_back_url : null) ?? null,
+        fssai_image_url: (typeof s4.fssai_image_url === 'string' ? s4.fssai_image_url : null) ?? null,
+        gst_image_url: (typeof s4.gst_image_url === 'string' ? s4.gst_image_url : null) ?? null,
+        drug_license_image_url: (typeof s4.drug_license_image_url === 'string' ? s4.drug_license_image_url : null) ?? null,
+        pharmacist_certificate_url: (typeof s4.pharmacist_certificate_url === 'string' ? s4.pharmacist_certificate_url : null) ?? null,
+        pharmacy_council_registration_url: (typeof s4.pharmacy_council_registration_url === 'string' ? s4.pharmacy_council_registration_url : null) ?? null,
+        other_document_file_url: (typeof s4.other_document_file_url === 'string' ? s4.other_document_file_url : null) ?? null,
         bank: saved.step4.bank && typeof saved.step4.bank === 'object'
           ? {
               ...(prev.bank || {}),
               ...saved.step4.bank,
-              bank_proof_file_url: (saved.step4.bank as any).bank_proof_file_url ?? (prev.bank as any)?.bank_proof_file_url,
-              upi_qr_screenshot_url: (saved.step4.bank as any).upi_qr_screenshot_url ?? (prev.bank as any)?.upi_qr_screenshot_url,
+              bank_proof_file_url: (typeof (saved.step4.bank as any).bank_proof_file_url === 'string' ? (saved.step4.bank as any).bank_proof_file_url : null) ?? null,
+              upi_qr_screenshot_url: (typeof (saved.step4.bank as any).upi_qr_screenshot_url === 'string' ? (saved.step4.bank as any).upi_qr_screenshot_url : null) ?? null,
             }
           : prev.bank,
       }));
@@ -921,172 +922,73 @@ const StoreRegistrationForm = () => {
     reverseGeocode(lat, lng);
   }, [reverseGeocode]);
 
-  const handleUseCurrentLocation = useCallback(async () => {
+  const handleUseCurrentLocation = useCallback(() => {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
-      alert('Geolocation is not supported by your browser. Please use a modern browser or enter the address manually.');
+      alert('Geolocation is not supported by your browser. Please use address search or enter the address manually.');
       return;
     }
-
     if (typeof window !== 'undefined' && !window.isSecureContext) {
-      alert('Location access works only on secure pages (HTTPS or localhost). Please open this page via HTTPS or use search to set location.');
+      alert('Location access works only on secure pages (HTTPS or localhost). Please use address search to set location.');
       return;
     }
-
-    const getPosition = (options: PositionOptions) =>
-      new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, options);
-      });
-
-    const collectBestPosition = (options: PositionOptions & { sampleMs?: number; targetAccuracyM?: number }) =>
-      new Promise<GeolocationPosition>((resolve, reject) => {
-        let best: GeolocationPosition | null = null;
-        let watchId: number | null = null;
-        const sampleMs = options.sampleMs ?? 12000;
-        const targetAccuracyM = options.targetAccuracyM ?? 100;
-
-        const finish = (position?: GeolocationPosition, error?: GeolocationPositionError) => {
-          if (watchId != null) navigator.geolocation.clearWatch(watchId);
-          clearTimeout(timeoutId);
-          if (position) {
-            resolve(position);
-            return;
-          }
-          if (best) {
-            resolve(best);
-            return;
-          }
-          reject(error ?? new Error('Unable to determine current location'));
-        };
-
-        watchId = navigator.geolocation.watchPosition(
-          (position) => {
-            if (!best || position.coords.accuracy < best.coords.accuracy) {
-              best = position;
-            }
-            if (position.coords.accuracy <= targetAccuracyM) {
-              finish(position);
-            }
-          },
-          (error) => {
-            finish(undefined, error);
-          },
-          options
-        );
-
-        const timeoutId = window.setTimeout(() => finish(best ?? undefined), sampleMs);
-      });
-
+    if (!mapboxToken) {
+      alert('Mapbox token is required for the map. Add NEXT_PUBLIC_MAPBOX_TOKEN to .env.local');
+      return;
+    }
+    if (geolocateTimeoutRef.current) {
+      clearTimeout(geolocateTimeoutRef.current);
+      geolocateTimeoutRef.current = null;
+    }
     setIsFetchingCurrentLocation(true);
     setLocationNotice('');
     setLocationAccuracyMeters(null);
-    try {
-      const positionOptions: PositionOptions = {
-        enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 0,
-      };
 
-      let bestPosition: GeolocationPosition | null = null;
-      try {
-        bestPosition = await getPosition(positionOptions);
-      } catch (firstErr: any) {
-        if (firstErr?.code === 3) {
-          try {
-            bestPosition = await getPosition({
-              enableHighAccuracy: true,
-              timeout: 20000,
-              maximumAge: 0,
-            });
-          } catch {
-            throw firstErr;
-          }
-        } else {
-          throw firstErr;
-        }
+    const clearLoading = () => {
+      if (geolocateTimeoutRef.current) {
+        clearTimeout(geolocateTimeoutRef.current);
+        geolocateTimeoutRef.current = null;
       }
-
-      if (!bestPosition) {
-        throw new Error('No position received');
-      }
-
-      if (bestPosition.coords.accuracy > 800) {
-        try {
-          const watchedBest = await collectBestPosition({
-            enableHighAccuracy: true,
-            timeout: 20000,
-            maximumAge: 0,
-            sampleMs: 15000,
-            targetAccuracyM: 120,
-          });
-          if (watchedBest.coords.accuracy < bestPosition.coords.accuracy) {
-            bestPosition = watchedBest;
-          }
-        } catch {
-          // Keep first position if watch sampling fails.
-        }
-      }
-
-      if (bestPosition.coords.accuracy > 3000) {
-        try {
-          const retryPosition = await getPosition({
-            enableHighAccuracy: false,
-            timeout: 15000,
-            maximumAge: 5000,
-          });
-          if (retryPosition.coords.accuracy < bestPosition.coords.accuracy) {
-            bestPosition = retryPosition;
-          }
-        } catch {
-          // Keep best known position.
-        }
-      }
-
-      const { latitude, longitude, accuracy } = bestPosition.coords;
-      const roundedAccuracy = Math.round(accuracy);
-      setLocationAccuracyMeters(roundedAccuracy);
-      setFormData((prev) => ({
-        ...prev,
-        latitude,
-        longitude,
-      }));
-
-      if (mapRef.current) {
-        const zoom =
-          roundedAccuracy <= 50 ? 18 :
-          roundedAccuracy <= 150 ? 17 :
-          roundedAccuracy <= 1000 ? 16 : 14;
-        mapRef.current.flyTo({
-          center: [longitude, latitude],
-          zoom,
-          duration: 1.4,
-        });
-      }
-
-      await reverseGeocode(latitude, longitude);
-      if (roundedAccuracy > 5000) {
-        setLocationNotice(
-          `Current location found, but GPS accuracy is still low (${roundedAccuracy}m). Please refine by dragging the pin or searching the exact address.`
-        );
-      } else if (roundedAccuracy > 250) {
-        setLocationNotice(`Location found (accuracy ~${roundedAccuracy}m). You can fine-tune by dragging the pin.`);
-      } else {
-        setLocationNotice(`Location captured accurately (~${roundedAccuracy}m).`);
-      }
-    } catch (error: any) {
-      const code = error?.code;
-      const message =
-        code === 1
-          ? 'Location permission denied. Please allow location access in your browser (address bar lock icon → Site settings → Location → Allow), then try again.'
-          : code === 2
-          ? 'Location is unavailable. Please check that location/GPS is enabled on your device and try again.'
-          : code === 3
-          ? 'Location request timed out. Please ensure location services are on, move near a window or outdoors, and try again.'
-          : 'Unable to fetch current location. Please allow location access, ensure GPS is on, and try again.';
-      setLocationNotice('');
-      alert(message);
-    } finally {
       setIsFetchingCurrentLocation(false);
-    }
+    };
+
+    geolocateTimeoutRef.current = setTimeout(() => {
+      geolocateTimeoutRef.current = null;
+      setIsFetchingCurrentLocation((prev) => {
+        if (prev) setLocationNotice('Location request timed out. Use address search or enter the address manually.');
+        return false;
+      });
+    }, 20000);
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        clearLoading();
+        const { latitude: lat, longitude: lng, accuracy } = position.coords;
+        const accuracyM = typeof accuracy === 'number' && accuracy >= 0 ? accuracy : null;
+
+        // Always set the location when we get a position; let the user refine with pin or search if needed.
+        setFormData((prev) => ({ ...prev, latitude: lat, longitude: lng }));
+        if (accuracyM != null) setLocationAccuracyMeters(accuracyM);
+
+        if (accuracyM != null && accuracyM <= 500) {
+          setLocationNotice('Location captured. You can fine-tune by dragging the pin or searching.');
+        } else if (accuracyM != null && accuracyM <= 1500) {
+          setLocationNotice('Location set. If it’s not right, drag the pin or search for your address.');
+        } else {
+          setLocationNotice('Location set. If it’s wrong, drag the pin or use address search for the exact address.');
+        }
+
+        reverseGeocode(lat, lng);
+        const zoom = accuracyM != null && accuracyM < 10000
+          ? Math.max(14, 17 - Math.log2(accuracyM / 50))
+          : 15;
+        mapRef.current?.flyTo?.({ center: [lng, lat], zoom, duration: 1.2 });
+      },
+      () => {
+        clearLoading();
+        setLocationNotice('Could not get location. Use address search or enter the address manually.');
+      },
+      { enableHighAccuracy: true, timeout: 18000, maximumAge: 0 }
+    );
   }, [reverseGeocode]);
 
   const applyManualCoordinates = () => {
@@ -1236,7 +1138,22 @@ const StoreRegistrationForm = () => {
     const res = await fetch('/api/upload/r2', { method: 'POST', body: form });
     const data = await res.json();
     if (!res.ok || !data?.url) throw new Error(data?.error || 'R2 upload failed');
-    return data.url as string;
+    // Return the R2 key (path) instead of signed URL so we can generate fresh signed URLs when needed
+    return (data.key || data.path || data.url) as string;
+  };
+
+  /** Delete existing R2 object when merchant replaces attachment (discard + new file). */
+  const deleteR2ObjectIfExists = async (urlOrKey: string | null | undefined): Promise<void> => {
+    if (!urlOrKey || typeof urlOrKey !== 'string' || !urlOrKey.trim()) return;
+    try {
+      await fetch('/api/auth/delete-r2-object', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urlOrKey: urlOrKey.trim() }),
+      });
+    } catch {
+      // Non-blocking; replacement upload will still create new file
+    }
   };
 
   const sanitizeForProgress = (value: any): any => {
@@ -1258,7 +1175,22 @@ const StoreRegistrationForm = () => {
   };
 
   const getStepPatch = (stepNumber: number) => {
-    if (stepNumber === 1) return { step1: sanitizeForProgress(formData) };
+    if (stepNumber === 1) {
+      // Step 1 only: store name, owner, display name, legal name, type, email, phones, description
+      // Do NOT include location/address fields (those are step 2)
+      const step1Only = {
+        store_name: formData.store_name,
+        owner_full_name: formData.owner_full_name,
+        store_display_name: formData.store_display_name,
+        legal_business_name: formData.legal_business_name,
+        store_type: formData.store_type,
+        custom_store_type: formData.custom_store_type,
+        store_email: formData.store_email,
+        store_phones: formData.store_phones,
+        store_description: formData.store_description,
+      };
+      return { step1: sanitizeForProgress(step1Only) };
+    }
     if (stepNumber === 2) {
       const step2Data = {
         full_address: formData.full_address,
@@ -1307,9 +1239,8 @@ const StoreRegistrationForm = () => {
           }
 
           const stepPatch = formDataPatchOverride ?? getStepPatch(currentStep);
-          console.log('Saving step', currentStep, 'data:', stepPatch);
 
-          // Save to progress table first
+          // Save to progress table (single source of truth; no duplicates)
           const progressRes = await fetch('/api/auth/register-store-progress', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -1346,7 +1277,6 @@ const StoreRegistrationForm = () => {
             setDraftStoreDbId(stepStore.storeDbId);
           }
 
-          console.log('Progress saved successfully for step:', currentStep);
           return { success: true, progress: progressPayload?.progress };
         } catch (err) {
           console.error('Failed to save step data:', err);
@@ -1479,14 +1409,43 @@ const StoreRegistrationForm = () => {
         setUploadLoading(true);
         try {
           let step3Patch: { step3?: { menuUploadMode: MenuUploadMode; menuImageNames: string[]; menuImageUrls: string[]; menuSpreadsheetName: string | null; menuSpreadsheetUrl: string | null } } | undefined;
-          const folderBase = (parentInfo?.parent_merchant_id || searchParams?.get('parent_id') || 'merchant') as string;
+          const parentId = (parentInfo?.parent_merchant_id || searchParams?.get('parent_id') || 'merchant') as string;
+          const childStoreId = currentStoreId || draftStorePublicId;
+          const menuImagesPath = getOnboardingR2Path(parentId, childStoreId, 'MENU_IMAGES');
+          
+          // Track if we're replacing existing files
+          const hasOldFiles = menuUploadedImageUrls.length > 0 || menuUploadedSpreadsheetUrl !== null;
+          const hasNewFiles = menuImageFiles.length > 0 || menuSpreadsheetFile !== null;
+          const isReplacing = hasOldFiles && hasNewFiles;
           
           if (menuUploadMode === 'IMAGE' && menuImageFiles.length > 0) {
             const uploaded = await Promise.all(
               menuImageFiles.map((file, idx) =>
-                uploadToR2(file, `${folderBase}/onboarding/menu/images`, `menu_image_${Date.now()}_${idx + 1}`)
+                uploadToR2(file, menuImagesPath, `menu_image_${Date.now()}_${idx + 1}`)
               )
             );
+            
+            // If replacing old files, call the replace API
+            if (isReplacing && draftStoreDbId) {
+              try {
+                await fetch('/api/menu/replace-files', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    storeDbId: draftStoreDbId,
+                    oldImageUrls: menuUploadedImageUrls,
+                    oldSpreadsheetUrl: null,
+                    newImageUrls: uploaded,
+                    newSpreadsheetUrl: null,
+                    menuUploadMode: 'IMAGE',
+                  }),
+                });
+              } catch (replaceErr) {
+                console.warn('File replacement failed (non-critical):', replaceErr);
+                // Continue with upload even if replacement fails
+              }
+            }
+            
             setMenuUploadedImageUrls(uploaded);
             setMenuUploadedImageNames(menuImageFiles.map((f) => f.name));
             step3Patch = {
@@ -1499,11 +1458,34 @@ const StoreRegistrationForm = () => {
               },
             };
           } else if (menuUploadMode === 'CSV' && menuSpreadsheetFile) {
+            const menuCsvPath = getOnboardingR2Path(parentId, childStoreId, 'MENU_CSV');
             const uploadedSheetUrl = await uploadToR2(
               menuSpreadsheetFile,
-              `${folderBase}/onboarding/menu/csv`,
-              `menu_sheet_${Date.now()}`
+              menuCsvPath,
+              `menu_sheet_${Date.now()}.csv`
             );
+            
+            // If replacing old files, call the replace API
+            if (isReplacing && draftStoreDbId) {
+              try {
+                await fetch('/api/menu/replace-files', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    storeDbId: draftStoreDbId,
+                    oldImageUrls: [],
+                    oldSpreadsheetUrl: menuUploadedSpreadsheetUrl,
+                    newImageUrls: [],
+                    newSpreadsheetUrl: uploadedSheetUrl,
+                    menuUploadMode: 'CSV',
+                  }),
+                });
+              } catch (replaceErr) {
+                console.warn('File replacement failed (non-critical):', replaceErr);
+                // Continue with upload even if replacement fails
+              }
+            }
+            
             setMenuUploadedSpreadsheetUrl(uploadedSheetUrl);
             setMenuUploadedSpreadsheetFileName(menuSpreadsheetFile.name || null);
             step3Patch = {
@@ -1537,33 +1519,32 @@ const StoreRegistrationForm = () => {
             };
           }
 
-          // Navigate immediately after uploads complete
-          setStep(prev => prev + 1);
+          // Save BEFORE navigating - ensure current step data is persisted
+          const currentStep = step;
+          await saveStepData(currentStep, true, step3Patch, true);
           
-          // Save in background (non-blocking)
-          saveStepData(step, true, step3Patch, false).catch(err => {
-            console.error('Background save failed:', err);
-            // Optionally show a non-intrusive notification
-          });
+          // Navigate after save completes
+          setStep(prev => prev + 1);
         } catch (uploadErr: any) {
           alert(uploadErr?.message || 'Failed to upload menu file(s). Please try again.');
         } finally {
           setUploadLoading(false);
         }
       } else {
-        // For all other steps: navigate immediately, save in background
-        setStep(prev => prev + 1);
-        
-        // Debounce rapid navigation
-        if (debounceTimerRef.current) {
-          clearTimeout(debounceTimerRef.current);
+        // For steps 1, 2, 4, 5, 6: Save BEFORE navigating to ensure edited data is persisted
+        const currentStep = step;
+        setActionLoading(true);
+        try {
+          // Save current step data (blocking) before moving to next step
+          await saveStepData(currentStep, true, undefined, true);
+          // Navigate after save completes
+          setStep(prev => prev + 1);
+        } catch (saveErr: any) {
+          console.error('Failed to save step data:', saveErr);
+          alert('Failed to save your progress. Please try again.');
+        } finally {
+          setActionLoading(false);
         }
-        
-        debounceTimerRef.current = setTimeout(() => {
-          saveStepData(step, true, undefined, false).catch(err => {
-            console.error('Background save failed:', err);
-          });
-        }, 100); // 100ms debounce
       }
     } else {
       if (step === 1 && formData.store_type === 'OTHERS' && !formData.custom_store_type.trim()) {
@@ -1578,26 +1559,61 @@ const StoreRegistrationForm = () => {
     }
   };
 
-  const prevStep = () => {
-    // Navigate immediately, save in background
-    setStep(prev => prev - 1);
-    
-    // Debounce rapid navigation
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
+  const prevStep = async () => {
+    const currentStep = step;
+    try {
+      // Persist current step to DB before navigating back (blocking so edits are saved)
+      await saveStepData(currentStep, false, undefined, true);
+      setStep((prev) => prev - 1);
+    } catch (saveErr: any) {
+      console.error('Failed to save step data when going back:', saveErr);
+      setStep((prev) => prev - 1);
     }
-    
-    debounceTimerRef.current = setTimeout(() => {
-      saveStepData(step, false, undefined, false).catch(err => {
-        console.error('Background save failed:', err);
-      });
-    }, 100); // 100ms debounce
   };
+
+  /** Merge saved doc patch (URLs) into documents state so we don't re-upload the same file on next Save & Next. */
+  const applyDocPatchToDocuments = useCallback((prev: DocumentData, patch: Record<string, unknown>): DocumentData => {
+    const next = { ...prev } as DocumentData;
+    const urlPairs: [string, string][] = [
+      ['pan_image', 'pan_image_url'],
+      ['aadhar_front', 'aadhar_front_url'],
+      ['aadhar_back', 'aadhar_back_url'],
+      ['fssai_image', 'fssai_image_url'],
+      ['gst_image', 'gst_image_url'],
+      ['drug_license_image', 'drug_license_image_url'],
+      ['pharmacist_certificate', 'pharmacist_certificate_url'],
+      ['pharmacy_council_registration', 'pharmacy_council_registration_url'],
+      ['other_document_file', 'other_document_file_url'],
+    ];
+    for (const [fileKey, urlKey] of urlPairs) {
+      const url = patch[urlKey];
+      if (typeof url === 'string') {
+        (next as any)[urlKey] = url;
+        (next as any)[fileKey] = null;
+      }
+    }
+    if (patch.bank && typeof patch.bank === 'object') {
+      const bankPatch = patch.bank as Record<string, unknown>;
+      next.bank = { ...(prev.bank || {}), ...bankPatch } as any;
+      if (typeof bankPatch.bank_proof_file_url === 'string') {
+        next.bank.bank_proof_file_url = bankPatch.bank_proof_file_url;
+        next.bank.bank_proof_file = null;
+      }
+      if (typeof bankPatch.upi_qr_screenshot_url === 'string') {
+        next.bank.upi_qr_screenshot_url = bankPatch.upi_qr_screenshot_url;
+        next.bank.upi_qr_file = null;
+      }
+    }
+    return next;
+  }, []);
 
   /** Build step4 patch from current documents: upload files to R2 and include all names/numbers/URLs. */
   const buildDocumentStep4Patch = useCallback(
     async (docs: DocumentData): Promise<Record<string, unknown>> => {
-      const folderBase = (parentInfo?.parent_merchant_id || searchParams?.get('parent_id') || 'merchant') as string;
+      const parentId = (parentInfo?.parent_merchant_id || searchParams?.get('parent_id') || 'merchant') as string;
+      const childStoreId = currentStoreId || draftStorePublicId;
+      const documentsPath = getOnboardingR2Path(parentId, childStoreId, 'DOCUMENTS');
+      const bankPath = getOnboardingR2Path(parentId, childStoreId, 'BANK');
       const docsPatch: any = { ...sanitizeForProgress(docs) };
       const uploadableDocKeys = [
         'pan_image',
@@ -1614,63 +1630,71 @@ const StoreRegistrationForm = () => {
         const value = (docs as any)[key];
         const urlKey = key === 'other_document_file' ? 'other_document_file_url' : `${key}_url`;
         if (typeof File !== 'undefined' && value instanceof File) {
-          const url = await uploadToR2(value, `${folderBase}/onboarding/documents`, `${key}_${Date.now()}`);
+          const existingUrl = (docs as any)[urlKey];
+          if (existingUrl && typeof existingUrl === 'string') {
+            await deleteR2ObjectIfExists(existingUrl);
+          }
+          const url = await uploadToR2(value, documentsPath, `${key}_${Date.now()}`);
           docsPatch[urlKey] = url;
-        } else if (typeof (docs as any)[urlKey] === 'string') {
-          docsPatch[urlKey] = (docs as any)[urlKey];
+        } else {
+          docsPatch[urlKey] = (docs as any)[urlKey] ?? null;
         }
       }
       if ((docs as any).bank && typeof (docs as any).bank === 'object') {
         const bank = (docs as any).bank;
         docsPatch.bank = { ...bank };
         if (typeof File !== 'undefined' && bank.bank_proof_file instanceof File) {
-          const url = await uploadToR2(bank.bank_proof_file, `${folderBase}/onboarding/bank`, `bank_proof_${Date.now()}`);
+          if (bank.bank_proof_file_url && typeof bank.bank_proof_file_url === 'string') {
+            await deleteR2ObjectIfExists(bank.bank_proof_file_url);
+          }
+          const url = await uploadToR2(bank.bank_proof_file, bankPath, `bank_proof_${Date.now()}`);
           docsPatch.bank.bank_proof_file_url = url;
-        } else if (typeof bank.bank_proof_file_url === 'string') {
-          docsPatch.bank.bank_proof_file_url = bank.bank_proof_file_url;
+        } else {
+          docsPatch.bank.bank_proof_file_url = bank.bank_proof_file_url ?? null;
         }
         if (typeof File !== 'undefined' && bank.upi_qr_file instanceof File) {
-          const url = await uploadToR2(bank.upi_qr_file, `${folderBase}/onboarding/bank`, `upi_qr_${Date.now()}`);
+          if (bank.upi_qr_screenshot_url && typeof bank.upi_qr_screenshot_url === 'string') {
+            await deleteR2ObjectIfExists(bank.upi_qr_screenshot_url);
+          }
+          const url = await uploadToR2(bank.upi_qr_file, bankPath, `upi_qr_${Date.now()}`);
           docsPatch.bank.upi_qr_screenshot_url = url;
-        } else if (typeof bank.upi_qr_screenshot_url === 'string') {
-          docsPatch.bank.upi_qr_screenshot_url = bank.upi_qr_screenshot_url;
+        } else {
+          docsPatch.bank.upi_qr_screenshot_url = bank.upi_qr_screenshot_url ?? null;
         }
       }
       return docsPatch;
     },
-    [parentInfo?.parent_merchant_id, searchParams]
+    [parentInfo?.parent_merchant_id, searchParams, currentStoreId, draftStorePublicId]
   );
 
-  /** Save current document data to DB on every "Save & Continue" (without moving to step 5). Keeps name, id number, signed URLs in DB. */
+  /** Save current document data to DB on every "Save & Continue" (without moving to step 5). Returns the built patch so completion can reuse it and avoid duplicate uploads. */
   const saveDocumentProgress = useCallback(
-    async (docs: DocumentData) => {
+    async (docs: DocumentData): Promise<Record<string, unknown> | undefined> => {
       setDocuments(docs);
-      // Save in background without blocking UI
       try {
         const docsPatch = await buildDocumentStep4Patch(docs);
+        setDocuments((prev) => applyDocPatchToDocuments(prev, docsPatch));
         saveStepData(4, false, { step4: docsPatch }, false).catch(err => {
           console.error('Background document save failed:', err);
-          // Optionally show non-intrusive notification
         });
+        return docsPatch;
       } catch (err: any) {
         console.error('Failed to build document patch:', err);
+        return undefined;
       }
     },
-    [buildDocumentStep4Patch, saveStepData]
+    [buildDocumentStep4Patch, saveStepData, applyDocPatchToDocuments]
   );
 
-  const handleDocumentUploadComplete = async (docs: DocumentData) => {
+  const handleDocumentUploadComplete = async (docs: DocumentData, savedPatch?: Record<string, unknown>) => {
     setDocuments(docs);
     setActionLoading(true);
     setUploadLoading(true);
     try {
-      const docsPatch = await buildDocumentStep4Patch(docs);
-      // Navigate immediately, save in background
+      const docsPatch = savedPatch ?? (await buildDocumentStep4Patch(docs));
+      setDocuments((prev) => applyDocPatchToDocuments(prev, docsPatch));
+      await saveStepData(4, true, { step4: docsPatch }, true);
       setStep(5);
-      saveStepData(4, true, { step4: docsPatch }, false).catch(err => {
-        console.error('Background document save failed:', err);
-        // Optionally show non-intrusive notification
-      });
     } catch (err: any) {
       alert(err?.message || 'Failed to upload document files. Please try again.');
     } finally {
@@ -1726,23 +1750,33 @@ const StoreRegistrationForm = () => {
     if (hasFilesToUpload) {
       setUploadLoading(true);
       try {
-        const folderBase = (parentInfo?.parent_merchant_id || searchParams?.get('parent_id') || 'merchant') as string;
+        const parentId = (parentInfo?.parent_merchant_id || searchParams?.get('parent_id') || 'merchant') as string;
+        const childStoreId = currentStoreId || draftStorePublicId;
+        const storeMediaPath = getOnboardingR2Path(parentId, childStoreId, 'STORE_MEDIA');
+        const storeMediaGalleryPath = getOnboardingR2Path(parentId, childStoreId, 'STORE_MEDIA_GALLERY');
         step5Patch = { ...sanitizeForProgress(setup) } as Record<string, unknown>;
         let uploadedLogoUrl: string | undefined;
         let uploadedBannerUrl: string | undefined;
         let uploadedGalleryUrls: string[] = [];
+        const existingLogoUrl = (storeSetup as any).logo_url || (storeSetup as any).logo_preview;
+        const existingBannerUrl = (storeSetup as any).banner_url || (storeSetup as any).banner_preview;
+        const existingGalleryUrls = Array.isArray((storeSetup as any).gallery_previews) ? (storeSetup as any).gallery_previews : (Array.isArray((storeSetup as any).gallery_image_urls) ? (storeSetup as any).gallery_image_urls : []);
         if (typeof File !== 'undefined' && setup.logo instanceof File) {
-          uploadedLogoUrl = await uploadToR2(setup.logo, `${folderBase}/onboarding/store-media`, `logo_${Date.now()}`);
+          if (existingLogoUrl && typeof existingLogoUrl === 'string') await deleteR2ObjectIfExists(existingLogoUrl);
+          uploadedLogoUrl = await uploadToR2(setup.logo, storeMediaPath, `logo_${Date.now()}`);
           (step5Patch as any).logo_url = uploadedLogoUrl;
         }
         if (typeof File !== 'undefined' && setup.banner instanceof File) {
-          uploadedBannerUrl = await uploadToR2(setup.banner, `${folderBase}/onboarding/store-media`, `banner_${Date.now()}`);
+          if (existingBannerUrl && typeof existingBannerUrl === 'string') await deleteR2ObjectIfExists(existingBannerUrl);
+          uploadedBannerUrl = await uploadToR2(setup.banner, storeMediaPath, `banner_${Date.now()}`);
           (step5Patch as any).banner_url = uploadedBannerUrl;
         }
         for (let i = 0; i < (setup.gallery_images || []).length; i++) {
           const file = setup.gallery_images[i];
           if (typeof File !== 'undefined' && file instanceof File) {
-            const url = await uploadToR2(file, `${folderBase}/onboarding/store-media/gallery`, `gallery_${Date.now()}_${i + 1}`);
+            const existingUrl = existingGalleryUrls[i] && typeof existingGalleryUrls[i] === 'string' ? existingGalleryUrls[i] : null;
+            if (existingUrl) await deleteR2ObjectIfExists(existingUrl);
+            const url = await uploadToR2(file, storeMediaGalleryPath, `gallery_${Date.now()}_${i + 1}`);
             uploadedGalleryUrls.push(url);
           }
         }
@@ -2488,14 +2522,17 @@ const StoreRegistrationForm = () => {
                           >
                             {isSearching ? 'Searching...' : 'Search'}
                           </button>
-                          <button
-                            type="button"
-                            disabled
-                            title="Temporarily disabled"
-                            className="px-3 py-2 text-sm border border-slate-200 text-slate-400 rounded-lg bg-slate-50 cursor-not-allowed font-medium whitespace-nowrap"
-                          >
-                            Use current location
-                          </button>
+                          {!disableCurrentLocationButton && (
+                            <button
+                              type="button"
+                              onClick={handleUseCurrentLocation}
+                              disabled={isFetchingCurrentLocation}
+                              title="Use your device GPS for store location (may be approximate)"
+                              className="px-3 py-2 text-sm border border-indigo-300 text-indigo-700 rounded-lg bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed font-medium whitespace-nowrap"
+                            >
+                              {isFetchingCurrentLocation ? 'Getting location...' : 'Use current location'}
+                            </button>
+                          )}
                         </div>
                         {locationNotice && (
                           <div className="mt-2 text-xs rounded-lg px-2.5 py-1.5 border border-amber-200 bg-amber-50 text-amber-700">
@@ -2714,53 +2751,34 @@ const StoreRegistrationForm = () => {
                       <h3 className="font-bold text-slate-800 text-sm sm:text-base">Location Map</h3>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <div className="inline-flex items-center rounded-lg border border-slate-200 bg-white p-1">
-                        <button
-                          type="button"
-                          onClick={() => setMapProvider('mapbox')}
-                          className={`px-2.5 py-1 text-xs rounded-md transition ${
-                            mapProvider === 'mapbox'
-                              ? 'bg-indigo-600 text-white'
-                              : 'text-slate-600 hover:bg-slate-100'
-                          }`}
-                        >
-                          Mapbox
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setMapProvider('leaflet')}
-                          className={`px-2.5 py-1 text-xs rounded-md transition ${
-                            mapProvider === 'leaflet'
-                              ? 'bg-indigo-600 text-white'
-                              : 'text-slate-600 hover:bg-slate-100'
-                          }`}
-                        >
-                          Leaflet
-                        </button>
-                      </div>
                       <div className={`px-3 py-1 text-xs font-medium rounded-full ${formData.latitude ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
                         {formData.latitude ? '📍 Location Set' : '📍 Search to set location'}
                       </div>
                     </div>
                   </div>
-                  {mapProvider === 'mapbox' && !mapboxToken && (
+                  {!mapboxToken && (
                     <div className="mb-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                       Mapbox token not found. Add <span className="font-mono">NEXT_PUBLIC_MAPBOX_TOKEN</span> in
-                      <span className="font-mono"> .env.local</span> to use Mapbox tile mode.
+                      <span className="font-mono"> .env.local</span> to use the map.
                     </div>
                   )}
                   <div className="flex-1 rounded-lg overflow-hidden border border-slate-300">
-                    <StoreLocationMap
-                      ref={mapRef}
-                      latitude={formData.latitude}
-                      longitude={formData.longitude}
-                      mapboxToken={mapboxToken}
-                      provider={mapProvider}
-                      onLocationChange={(lat, lng) =>
-                        setFormData((prev) => ({ ...prev, latitude: lat, longitude: lng }))
-                      }
-                      onMapClick={handleMapClick}
-                    />
+                    {mapboxToken ? (
+                      <StoreLocationMapboxGL
+                        ref={mapRef}
+                        latitude={formData.latitude}
+                        longitude={formData.longitude}
+                        mapboxToken={mapboxToken}
+                        onLocationChange={(lat, lng) =>
+                          setFormData((prev) => ({ ...prev, latitude: lat, longitude: lng }))
+                        }
+                        onMapClick={handleMapClick}
+                      />
+                    ) : (
+                      <div className="h-full min-h-[300px] w-full flex items-center justify-center bg-slate-100 text-slate-500 text-sm rounded-lg">
+                        Add NEXT_PUBLIC_MAPBOX_TOKEN to load the map
+                      </div>
+                    )}
                   </div>
                   <div className="mt-3 sm:mt-4 text-xs text-slate-600">
                     <div className="flex flex-col xs:flex-row flex-wrap gap-1 sm:gap-3">
@@ -2964,7 +2982,7 @@ const StoreRegistrationForm = () => {
                               message: 'You are about to remove this file. This action cannot be undone.',
                               variant: 'warning',
                               onConfirm: () => {
-                                setMenuImageFiles((p) => p.filter((_, i) => i !== idx));
+                                setMenuImageFiles((p) => p.filter((_: File, i: number) => i !== idx));
                                 setConfirmModal(null);
                               },
                               onCancel: () => setConfirmModal(null),
@@ -2993,10 +3011,21 @@ const StoreRegistrationForm = () => {
                               title: 'Remove uploaded file?',
                               message: 'You are about to remove this file. This action cannot be undone.',
                               variant: 'warning',
-                              onConfirm: () => {
-                                setMenuUploadedImageUrls((p) => p.filter((_, i) => i !== idx));
-                                setMenuUploadedImageNames((p) => p.filter((_, i) => i !== idx));
+                              onConfirm: async () => {
+                                const newUrls = menuUploadedImageUrls.filter((_: string, i: number) => i !== idx);
+                                const newNames = menuUploadedImageNames.filter((_: string, i: number) => i !== idx);
+                                setMenuUploadedImageUrls(newUrls);
+                                setMenuUploadedImageNames(newNames);
                                 setConfirmModal(null);
+                                await saveStepData(3, false, {
+                                  step3: {
+                                    menuUploadMode,
+                                    menuImageNames: newNames,
+                                    menuImageUrls: newUrls,
+                                    menuSpreadsheetName: menuUploadedSpreadsheetFileName ?? null,
+                                    menuSpreadsheetUrl: menuUploadedSpreadsheetUrl ?? null,
+                                  },
+                                }, true);
                               },
                               onCancel: () => setConfirmModal(null),
                             });
@@ -3035,11 +3064,20 @@ const StoreRegistrationForm = () => {
                           title: 'Remove uploaded file?',
                           message: 'You are about to remove this file. This action cannot be undone.',
                           variant: 'warning',
-                          onConfirm: () => {
+                          onConfirm: async () => {
                             setMenuSpreadsheetFile(null);
                             setMenuUploadedSpreadsheetUrl(null);
                             setMenuUploadedSpreadsheetFileName(null);
                             setConfirmModal(null);
+                            await saveStepData(3, false, {
+                              step3: {
+                                menuUploadMode,
+                                menuImageNames: menuUploadedImageNames,
+                                menuImageUrls: menuUploadedImageUrls,
+                                menuSpreadsheetName: null,
+                                menuSpreadsheetUrl: null,
+                              },
+                            }, true);
                           },
                           onCancel: () => setConfirmModal(null),
                         });
@@ -3081,63 +3119,62 @@ const StoreRegistrationForm = () => {
               onStoreHoursSave={(hours) => saveStoreHoursProgress(hours)}
               onStoreFeaturesSave={saveStoreFeaturesProgress}
               onBack={async () => {
-                // Navigate immediately
-                setStep(4);
-                
-                // Re-hydrate documents from database in background
-                const storeId = selectedStorePublicId || (typeof window !== 'undefined' ? localStorage.getItem('registerStoreCurrentStepStoreId') : null) || '';
-                const url = storeId ? `/api/auth/register-store-progress?storePublicId=${encodeURIComponent(storeId)}` : '/api/auth/register-store-progress';
-                
-                // Save and hydrate in background
-                Promise.all([
-                  saveProgress({ currentStep: 5, nextStep: 4, markStepComplete: false, formDataPatch: getStepPatch(5) }),
-                  fetch(url).then(res => res.json())
-                ]).then(([saveResult, payload]) => {
-                  if (payload?.success && payload?.progress) {
-                    const saved = payload.progress.form_data || {};
-                    if (saved.step4) {
-                      const s4 = saved.step4 as Record<string, unknown>;
-                      setDocuments((prev) => ({
-                        ...prev,
-                        pan_number: saved.step4.pan_number ?? prev.pan_number,
-                        pan_holder_name: saved.step4.pan_holder_name ?? prev.pan_holder_name,
-                        aadhar_number: saved.step4.aadhar_number ?? prev.aadhar_number,
-                        aadhar_holder_name: saved.step4.aadhar_holder_name ?? prev.aadhar_holder_name,
-                        fssai_number: saved.step4.fssai_number ?? prev.fssai_number,
-                        gst_number: saved.step4.gst_number ?? prev.gst_number,
-                        drug_license_number: saved.step4.drug_license_number ?? prev.drug_license_number,
-                        pharmacist_registration_number: saved.step4.pharmacist_registration_number ?? prev.pharmacist_registration_number,
-                        expiry_date: saved.step4.expiry_date ?? prev.expiry_date,
-                        fssai_expiry_date: saved.step4.fssai_expiry_date ?? prev.fssai_expiry_date,
-                        drug_license_expiry_date: saved.step4.drug_license_expiry_date ?? prev.drug_license_expiry_date,
-                        pharmacist_expiry_date: saved.step4.pharmacist_expiry_date ?? prev.pharmacist_expiry_date,
-                        other_document_type: saved.step4.other_document_type ?? prev.other_document_type,
-                        other_document_number: saved.step4.other_document_number ?? prev.other_document_number,
-                        other_document_name: saved.step4.other_document_name ?? prev.other_document_name,
-                        other_document_expiry_date: saved.step4.other_document_expiry_date ?? prev.other_document_expiry_date,
-                        pan_image_url: typeof s4.pan_image_url === 'string' ? s4.pan_image_url : (prev as any).pan_image_url,
-                        aadhar_front_url: typeof s4.aadhar_front_url === 'string' ? s4.aadhar_front_url : (prev as any).aadhar_front_url,
-                        aadhar_back_url: typeof s4.aadhar_back_url === 'string' ? s4.aadhar_back_url : (prev as any).aadhar_back_url,
-                        fssai_image_url: typeof s4.fssai_image_url === 'string' ? s4.fssai_image_url : (prev as any).fssai_image_url,
-                        gst_image_url: typeof s4.gst_image_url === 'string' ? s4.gst_image_url : (prev as any).gst_image_url,
-                        drug_license_image_url: typeof s4.drug_license_image_url === 'string' ? s4.drug_license_image_url : (prev as any).drug_license_image_url,
-                        pharmacist_certificate_url: typeof s4.pharmacist_certificate_url === 'string' ? s4.pharmacist_certificate_url : (prev as any).pharmacist_certificate_url,
-                        pharmacy_council_registration_url: typeof s4.pharmacy_council_registration_url === 'string' ? s4.pharmacy_council_registration_url : (prev as any).pharmacy_council_registration_url,
-                        other_document_file_url: typeof s4.other_document_file_url === 'string' ? s4.other_document_file_url : (prev as any).other_document_file_url,
-                        bank: saved.step4.bank && typeof saved.step4.bank === 'object'
-                          ? {
-                              ...(prev.bank || {}),
-                              ...saved.step4.bank,
-                              bank_proof_file_url: (saved.step4.bank as any).bank_proof_file_url ?? (prev.bank as any)?.bank_proof_file_url,
-                              upi_qr_screenshot_url: (saved.step4.bank as any).upi_qr_screenshot_url ?? (prev.bank as any)?.upi_qr_screenshot_url,
-                            }
-                          : prev.bank,
-                      }));
-                    }
-                  }
-                }).catch(err => {
-                  console.error('Background save/hydrate failed:', err);
-                });
+                try {
+                  await saveProgress({ currentStep: 5, nextStep: 4, markStepComplete: false, formDataPatch: getStepPatch(5) });
+                  setStep(4);
+                  const storeId = selectedStorePublicId || (typeof window !== 'undefined' ? localStorage.getItem('registerStoreCurrentStepStoreId') : null) || '';
+                  const url = storeId ? `/api/auth/register-store-progress?storePublicId=${encodeURIComponent(storeId)}` : '/api/auth/register-store-progress';
+                  fetch(url)
+                    .then((res) => res.json())
+                    .then((payload) => {
+                      if (payload?.success && payload?.progress) {
+                        const saved = payload.progress.form_data || {};
+                        if (saved.step4 != null) {
+                          const s4 = saved.step4 as Record<string, unknown>;
+                          setDocuments((prev) => ({
+                            ...prev,
+                            pan_number: saved.step4.pan_number ?? prev.pan_number,
+                            pan_holder_name: saved.step4.pan_holder_name ?? prev.pan_holder_name,
+                            aadhar_number: saved.step4.aadhar_number ?? prev.aadhar_number,
+                            aadhar_holder_name: saved.step4.aadhar_holder_name ?? prev.aadhar_holder_name,
+                            fssai_number: saved.step4.fssai_number ?? prev.fssai_number,
+                            gst_number: saved.step4.gst_number ?? prev.gst_number,
+                            drug_license_number: saved.step4.drug_license_number ?? prev.drug_license_number,
+                            pharmacist_registration_number: saved.step4.pharmacist_registration_number ?? prev.pharmacist_registration_number,
+                            expiry_date: saved.step4.expiry_date ?? prev.expiry_date,
+                            fssai_expiry_date: saved.step4.fssai_expiry_date ?? prev.fssai_expiry_date,
+                            drug_license_expiry_date: saved.step4.drug_license_expiry_date ?? prev.drug_license_expiry_date,
+                            pharmacist_expiry_date: saved.step4.pharmacist_expiry_date ?? prev.pharmacist_expiry_date,
+                            other_document_type: saved.step4.other_document_type ?? prev.other_document_type,
+                            other_document_number: saved.step4.other_document_number ?? prev.other_document_number,
+                            other_document_name: saved.step4.other_document_name ?? prev.other_document_name,
+                            other_document_expiry_date: saved.step4.other_document_expiry_date ?? prev.other_document_expiry_date,
+                            pan_image_url: (typeof s4.pan_image_url === 'string' ? s4.pan_image_url : null) ?? null,
+                            aadhar_front_url: (typeof s4.aadhar_front_url === 'string' ? s4.aadhar_front_url : null) ?? null,
+                            aadhar_back_url: (typeof s4.aadhar_back_url === 'string' ? s4.aadhar_back_url : null) ?? null,
+                            fssai_image_url: (typeof s4.fssai_image_url === 'string' ? s4.fssai_image_url : null) ?? null,
+                            gst_image_url: (typeof s4.gst_image_url === 'string' ? s4.gst_image_url : null) ?? null,
+                            drug_license_image_url: (typeof s4.drug_license_image_url === 'string' ? s4.drug_license_image_url : null) ?? null,
+                            pharmacist_certificate_url: (typeof s4.pharmacist_certificate_url === 'string' ? s4.pharmacist_certificate_url : null) ?? null,
+                            pharmacy_council_registration_url: (typeof s4.pharmacy_council_registration_url === 'string' ? s4.pharmacy_council_registration_url : null) ?? null,
+                            other_document_file_url: (typeof s4.other_document_file_url === 'string' ? s4.other_document_file_url : null) ?? null,
+                            bank: saved.step4.bank && typeof saved.step4.bank === 'object'
+                              ? {
+                                  ...(prev.bank || {}),
+                                  ...saved.step4.bank,
+                                  bank_proof_file_url: (typeof (saved.step4.bank as any).bank_proof_file_url === 'string' ? (saved.step4.bank as any).bank_proof_file_url : null) ?? null,
+                                  upi_qr_screenshot_url: (typeof (saved.step4.bank as any).upi_qr_screenshot_url === 'string' ? (saved.step4.bank as any).upi_qr_screenshot_url : null) ?? null,
+                                }
+                              : prev.bank,
+                          }));
+                        }
+                      }
+                    })
+                    .catch((err) => console.error('Background hydrate failed:', err));
+                } catch (err) {
+                  console.error('Failed to save step 5 data:', err);
+                  setStep(4);
+                }
               }}
               actionLoading={actionLoading}
               businessType={formData.store_type === 'OTHERS' ? formData.custom_store_type : formData.store_type}
@@ -3167,12 +3204,24 @@ const StoreRegistrationForm = () => {
                 menuSpreadsheetUrl: menuUploadedSpreadsheetUrl,
               }}
               parentInfo={parentInfo}
-              onBack={() => setStep(5)}
-              onContinueToPlans={() => {
-                setStep(7);
-                saveProgress({ currentStep: 6, nextStep: 7, markStepComplete: true, formDataPatch: getStepPatch(6) }).catch(err => {
-                  console.error('Background save failed:', err);
-                });
+              onBack={async () => {
+                try {
+                  await saveProgress({ currentStep: 6, nextStep: 5, markStepComplete: false, formDataPatch: getStepPatch(6) });
+                  setStep(5);
+                } catch (err) {
+                  console.error('Failed to save step 6 data:', err);
+                  // Still navigate back even if save fails
+                  setStep(5);
+                }
+              }}
+              onContinueToPlans={async () => {
+                try {
+                  await saveProgress({ currentStep: 6, nextStep: 7, markStepComplete: true, formDataPatch: getStepPatch(6) });
+                  setStep(7);
+                } catch (err) {
+                  console.error('Failed to save step 6 data:', err);
+                  alert('Failed to save your progress. Please try again.');
+                }
               }}
               actionLoading={actionLoading}
             />
@@ -3187,17 +3236,24 @@ const StoreRegistrationForm = () => {
               onSelectPlan={setSelectedPlanId}
               parentInfo={parentInfo}
               step1={formData}
-              onBack={() => {
-                setStep(6);
-                saveProgress({ currentStep: 7, nextStep: 6, markStepComplete: false, formDataPatch: { step7: { selectedPlanId: selectedPlanId || 'FREE' } } }).catch(err => {
-                  console.error('Background save failed:', err);
-                });
+              onBack={async () => {
+                try {
+                  await saveProgress({ currentStep: 7, nextStep: 6, markStepComplete: false, formDataPatch: { step7: { selectedPlanId: selectedPlanId || 'FREE' } } });
+                  setStep(6);
+                } catch (err) {
+                  console.error('Failed to save step 7 data:', err);
+                  // Still navigate back even if save fails
+                  setStep(6);
+                }
               }}
-              onContinue={() => {
-                setStep(8);
-                saveProgress({ currentStep: 7, nextStep: 8, markStepComplete: true, formDataPatch: { step7: { selectedPlanId: selectedPlanId || 'FREE' } } }).catch(err => {
-                  console.error('Background save failed:', err);
-                });
+              onContinue={async () => {
+                try {
+                  await saveProgress({ currentStep: 7, nextStep: 8, markStepComplete: true, formDataPatch: { step7: { selectedPlanId: selectedPlanId || 'FREE' } } });
+                  setStep(8);
+                } catch (err) {
+                  console.error('Failed to save step 7 data:', err);
+                  alert('Failed to save your progress. Please try again.');
+                }
               }}
               actionLoading={actionLoading}
             />
@@ -3213,19 +3269,26 @@ const StoreRegistrationForm = () => {
               documents={documents}
               parentInfo={parentInfo}
               termsContent={agreementTemplate?.content_markdown || MERCHANT_PARTNERSHIP_TERMS}
-              logoUrl={typeof process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL === "string" ? process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL : undefined}
-              onBack={() => {
-                setStep(7);
-                saveProgress({ currentStep: 8, nextStep: 7, markStepComplete: false, formDataPatch: {} }).catch(err => {
-                  console.error('Background save failed:', err);
-                });
+              logoUrl={typeof process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL === "string" && process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL ? process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL : "/logo.png"}
+              onBack={async () => {
+                try {
+                  await saveProgress({ currentStep: 8, nextStep: 7, markStepComplete: false, formDataPatch: {} });
+                  setStep(7);
+                } catch (err) {
+                  console.error('Failed to save step 8 data:', err);
+                  // Still navigate back even if save fails
+                  setStep(7);
+                }
               }}
-              onContinue={(text) => {
-                setContractTextForSignature(text);
-                setStep(9);
-                saveProgress({ currentStep: 8, nextStep: 9, markStepComplete: true, formDataPatch: {} }).catch(err => {
-                  console.error('Background save failed:', err);
-                });
+              onContinue={async (text) => {
+                try {
+                  await saveProgress({ currentStep: 8, nextStep: 9, markStepComplete: true, formDataPatch: {} });
+                  setContractTextForSignature(text);
+                  setStep(9);
+                } catch (err) {
+                  console.error('Failed to save step 8 data:', err);
+                  alert('Failed to save your progress. Please try again.');
+                }
               }}
               actionLoading={actionLoading}
             />
@@ -3256,12 +3319,16 @@ const StoreRegistrationForm = () => {
               agreementTemplate={agreementTemplate}
               defaultAgreementText={agreementTemplate?.content_markdown || MERCHANT_PARTNERSHIP_TERMS}
               contractTextForPdf={contractTextForSignature}
-              logoUrl={typeof process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL === "string" ? process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL : undefined}
-              onBack={() => {
-                setStep(8);
-                saveProgress({ currentStep: 9, nextStep: 8, markStepComplete: false, formDataPatch: {} }).catch(err => {
-                  console.error('Background save failed:', err);
-                });
+              logoUrl={typeof process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL === "string" && process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL ? process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL : "/logo.png"}
+              onBack={async () => {
+                try {
+                  await saveProgress({ currentStep: 9, nextStep: 8, markStepComplete: false, formDataPatch: {} });
+                  setStep(8);
+                } catch (err) {
+                  console.error('Failed to save step 9 data:', err);
+                  // Still navigate back even if save fails
+                  setStep(8);
+                }
               }}
               actionLoading={actionLoading}
               onSuccess={handleRegistrationSuccess}
@@ -3285,27 +3352,27 @@ const StoreRegistrationForm = () => {
                 <button
                   type="button"
                   onClick={prevStep}
-                  disabled={uploadLoading}
+                  disabled={uploadLoading || actionLoading}
                   className="px-4 py-2.5 text-sm border border-slate-300 text-slate-700 rounded-lg hover:bg-slate-50 font-medium shadow-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center gap-2"
                 >
-                  {uploadLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  {uploadLoading || actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                   ← Previous
                 </button>
               )}
               <button
                 type="button"
                 onClick={nextStep}
-                disabled={uploadLoading}
+                disabled={uploadLoading || actionLoading}
                 className="px-5 py-2.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 font-medium shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
               >
-                {uploadLoading ? (
+                {uploadLoading || actionLoading ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
                   </svg>
                 )}
-                {uploadLoading ? 'Uploading...' : 'Save & Continue'}
+                {uploadLoading ? 'Uploading...' : actionLoading ? 'Saving...' : 'Save & Continue'}
               </button>
             </div>
           </div>

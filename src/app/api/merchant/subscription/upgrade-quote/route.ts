@@ -112,7 +112,10 @@ async function handleQuote(
       .limit(1)
       .maybeSingle()
 
-    const currentPlan = activeSubscription?.merchant_plans as { id: number; plan_name: string; plan_code: string; price: number } | null
+    const plansRaw = activeSubscription?.merchant_plans
+    const currentPlan = Array.isArray(plansRaw)
+      ? (plansRaw[0] as { id: number; plan_name: string; plan_code: string; price: number } | undefined) ?? null
+      : (plansRaw as { id: number; plan_name: string; plan_code: string; price: number } | null | undefined) ?? null
     const currentPrice = currentPlan ? Number(currentPlan.price ?? 0) : 0
 
     if (activeSubscription && currentPlan?.id === newPlanId) {

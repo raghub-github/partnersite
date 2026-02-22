@@ -43,7 +43,7 @@ export async function GET(req: NextRequest) {
         }
       } catch {
         // If URL parsing fails, try to extract key manually
-        const match = url.match(/merchant-assets\/.+$/);
+        const match = url.match(/(?:merchant-assets|merchants)\/.+$/);
         if (match) objectKey = match[0];
       }
     }

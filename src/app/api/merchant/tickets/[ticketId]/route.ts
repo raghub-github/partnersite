@@ -18,10 +18,11 @@ function getSupabaseAdmin() {
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { ticketId: string } }
+  { params }: { params: Promise<{ ticketId: string }> }
 ) {
   try {
-    const ticketId = parseInt(params.ticketId);
+    const { ticketId: ticketIdParam } = await params;
+    const ticketId = parseInt(ticketIdParam);
 
     if (!ticketId || isNaN(ticketId)) {
       return NextResponse.json(

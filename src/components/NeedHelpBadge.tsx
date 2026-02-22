@@ -134,7 +134,7 @@ const NeedHelpBadge: React.FC = () => {
   };
 
   const removeAttachment = (index: number) => {
-    setAttachmentFiles((prev) => prev.filter((_, i) => i !== index));
+    setAttachmentFiles((prev) => prev.filter((_: File, i: number) => i !== index));
   };
 
   return (

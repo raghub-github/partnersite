@@ -3,7 +3,7 @@ import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { validateMerchantFromSession } from "@/lib/auth/validate-merchant";
 import { createClient } from "@supabase/supabase-js";
 import { logAuthError, shouldClearSession } from "@/lib/auth/auth-error-handler";
-import { getR2SignedUrl, extractR2KeyFromUrl, deleteFromR2 } from "@/lib/r2";
+import { getR2SignedUrl, extractR2KeyFromUrl, deleteFromR2, toStoredDocumentUrlSigned } from "@/lib/r2";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -12,6 +12,35 @@ function getSupabaseAdmin() {
   return createClient(supabaseUrl, supabaseServiceKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+}
+
+/** Deep merge patch into target (for form_data). Ensures edits to one step don't wipe others; arrays and primitives from patch replace. */
+function deepMergeFormData(target: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...target };
+  for (const key of Object.keys(patch)) {
+    const patchVal = patch[key];
+    if (patchVal === null || patchVal === undefined) {
+      result[key] = patchVal;
+      continue;
+    }
+    const existing = result[key];
+    if (
+      typeof patchVal === "object" &&
+      !Array.isArray(patchVal) &&
+      patchVal !== null &&
+      typeof existing === "object" &&
+      existing !== null &&
+      !Array.isArray(existing)
+    ) {
+      result[key] = deepMergeFormData(
+        existing as Record<string, unknown>,
+        patchVal as Record<string, unknown>
+      );
+    } else {
+      result[key] = patchVal;
+    }
+  }
+  return result;
 }
 
 /** Returns a fresh R2 signed URL for display; avoids expired URLs. Uses 7-day expiry for progress responses. */
@@ -166,22 +195,30 @@ async function insertStoreAfterStep1(
   params: { parentId: number; step1: any; generatedStoreId: string }
 ): Promise<{ storeDbId: number; storePublicId: string } | null> {
   const { parentId, step1, generatedStoreId } = params;
-  if (!step1?.store_name || !generatedStoreId) return null;
+  if (!step1?.store_name || !generatedStoreId) {
+    console.warn("[insertStoreAfterStep1] Missing required fields:", { 
+      hasStoreName: !!step1?.store_name, 
+      hasGeneratedStoreId: !!generatedStoreId,
+      step1Keys: step1 ? Object.keys(step1) : []
+    });
+    return null;
+  }
 
   const ownerFullName =
     typeof step1.owner_full_name === "string" && step1.owner_full_name.trim()
       ? step1.owner_full_name.trim()
       : "Store Owner";
 
-  const payload = {
+  const payload: any = {
     store_id: generatedStoreId,
     parent_id: parentId,
     store_name: step1.store_name,
     store_display_name: step1.store_display_name || null,
     store_description: step1.store_description || null,
-    store_type: toEnumStoreType(step1.store_type),
-    store_email: step1.store_email || null,
+    store_type: toEnumStoreType(step1.store_type) || "RESTAURANT",
+    store_email: step1.store_email || "",
     store_phones: Array.isArray(step1.store_phones) ? step1.store_phones : [],
+    owner_full_name: ownerFullName,
     full_address: "Pending",
     city: "Pending",
     state: "Pending",
@@ -189,12 +226,21 @@ async function insertStoreAfterStep1(
     country: "IN",
     current_onboarding_step: 1,
     onboarding_completed: false,
-    approval_status: "DRAFT" as const,
-    status: "INACTIVE" as const,
+    approval_status: "DRAFT",
+    status: "DRAFT",
     is_active: false,
     is_accepting_orders: false,
     is_available: false,
   };
+
+  console.log("[insertStoreAfterStep1] Attempting insert with payload:", {
+    store_id: payload.store_id,
+    parent_id: payload.parent_id,
+    store_name: payload.store_name,
+    store_type: payload.store_type,
+    has_owner_full_name: !!payload.owner_full_name,
+    has_store_email: !!payload.store_email,
+  });
 
   const { data, error } = await db
     .from("merchant_stores")
@@ -204,17 +250,36 @@ async function insertStoreAfterStep1(
 
   if (error) {
     if (error.code === "23505") {
+      console.log("[insertStoreAfterStep1] Duplicate key, fetching existing store:", generatedStoreId);
       const { data: existing } = await db
         .from("merchant_stores")
         .select("id, store_id")
         .eq("store_id", generatedStoreId)
         .maybeSingle();
-      if (existing)
+      if (existing) {
+        console.log("[insertStoreAfterStep1] Found existing store:", existing);
         return { storeDbId: existing.id as number, storePublicId: existing.store_id as string };
+      }
     }
-    console.error("[register-store-progress] insertStoreAfterStep1 failed:", error);
+    console.error("[register-store-progress] insertStoreAfterStep1 failed:", {
+      error: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+      payload: JSON.stringify(payload, null, 2),
+    });
     return null;
   }
+  
+  if (!data) {
+    console.error("[insertStoreAfterStep1] Insert succeeded but no data returned");
+    return null;
+  }
+  
+  console.log("[insertStoreAfterStep1] Successfully created store:", { 
+    storeDbId: data.id, 
+    storePublicId: data.store_id 
+  });
   return { storeDbId: data.id as number, storePublicId: data.store_id as string };
 }
 
@@ -464,15 +529,16 @@ export async function GET(req: NextRequest) {
       if (docRow) {
         const formData = (progress.form_data || {}) as Record<string, unknown>;
         const step4 = (formData.step4 || {}) as Record<string, unknown>;
-        const rawPan = docRow.pan_document_url ?? step4.pan_image_url;
-        const rawAadharFront = docRow.aadhaar_document_url ?? step4.aadhar_front_url;
-        const rawAadharBack = (docRow.aadhaar_document_metadata as any)?.back_url ?? step4.aadhar_back_url;
-        const rawGst = docRow.gst_document_url ?? step4.gst_image_url;
-        const rawFssai = docRow.fssai_document_url ?? step4.fssai_image_url;
-        const rawDrug = docRow.drug_license_document_url ?? step4.drug_license_image_url;
-        const rawPharmacist = docRow.pharmacist_certificate_document_url ?? step4.pharmacist_certificate_url;
-        const rawPharmacyCouncil = docRow.pharmacy_council_registration_document_url ?? step4.pharmacy_council_registration_url;
-        const rawOther = docRow.other_document_url ?? step4.other_document_file_url;
+        // Use DB as source of truth for URLs: null in DB means no attachment (don't fall back to progress row)
+        const rawPan = docRow.pan_document_url ?? null;
+        const rawAadharFront = docRow.aadhaar_document_url ?? null;
+        const rawAadharBack = (docRow.aadhaar_document_metadata as any)?.back_url ?? null;
+        const rawGst = docRow.gst_document_url ?? null;
+        const rawFssai = docRow.fssai_document_url ?? null;
+        const rawDrug = docRow.drug_license_document_url ?? null;
+        const rawPharmacist = docRow.pharmacist_certificate_document_url ?? null;
+        const rawPharmacyCouncil = docRow.pharmacy_council_registration_document_url ?? null;
+        const rawOther = docRow.other_document_url ?? null;
         const [
           pan_image_url,
           aadhar_front_url,
@@ -537,6 +603,26 @@ export async function GET(req: NextRequest) {
           };
         }
         progress = { ...progress, form_data: { ...formData, step4: mergedStep4 } } as ProgressRow;
+      } else if (storeDbId) {
+        // No documents row in DB: clear step4 doc URLs so UI reflects truth (e.g. after manual DB delete)
+        const formData = (progress.form_data || {}) as Record<string, unknown>;
+        const step4 = (formData.step4 || {}) as Record<string, unknown>;
+        const clearedStep4 = {
+          ...step4,
+          pan_image_url: null,
+          aadhar_front_url: null,
+          aadhar_back_url: null,
+          gst_image_url: null,
+          fssai_image_url: null,
+          drug_license_image_url: null,
+          pharmacist_certificate_url: null,
+          pharmacy_council_registration_url: null,
+          other_document_file_url: null,
+          bank: step4.bank && typeof step4.bank === "object"
+            ? { ...(step4.bank as Record<string, unknown>), bank_proof_file_url: null, upi_qr_screenshot_url: null }
+            : step4.bank,
+        };
+        progress = { ...progress, form_data: { ...formData, step4: clearedStep4 } } as ProgressRow;
       }
       const { data: menuMedia } = await db
         .from("merchant_store_media_files")
@@ -554,11 +640,23 @@ export async function GET(req: NextRequest) {
           ? imageRows.map((r: any) => r.public_url || r.r2_key).filter(Boolean)
           : (Array.isArray(step3.menuImageUrls) ? step3.menuImageUrls : []);
         const signedSheetUrl = toMenuProxyUrl(rawSheetUrl);
-        const signedImageUrls = (rawImageUrls as string[]).map((u) => toMenuProxyUrl(u)).filter((u): u is string => !!u);
+        const signedImageUrls = (rawImageUrls as string[]).map((u) => toMenuProxyUrl(u)).filter((u: string | null): u is string => !!u);
         const mergedStep3 = {
           ...step3,
           menuSpreadsheetUrl: signedSheetUrl ?? rawSheetUrl ?? step3.menuSpreadsheetUrl,
           menuImageUrls: signedImageUrls.filter(Boolean).length > 0 ? signedImageUrls : (step3.menuImageUrls ?? []),
+        };
+        progress = { ...progress, form_data: { ...formData, step3: mergedStep3 } } as ProgressRow;
+      } else if (storeDbId && (menuMedia == null || menuMedia.length === 0)) {
+        // No menu files in DB: clear step3 menu URLs so UI reflects truth (e.g. after remove or manual DB delete)
+        const formData = (progress.form_data || {}) as Record<string, unknown>;
+        const step3 = (formData.step3 || {}) as Record<string, unknown>;
+        const mergedStep3 = {
+          ...step3,
+          menuSpreadsheetUrl: null,
+          menuSpreadsheetName: null,
+          menuImageUrls: [],
+          menuImageNames: [],
         };
         progress = { ...progress, form_data: { ...formData, step3: mergedStep3 } } as ProgressRow;
       }
@@ -569,7 +667,7 @@ export async function GET(req: NextRequest) {
       const signedSheet = toMenuProxyUrl(step3.menuSpreadsheetUrl || null);
       const signedImages = (Array.isArray(step3.menuImageUrls) ? step3.menuImageUrls : [])
         .map((u: string) => toMenuProxyUrl(u))
-        .filter((u): u is string => !!u);
+        .filter((u: string | null): u is string => !!u);
       const formData = (progress.form_data || {}) as Record<string, unknown>;
       const mergedStep3 = {
         ...step3,
@@ -717,10 +815,10 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ success: false, error: "Failed to read progress" }, { status: 500 });
     }
 
-    const mergedFormData: any = {
-      ...(existing?.form_data || {}),
-      ...(formDataPatch || {}),
-    };
+    const mergedFormData: any = deepMergeFormData(
+      (existing?.form_data as Record<string, unknown>) || {},
+      (formDataPatch as Record<string, unknown>) || {}
+    );
 
     const nextFlags = buildReconciledFlags({
       existingFlags: existing,
@@ -753,10 +851,36 @@ export async function PUT(req: NextRequest) {
       }
     }
 
-    // When step 1 is completed: ensure we have a store ID and a merchant_stores row (data in DB).
-    if (normalizedCurrentStep >= 1 && nextFlags.step_1_completed) {
+    // When step 1 data exists: ensure we have a store ID and a merchant_stores row (data in DB).
+    // Create/update store row whenever step1 data is present, not just when step_1_completed flag is set.
+    console.log("[register-store-progress] Checking step1 store creation:", {
+      normalizedCurrentStep,
+      hasStep1Data: !!mergedFormData?.step1,
+      step1Keys: mergedFormData?.step1 ? Object.keys(mergedFormData.step1) : [],
+      stepStoreDbId: stepStore?.storeDbId,
+      stepStorePublicId: stepStore?.storePublicId,
+    });
+    
+    if (normalizedCurrentStep >= 1 && mergedFormData?.step1) {
       const existingPublicId = mergedFormData?.step_store?.storePublicId;
-      if (!stepStore?.storeDbId || stepStore.storeDbId <= 0) {
+      
+      // CRITICAL: Verify store actually exists in database, not just in progress form_data
+      let storeExistsInDb = false;
+      if (stepStore?.storeDbId && stepStore.storeDbId > 0) {
+        const { data: verifyStore } = await db
+          .from("merchant_stores")
+          .select("id, store_id")
+          .eq("id", stepStore.storeDbId)
+          .maybeSingle();
+        storeExistsInDb = !!verifyStore;
+        console.log("[register-store-progress] Store existence check:", {
+          stepStoreDbId: stepStore.storeDbId,
+          storeExistsInDb,
+          foundStoreId: verifyStore?.store_id,
+        });
+      }
+      
+      if (!stepStore?.storeDbId || stepStore.storeDbId <= 0 || !storeExistsInDb) {
         try {
           const storeIdToUse =
             typeof existingPublicId === "string" && existingPublicId.trim()
@@ -765,15 +889,38 @@ export async function PUT(req: NextRequest) {
           if (!mergedFormData.step_store) mergedFormData.step_store = {};
           mergedFormData.step_store.storePublicId = storeIdToUse;
 
+          // Extract only step1 fields (exclude step2 location fields)
+          const step1Only = {
+            store_name: mergedFormData.step1.store_name,
+            owner_full_name: mergedFormData.step1.owner_full_name,
+            store_display_name: mergedFormData.step1.store_display_name,
+            legal_business_name: mergedFormData.step1.legal_business_name,
+            store_type: mergedFormData.step1.store_type,
+            custom_store_type: mergedFormData.step1.custom_store_type,
+            store_email: mergedFormData.step1.store_email,
+            store_phones: mergedFormData.step1.store_phones,
+            store_description: mergedFormData.step1.store_description,
+          };
+
+          console.log("[register-store-progress] Calling insertStoreAfterStep1:", {
+            parentId: validation.merchantParentId,
+            storeIdToUse,
+            hasStep1: !!step1Only,
+            step1OnlyKeys: Object.keys(step1Only),
+          });
+          
           const inserted = await insertStoreAfterStep1(db, {
             parentId: validation.merchantParentId,
-            step1: mergedFormData?.step1,
+            step1: step1Only,
             generatedStoreId: storeIdToUse,
           });
+          
           if (inserted) {
+            console.log("[register-store-progress] Store created successfully:", inserted);
             mergedFormData.step_store.storeDbId = inserted.storeDbId;
             stepStore = { storeDbId: inserted.storeDbId, storePublicId: inserted.storePublicId };
           } else {
+            console.error("[register-store-progress] insertStoreAfterStep1 returned null - store NOT created in DB!");
             stepStore = { storeDbId: 0, storePublicId: storeIdToUse };
           }
         } catch (error) {
@@ -781,66 +928,172 @@ export async function PUT(req: NextRequest) {
           if (!stepStore && existingPublicId)
             stepStore = { storeDbId: 0, storePublicId: String(existingPublicId) };
         }
+      } else if (stepStore.storeDbId > 0 && storeExistsInDb && mergedFormData?.step1) {
+        // If store already exists but step1 data is being updated, update the store row with step1 data only
+        try {
+          // Extract only step1 fields (exclude step2 location fields)
+          const step1 = {
+            store_name: mergedFormData.step1.store_name,
+            owner_full_name: mergedFormData.step1.owner_full_name,
+            store_display_name: mergedFormData.step1.store_display_name,
+            legal_business_name: mergedFormData.step1.legal_business_name,
+            store_type: mergedFormData.step1.store_type,
+            custom_store_type: mergedFormData.step1.custom_store_type,
+            store_email: mergedFormData.step1.store_email,
+            store_phones: mergedFormData.step1.store_phones,
+            store_description: mergedFormData.step1.store_description,
+          } as any;
+          
+          console.log("[register-store-progress] Updating existing store with step1 data:", {
+            storeDbId: stepStore.storeDbId,
+            step1Fields: Object.keys(step1),
+          });
+          
+          await db
+            .from("merchant_stores")
+            .update({
+              store_name: step1.store_name || null,
+              owner_full_name: step1.owner_full_name || null,
+              store_display_name: step1.store_display_name || null,
+              legal_business_name: step1.legal_business_name || null,
+              store_description: step1.store_description || null,
+              store_type: toEnumStoreType(step1.store_type) || "RESTAURANT",
+              custom_store_type: step1.custom_store_type || null,
+              store_email: step1.store_email || "",
+              store_phones: Array.isArray(step1.store_phones) ? step1.store_phones : [],
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", stepStore.storeDbId);
+        } catch (updateError) {
+          console.error("Failed to update store row with step1 data:", updateError);
+        }
       }
     }
 
     if (normalizedCurrentStep >= 2) {
-      stepStore = await upsertStoreDraft(db, {
-        parentId: validation.merchantParentId,
-        step1: mergedFormData?.step1,
-        step2: mergedFormData?.step2,
-        existingStoreDbId: stepStore?.storeDbId,
-        nextStep: normalizedNextStep,
-      });
-      if (stepStore) {
-        mergedFormData.step_store = {
-          storeDbId: stepStore.storeDbId,
-          storePublicId: stepStore.storePublicId,
-        };
+      try {
+        const draftResult = await upsertStoreDraft(db, {
+          parentId: validation.merchantParentId,
+          step1: mergedFormData?.step1,
+          step2: mergedFormData?.step2,
+          existingStoreDbId: stepStore?.storeDbId,
+          nextStep: normalizedNextStep,
+        });
+        if (draftResult) {
+          stepStore = draftResult;
+          mergedFormData.step_store = {
+            storeDbId: stepStore.storeDbId,
+            storePublicId: stepStore.storePublicId,
+          };
+        }
+      } catch (draftErr: unknown) {
+        console.warn("[register-store-progress] upsertStoreDraft failed (non-fatal):", draftErr);
+        // Keep existing stepStore and continue to save progress
       }
     }
 
-    if (stepStore?.storeDbId && mergedFormData?.step3) {
+    // Only sync menu media when this request actually sent step3 data (e.g. menu CSV/images).
+    // When saving step4 (documents) we must not touch menu media or we delete the CSV.
+    const patchHasStep3 = (formDataPatch as Record<string, unknown>)?.step3 !== undefined;
+    if (stepStore?.storeDbId && patchHasStep3 && mergedFormData?.step3) {
       const menuMode = (mergedFormData.step3 as { menuUploadMode?: string }).menuUploadMode as "IMAGE" | "CSV" | undefined;
       const imageUrls: string[] = menuMode === "CSV" ? [] : (Array.isArray(mergedFormData.step3.menuImageUrls)
         ? mergedFormData.step3.menuImageUrls.filter(Boolean)
         : []);
       const spreadsheetUrl: string | null = menuMode === "IMAGE" ? null : (mergedFormData.step3.menuSpreadsheetUrl || null);
-      const mediaCandidates = [
-        ...imageUrls.map((url) => {
+      
+      // Check if store is verified (onboarding completed and approved)
+      const { data: storeData } = await db
+        .from("merchant_stores")
+        .select("id, onboarding_completed, approval_status")
+        .eq("id", stepStore.storeDbId)
+        .single();
+      
+      const isVerified = storeData?.onboarding_completed && storeData?.approval_status === "APPROVED";
+      
+      // Get existing menu media files
+      const { data: existingRows } = await db
+        .from("merchant_store_media_files")
+        .select("id, r2_key, public_url, is_active")
+        .eq("store_id", stepStore.storeDbId)
+        .eq("media_scope", "MENU_REFERENCE");
+      
+      if (isVerified) {
+        // Post-verification: Keep old files, mark as inactive, add new files as active
+        const updates: Promise<any>[] = [];
+        
+        // Mark existing menu files as inactive
+        if (existingRows && existingRows.length > 0) {
+          const activeRows = existingRows.filter((r) => r.is_active);
+          for (const row of activeRows) {
+            const q = db
+              .from("merchant_store_media_files")
+              .update({ is_active: false, updated_at: new Date().toISOString() })
+              .eq("id", row.id);
+            updates.push(Promise.resolve(q) as Promise<any>);
+          }
+        }
+        
+        // Add new files with fresh signed URLs
+        const newMediaRows: any[] = [];
+        for (const url of imageUrls) {
           const key = typeof url === "string" ? (extractR2KeyFromUrl(url) || (url.includes("://") ? null : url.replace(/^\/+/, "")) || url) : null;
-          return {
-            store_id: stepStore!.storeDbId,
-            media_scope: "MENU_REFERENCE",
-            source_entity: "ONBOARDING_MENU_IMAGE",
-            public_url: url,
-            r2_key: key,
-          mime_type: "image/*",
-          is_active: true,
-        };
-        }),
-        ...(spreadsheetUrl
-          ? [
-              {
-                store_id: stepStore.storeDbId,
-                media_scope: "MENU_REFERENCE",
-                source_entity: "ONBOARDING_MENU_SHEET",
-                public_url: spreadsheetUrl,
-                r2_key: extractR2KeyFromUrl(spreadsheetUrl) || (spreadsheetUrl.includes("://") ? null : spreadsheetUrl.replace(/^\/+/, "")) || spreadsheetUrl,
-                mime_type: "application/octet-stream",
-                is_active: true,
-              },
-            ]
-          : []),
-      ];
-      if (mediaCandidates.length > 0) {
-        try {
-          const { data: existingRows } = await db
-            .from("merchant_store_media_files")
-            .select("id, r2_key, public_url")
-            .eq("store_id", stepStore.storeDbId)
-            .eq("media_scope", "MENU_REFERENCE");
-          for (const row of existingRows || []) {
+          if (key) {
+            const proxyUrl = toMenuProxyUrl(key);
+            newMediaRows.push({
+              store_id: stepStore.storeDbId,
+              media_scope: "MENU_REFERENCE",
+              source_entity: "ONBOARDING_MENU_IMAGE",
+              source_entity_id: null,
+              original_file_name: `menu_image_${Date.now()}`,
+              r2_key: key,
+              public_url: proxyUrl || url,
+              mime_type: "image/*",
+              is_active: true,
+              verification_status: "PENDING",
+              uploaded_by: user.id,
+            });
+          }
+        }
+        
+        if (spreadsheetUrl) {
+          const key = extractR2KeyFromUrl(spreadsheetUrl) || (spreadsheetUrl.includes("://") ? null : spreadsheetUrl.replace(/^\/+/, "")) || spreadsheetUrl;
+          if (key) {
+            const proxyUrl = toMenuProxyUrl(key);
+            newMediaRows.push({
+              store_id: stepStore.storeDbId,
+              media_scope: "MENU_REFERENCE",
+              source_entity: "ONBOARDING_MENU_SHEET",
+              source_entity_id: null,
+              original_file_name: "menu_spreadsheet",
+              r2_key: key,
+              public_url: proxyUrl || spreadsheetUrl,
+              mime_type: "application/octet-stream",
+              is_active: true,
+              verification_status: "PENDING",
+              uploaded_by: user.id,
+            });
+          }
+        }
+        
+        if (newMediaRows.length > 0) {
+          updates.push(Promise.resolve(db.from("merchant_store_media_files").insert(newMediaRows)) as Promise<any>);
+        }
+        
+        if (updates.length > 0) {
+          try {
+            await Promise.all(updates);
+          } catch (mediaError: any) {
+            console.warn("[register-store-progress] media update skipped:", mediaError.message);
+          }
+        }
+      } else {
+        // During onboarding: Delete old files from R2 and database, add new files
+        const deletePromises: Promise<any>[] = [];
+        
+        // Delete old files from R2
+        if (existingRows && existingRows.length > 0) {
+          for (const row of existingRows) {
             const key = row.r2_key || extractR2KeyFromUrl(row.public_url || "");
             if (key && typeof key === "string") {
               try {
@@ -850,15 +1103,71 @@ export async function PUT(req: NextRequest) {
               }
             }
           }
-          await db
-            .from("merchant_store_media_files")
-            .delete()
-            .eq("store_id", stepStore.storeDbId)
-            .eq("media_scope", "MENU_REFERENCE");
-          await db.from("merchant_store_media_files").insert(mediaCandidates);
-        } catch (mediaError: any) {
-          console.warn("[register-store-progress] media insert skipped:", mediaError.message);
-          // Optional table in rollout phase.
+        }
+        
+        // Delete old records from database
+        deletePromises.push(
+          Promise.resolve(
+            db
+              .from("merchant_store_media_files")
+              .delete()
+              .eq("store_id", stepStore.storeDbId)
+              .eq("media_scope", "MENU_REFERENCE")
+          ) as Promise<any>
+        );
+        
+        await Promise.all(deletePromises);
+        
+        // Add new files with fresh signed URLs
+        const mediaCandidates = [
+          ...imageUrls.map((url) => {
+            const key = typeof url === "string" ? (extractR2KeyFromUrl(url) || (url.includes("://") ? null : url.replace(/^\/+/, "")) || url) : null;
+            const proxyUrl = key ? toMenuProxyUrl(key) : null;
+            return {
+              store_id: stepStore!.storeDbId,
+              media_scope: "MENU_REFERENCE",
+              source_entity: "ONBOARDING_MENU_IMAGE",
+              source_entity_id: null,
+              original_file_name: `menu_image_${Date.now()}`,
+              r2_key: key,
+              public_url: proxyUrl || url,
+              mime_type: "image/*",
+              is_active: true,
+              verification_status: "PENDING",
+              uploaded_by: user.id,
+            };
+          }),
+          ...(spreadsheetUrl
+            ? [
+                (() => {
+                  const key = extractR2KeyFromUrl(spreadsheetUrl) || (spreadsheetUrl.includes("://") ? null : spreadsheetUrl.replace(/^\/+/, "")) || spreadsheetUrl;
+                  const proxyUrl = key ? toMenuProxyUrl(key) : null;
+                  return {
+                    store_id: stepStore.storeDbId,
+                    media_scope: "MENU_REFERENCE",
+                    source_entity: "ONBOARDING_MENU_SHEET",
+                    source_entity_id: null,
+                    original_file_name: "menu_spreadsheet",
+                    r2_key: key,
+                    public_url: proxyUrl || spreadsheetUrl,
+                    mime_type: "application/octet-stream",
+                    is_active: true,
+                    verification_status: "PENDING",
+                    uploaded_by: user.id,
+                  };
+                })(),
+              ]
+            : []),
+        ];
+        
+        if (mediaCandidates.length > 0) {
+          try {
+            const resolvedCandidates = await Promise.all(mediaCandidates);
+            await db.from("merchant_store_media_files").insert(resolvedCandidates);
+          } catch (mediaError: any) {
+            console.warn("[register-store-progress] media insert skipped:", mediaError.message);
+            // Optional table in rollout phase.
+          }
         }
       }
     }
@@ -873,41 +1182,97 @@ export async function PUT(req: NextRequest) {
         }
         return null;
       };
+      const [
+        panDocumentUrl,
+        aadhaarFrontUrl,
+        aadhaarBackUrl,
+        gstDocumentUrl,
+        fssaiDocumentUrl,
+        drugLicenseDocumentUrl,
+        pharmacistCertificateUrl,
+        pharmacyCouncilUrl,
+        otherDocumentUrl,
+      ] = await Promise.all([
+        toStoredDocumentUrlSigned(docs.pan_image_url),
+        toStoredDocumentUrlSigned(docs.aadhar_front_url),
+        toStoredDocumentUrlSigned(docs.aadhar_back_url),
+        toStoredDocumentUrlSigned(docs.gst_image_url),
+        toStoredDocumentUrlSigned(docs.fssai_image_url),
+        toStoredDocumentUrlSigned(docs.drug_license_image_url),
+        toStoredDocumentUrlSigned(docs.pharmacist_certificate_url),
+        toStoredDocumentUrlSigned(docs.pharmacy_council_registration_url),
+        toStoredDocumentUrlSigned(docs.other_document_file_url),
+      ]);
+      const { data: existingDocRow } = await db
+        .from("merchant_store_documents")
+        .select("pan_document_url, aadhaar_document_url, aadhaar_document_metadata, gst_document_url, fssai_document_url, drug_license_document_url, pharmacist_certificate_document_url, pharmacy_council_registration_document_url, other_document_url")
+        .eq("store_id", stepStore.storeDbId)
+        .single();
+      const existing = existingDocRow as Record<string, unknown> | null;
+      const toDelete: string[] = [];
+      if (existing) {
+        const backUrl = (existing.aadhaar_document_metadata as Record<string, unknown>)?.back_url;
+        const pairs: [string | null, unknown][] = [
+          [panDocumentUrl, existing.pan_document_url],
+          [aadhaarFrontUrl, existing.aadhaar_document_url],
+          [aadhaarBackUrl, backUrl],
+          [gstDocumentUrl, existing.gst_document_url],
+          [fssaiDocumentUrl, existing.fssai_document_url],
+          [drugLicenseDocumentUrl, existing.drug_license_document_url],
+          [pharmacistCertificateUrl, existing.pharmacist_certificate_document_url],
+          [pharmacyCouncilUrl, existing.pharmacy_council_registration_document_url],
+          [otherDocumentUrl, existing.other_document_url],
+        ];
+        for (const [newVal, oldVal] of pairs) {
+          const hadUrl = oldVal != null && typeof oldVal === "string" && oldVal.trim().length > 0;
+          const nowEmpty = newVal == null || (typeof newVal === "string" && newVal.trim().length === 0);
+          if (hadUrl && nowEmpty) {
+            const key = extractR2KeyFromUrl(oldVal as string);
+            if (key) toDelete.push(key);
+          }
+        }
+        for (const key of toDelete) {
+          try {
+            await deleteFromR2(key);
+          } catch (e) {
+            console.warn("[register-store-progress] R2 delete failed for", key, e);
+          }
+        }
+      }
       const docRow: any = {
         store_id: stepStore.storeDbId,
         pan_document_number: docs.pan_number || null,
-        pan_document_url: docs.pan_image_url || null,
+        pan_document_url: panDocumentUrl || null,
         pan_document_name: docs.pan_image?.name || (docs.pan_image_url ? "pan" : null) || null,
         pan_holder_name: docs.pan_holder_name || null,
         aadhaar_document_number: docs.aadhar_number || null,
-        aadhaar_document_url: docs.aadhar_front_url || null,
+        aadhaar_document_url: aadhaarFrontUrl || null,
         aadhaar_document_name: docs.aadhar_front?.name || (docs.aadhar_front_url ? "aadhaar_front" : null) || null,
         aadhaar_holder_name: docs.aadhar_holder_name || null,
-        aadhaar_document_metadata:
-          docs.aadhar_back_url != null ? { back_url: docs.aadhar_back_url } : {},
+        aadhaar_document_metadata: aadhaarBackUrl != null ? { back_url: aadhaarBackUrl } : {},
         gst_document_number: docs.gst_number || null,
-        gst_document_url: docs.gst_image_url || null,
+        gst_document_url: gstDocumentUrl || null,
         gst_document_name: docs.gst_image?.name || (docs.gst_image_url ? "gst" : null) || null,
         fssai_document_number: docs.fssai_number || null,
-        fssai_document_url: docs.fssai_image_url || null,
+        fssai_document_url: fssaiDocumentUrl || null,
         fssai_document_name: docs.fssai_image?.name || (docs.fssai_image_url ? "fssai" : null) || null,
         fssai_expiry_date: parseDate(docs.fssai_expiry_date),
         drug_license_document_number: docs.drug_license_number || null,
-        drug_license_document_url: docs.drug_license_image_url || null,
+        drug_license_document_url: drugLicenseDocumentUrl || null,
         drug_license_document_name:
           docs.drug_license_image?.name || (docs.drug_license_image_url ? "drug_license" : null) || null,
         drug_license_expiry_date: parseDate(docs.drug_license_expiry_date),
         pharmacist_certificate_document_number: docs.pharmacist_registration_number || null,
-        pharmacist_certificate_document_url: docs.pharmacist_certificate_url || null,
+        pharmacist_certificate_document_url: pharmacistCertificateUrl || null,
         pharmacist_certificate_document_name:
           docs.pharmacist_certificate?.name || (docs.pharmacist_certificate_url ? "pharmacist" : null) || null,
         pharmacist_certificate_expiry_date: parseDate(docs.pharmacist_expiry_date),
-        pharmacy_council_registration_document_url: docs.pharmacy_council_registration_url || null,
+        pharmacy_council_registration_document_url: pharmacyCouncilUrl || null,
         pharmacy_council_registration_document_name:
           (docs.pharmacy_council_registration?.name ??
             (docs.pharmacy_council_registration_url ? "pharmacy_council" : null)) || null,
         other_document_number: docs.other_document_number || null,
-        other_document_url: docs.other_document_file_url || null,
+        other_document_url: otherDocumentUrl || null,
         other_document_name:
           docs.other_document_file?.name || (docs.other_document_file_url ? "other" : null) || null,
         other_document_type: docs.other_document_type || null,
@@ -955,11 +1320,31 @@ export async function PUT(req: NextRequest) {
         payoutMethod === "upi" &&
         bank.upi_id &&
         bank.upi_qr_screenshot_url;
+
       if (hasBankDetails && payoutMethod === "bank") {
         try {
-          // First delete existing bank accounts for this store to avoid duplicates
+          const { data: existingBankRows } = await db
+            .from("merchant_store_bank_accounts")
+            .select("bank_proof_file_url, upi_qr_screenshot_url")
+            .eq("store_id", stepStore.storeDbId);
+          const newProofKey = bank.bank_proof_file_url
+            ? (extractR2KeyFromUrl(bank.bank_proof_file_url) || (bank.bank_proof_file_url.includes("://") ? null : bank.bank_proof_file_url.replace(/^\/+/, "")))
+            : null;
+          for (const row of existingBankRows || []) {
+            if (row.bank_proof_file_url) {
+              const oldKey = extractR2KeyFromUrl(row.bank_proof_file_url);
+              if (oldKey && oldKey !== newProofKey) {
+                try {
+                  await deleteFromR2(oldKey);
+                } catch (e) {
+                  console.warn("[register-store-progress] R2 delete bank_proof failed:", oldKey, e);
+                }
+              }
+            }
+          }
           await db.from("merchant_store_bank_accounts").delete().eq("store_id", stepStore.storeDbId);
-          
+
+          const bankProofSigned = await toStoredDocumentUrlSigned(bank.bank_proof_file_url);
           await db.from("merchant_store_bank_accounts").insert({
             store_id: stepStore.storeDbId,
             payout_method: "bank",
@@ -971,7 +1356,7 @@ export async function PUT(req: NextRequest) {
             account_type: bank.account_type || null,
             upi_id: null,
             bank_proof_type: bank.bank_proof_type || null,
-            bank_proof_file_url: bank.bank_proof_file_url || null,
+            bank_proof_file_url: bankProofSigned || null,
             upi_qr_screenshot_url: null,
             is_primary: true,
             is_active: true,
@@ -981,9 +1366,28 @@ export async function PUT(req: NextRequest) {
         }
       } else if (hasUpiDetails) {
         try {
-          // First delete existing bank accounts for this store to avoid duplicates
+          const { data: existingUpiRows } = await db
+            .from("merchant_store_bank_accounts")
+            .select("bank_proof_file_url, upi_qr_screenshot_url")
+            .eq("store_id", stepStore.storeDbId);
+          const newUpiKey = bank.upi_qr_screenshot_url
+            ? (extractR2KeyFromUrl(bank.upi_qr_screenshot_url) || (bank.upi_qr_screenshot_url.includes("://") ? null : bank.upi_qr_screenshot_url.replace(/^\/+/, "")))
+            : null;
+          for (const row of existingUpiRows || []) {
+            if (row.upi_qr_screenshot_url) {
+              const oldKey = extractR2KeyFromUrl(row.upi_qr_screenshot_url);
+              if (oldKey && oldKey !== newUpiKey) {
+                try {
+                  await deleteFromR2(oldKey);
+                } catch (e) {
+                  console.warn("[register-store-progress] R2 delete upi_qr failed:", oldKey, e);
+                }
+              }
+            }
+          }
           await db.from("merchant_store_bank_accounts").delete().eq("store_id", stepStore.storeDbId);
-          
+
+          const upiQrSigned = await toStoredDocumentUrlSigned(bank.upi_qr_screenshot_url);
           await db.from("merchant_store_bank_accounts").insert({
             store_id: stepStore.storeDbId,
             payout_method: "upi",
@@ -996,7 +1400,7 @@ export async function PUT(req: NextRequest) {
             upi_id: bank.upi_id || null,
             bank_proof_type: null,
             bank_proof_file_url: null,
-            upi_qr_screenshot_url: bank.upi_qr_screenshot_url || null,
+            upi_qr_screenshot_url: upiQrSigned || null,
             is_primary: true,
             is_active: true,
           });
@@ -1015,6 +1419,11 @@ export async function PUT(req: NextRequest) {
 
     if (stepStore?.storeDbId && mergedFormData?.step5) {
       const s5 = mergedFormData.step5 || {};
+      const logoUrlStored = (await toStoredDocumentUrlSigned(s5.logo_url)) || s5.logo_url || null;
+      const bannerUrlStored = (await toStoredDocumentUrlSigned(s5.banner_url)) || s5.banner_url || null;
+      const galleryUrlsStored = Array.isArray(s5.gallery_image_urls)
+        ? (await Promise.all(s5.gallery_image_urls.map((u: string) => toStoredDocumentUrlSigned(u)))).filter((u: string | null | undefined): u is string => !!u)
+        : null;
       await db
         .from("merchant_stores")
         .update({
@@ -1026,9 +1435,9 @@ export async function PUT(req: NextRequest) {
           is_pure_veg: !!s5.is_pure_veg,
           accepts_online_payment: s5.accepts_online_payment !== false,
           accepts_cash: s5.accepts_cash !== false,
-          logo_url: s5.logo_url || null,
-          banner_url: s5.banner_url || null,
-          gallery_images: Array.isArray(s5.gallery_image_urls) ? s5.gallery_image_urls : null,
+          logo_url: logoUrlStored,
+          banner_url: bannerUrlStored,
+          gallery_images: galleryUrlsStored,
           current_onboarding_step: normalizedNextStep,
         })
         .eq("id", stepStore.storeDbId);
@@ -1186,9 +1595,17 @@ export async function PUT(req: NextRequest) {
       }
     }
 
+    // When registration is already completed, the query excludes COMPLETED rows so existing can be null.
+    // On step 9 success page we only need to acknowledge; avoid inserting a duplicate progress row.
+    if (!existing?.id) {
+      if (normalizedCurrentStep >= 9 || registrationStatus === "COMPLETED") {
+        return NextResponse.json({ success: true, progress: null });
+      }
+    }
+
     const payload = {
       parent_id: validation.merchantParentId,
-      store_id: stepStore?.storeDbId || existing?.store_id || null,
+      store_id: stepStore?.storeDbId ?? existing?.store_id ?? null,
       current_step: normalizedNextStep,
       total_steps: 9,
       completed_steps: completedSteps,
@@ -1208,6 +1625,12 @@ export async function PUT(req: NextRequest) {
         .single();
 
       if (error) {
+        console.error("[register-store-progress][PUT] Progress update failed:", {
+          message: error.message,
+          code: error.code,
+          details: error.details,
+          hint: error.hint,
+        });
         return NextResponse.json({ success: false, error: "Failed to update progress" }, { status: 500 });
       }
       return NextResponse.json({ success: true, progress: data });
@@ -1220,6 +1643,12 @@ export async function PUT(req: NextRequest) {
       .single();
 
     if (error) {
+      console.error("[register-store-progress][PUT] Progress insert failed:", {
+        message: error.message,
+        code: error.code,
+        details: error.details,
+        hint: error.hint,
+      });
       return NextResponse.json({ success: false, error: "Failed to create progress" }, { status: 500 });
     }
 

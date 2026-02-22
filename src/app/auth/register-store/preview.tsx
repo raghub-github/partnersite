@@ -9,6 +9,24 @@ import React, { useMemo } from "react";
 // No direct supabase import needed for client
 import { ChevronLeft, CheckCircle, AlertCircle, Loader2, Mail, Phone, HelpCircle, ExternalLink } from "lucide-react";
 
+/** Normalize attachment URL so "View attachment" links and img src always work. Handles full R2 signed URLs, proxy paths, data URLs, and raw R2 keys (which otherwise resolve as localhost/auth/merchants/... and fail). */
+function normalizeAttachmentHref(url: string | null | undefined): string | null {
+  if (url == null || typeof url !== "string") return null;
+  const u = url.trim();
+  if (!u) return null;
+  if (u.startsWith("http://") || u.startsWith("https://")) return u;
+  if (u.startsWith("data:")) return u;
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  if (u.startsWith("/")) return origin ? `${origin}${u}` : u;
+  return origin ? `${origin}/api/attachments/proxy?key=${encodeURIComponent(u)}` : `/api/attachments/proxy?key=${encodeURIComponent(u)}`;
+}
+
+/** Same as normalizeAttachmentHref; use for img src so logo/banner/gallery load when stored as R2 key or relative path. */
+function normalizedImageSrc(url: string | null | undefined): string {
+  const normalized = normalizeAttachmentHref(url);
+  return normalized ?? (typeof url === "string" ? url : "");
+}
+
 interface PreviewPageProps {
   step1: any;
   step2: any;
@@ -210,7 +228,7 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                                 <label className="text-[10px] sm:text-xs font-medium text-slate-500">Logo</label>
                                 <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-lg border-2 border-slate-200 overflow-hidden bg-white p-1">
                                   <img
-                                    src={logoSrc}
+                                    src={normalizedImageSrc(logoSrc)}
                                     alt="Logo"
                                     className="w-full h-full object-contain"
                                     referrerPolicy="no-referrer"
@@ -223,7 +241,7 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                                 <label className="text-[10px] sm:text-xs font-medium text-slate-500">Banner</label>
                                 <div className="h-16 sm:h-20 rounded-lg border-2 border-slate-200 overflow-hidden">
                                   <img
-                                    src={bannerSrc}
+                                    src={normalizedImageSrc(bannerSrc)}
                                     alt="Banner"
                                     className="w-full h-full object-cover"
                                     referrerPolicy="no-referrer"
@@ -238,7 +256,7 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                                   {galleryUrls.slice(0, 2).map((src: string, idx: number) => (
                                     <div key={idx} className="w-16 h-16 sm:w-20 sm:h-20 rounded-lg border-2 border-slate-200 overflow-hidden">
                                       <img
-                                        src={src}
+                                        src={normalizedImageSrc(src)}
                                         alt={`Gallery ${idx + 1}`}
                                         className="w-full h-full object-cover"
                                         referrerPolicy="no-referrer"
@@ -362,7 +380,7 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                             <div className="flex items-center gap-2 mt-1">
                               {documents.pan_holder_name && <span className="text-[10px] sm:text-xs text-slate-600">{documents.pan_holder_name}</span>}
                               {documents.pan_image_url && (
-                                <a href={documents.pan_image_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline">
+                                <a href={normalizeAttachmentHref(documents.pan_image_url) ?? "#"} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline">
                                   <ExternalLink className="w-3 h-3" /> View attachment
                                 </a>
                               )}
@@ -383,12 +401,12 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                             <div className="flex flex-wrap items-center gap-2 mt-1">
                               {documents.aadhar_holder_name && <span className="text-[10px] sm:text-xs text-slate-600">{documents.aadhar_holder_name}</span>}
                               {documents.aadhar_front_url && (
-                                <a href={documents.aadhar_front_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline">
+                                <a href={normalizeAttachmentHref(documents.aadhar_front_url) ?? "#"} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline">
                                   <ExternalLink className="w-3 h-3" /> View front
                                 </a>
                               )}
                               {documents.aadhar_back_url && (
-                                <a href={documents.aadhar_back_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline">
+                                <a href={normalizeAttachmentHref(documents.aadhar_back_url) ?? "#"} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline">
                                   <ExternalLink className="w-3 h-3" /> View back
                                 </a>
                               )}
@@ -406,7 +424,7 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                           <p className="text-[10px] sm:text-xs font-medium text-slate-500">FSSAI Number</p>
                           <p className="text-slate-900 font-mono text-xs sm:text-sm truncate">{documents.fssai_number}</p>
                           {documents.fssai_image_url && (
-                            <a href={documents.fssai_image_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline mt-1">
+                            <a href={normalizeAttachmentHref(documents.fssai_image_url) ?? "#"} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline mt-1">
                               <ExternalLink className="w-3 h-3" /> View attachment
                             </a>
                           )}
@@ -422,7 +440,7 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                           <p className="text-[10px] sm:text-xs font-medium text-slate-500">GST Number</p>
                           <p className="text-slate-900 font-mono text-xs sm:text-sm truncate">{documents.gst_number}</p>
                           {documents.gst_image_url && (
-                            <a href={documents.gst_image_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline mt-1">
+                            <a href={normalizeAttachmentHref(documents.gst_image_url) ?? "#"} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline mt-1">
                               <ExternalLink className="w-3 h-3" /> View attachment
                             </a>
                           )}
@@ -438,7 +456,7 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                           <p className="text-[10px] sm:text-xs font-medium text-slate-500">Drug License</p>
                           <p className="text-slate-900 font-mono text-xs sm:text-sm truncate">{documents.drug_license_number}</p>
                           {documents.drug_license_image_url && (
-                            <a href={documents.drug_license_image_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline mt-1">
+                            <a href={normalizeAttachmentHref(documents.drug_license_image_url) ?? "#"} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline mt-1">
                               <ExternalLink className="w-3 h-3" /> View attachment
                             </a>
                           )}
@@ -455,12 +473,12 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                           <p className="text-slate-900 font-mono text-xs sm:text-sm truncate">{documents.pharmacist_registration_number}</p>
                           <div className="flex flex-wrap gap-2 mt-1">
                             {documents.pharmacist_certificate_url && (
-                              <a href={documents.pharmacist_certificate_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline">
+                              <a href={normalizeAttachmentHref(documents.pharmacist_certificate_url) ?? "#"} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline">
                                 <ExternalLink className="w-3 h-3" /> View certificate
                               </a>
                             )}
                             {documents.pharmacy_council_registration_url && (
-                              <a href={documents.pharmacy_council_registration_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline">
+                              <a href={normalizeAttachmentHref(documents.pharmacy_council_registration_url) ?? "#"} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-[10px] sm:text-xs text-indigo-600 hover:underline">
                                 <ExternalLink className="w-3 h-3" /> View council reg
                               </a>
                             )}
@@ -533,7 +551,7 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                       <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-200 mt-2">
                         {(documents.bank as any)?.bank_proof_file_url && (
                           <a
-                            href={(documents.bank as any).bank_proof_file_url}
+                            href={normalizeAttachmentHref((documents.bank as any).bank_proof_file_url) ?? "#"}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1 text-[10px] sm:text-xs text-indigo-600 hover:underline font-medium"
@@ -544,7 +562,7 @@ const PreviewPage = ({ step1, step2, documents, storeSetup, menuData, parentInfo
                         )}
                         {(documents.bank as any)?.upi_qr_screenshot_url && (
                           <a
-                            href={(documents.bank as any).upi_qr_screenshot_url}
+                            href={normalizeAttachmentHref((documents.bank as any).upi_qr_screenshot_url) ?? "#"}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1 text-[10px] sm:text-xs text-indigo-600 hover:underline font-medium"

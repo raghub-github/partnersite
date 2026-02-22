@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
+import { getOnboardingR2Path } from '@/lib/r2-paths';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -42,7 +43,7 @@ export async function POST(req: NextRequest) {
           return { valid: Object.keys(errors).length === 0, errors };
         }
   // Import R2 helpers
-  const { uploadToR2, deleteFromR2, extractR2KeyFromUrl } = await import('@/lib/r2');
+  const { uploadToR2, deleteFromR2, extractR2KeyFromUrl, toStoredDocumentUrl, toStoredDocumentUrlSigned } = await import('@/lib/r2');
   // Define document types and folders
   const docFolders = {
     PAN: 'PAN',
@@ -126,8 +127,9 @@ export async function POST(req: NextRequest) {
         storeId = generatedId;
       }
     }
-    // Create directory structure (R2 is flat, so prefix keys)
-    const r2Base = `store-documents/${storeId}`;
+    // R2 folder: merchants/{parentId}/stores/{storeId}/onboarding/documents (parentMerchantId declared above)
+    const documentsPath = getOnboardingR2Path(String(parentMerchantId), storeId ?? undefined, 'DOCUMENTS');
+    
     // Map all possible frontend keys to valid enum values for document_type_merchant
     // Valid enum values: PAN, GST, AADHAR, FSSAI, PHARMACIST_CERTIFICATE, PHARMACY_COUNCIL_REGISTRATION, DRUG_LICENSE, SHOP_ESTABLISHMENT, TRADE_LICENSE, UDYAM, OTHER
     const typeMap: Record<string, string> = {
@@ -169,9 +171,9 @@ export async function POST(req: NextRequest) {
         // For banners and gallery
         if (docType === 'BANNER') folder = 'BANNERS';
         if (docType === 'GALLERY') folder = 'GALLERY';
-        // Compose R2 key
+        // Compose R2 key using new structure (documents are all under onboarding/documents)
         const fileName = `${Date.now()}_${doc.name}`;
-        const r2Key = `${r2Base}/${folder}/${fileName}`;
+        const r2Key = `${documentsPath}/${fileName}`;
         // Upload file to R2
         if (doc.file) {
           await uploadToR2(doc.file, r2Key);
@@ -182,6 +184,16 @@ export async function POST(req: NextRequest) {
 
     // 2. Insert or update draft store (one row per child store)
     const draftStoreDbId = step1?.__draftStoreDbId ? Number(step1.__draftStoreDbId) : null;
+    const resolvedMedia = await Promise.all([
+      toStoredDocumentUrlSigned(logoUrl),
+      toStoredDocumentUrlSigned(bannerUrl),
+      ...(Array.isArray(galleryUrls) ? galleryUrls.map((u: string) => toStoredDocumentUrlSigned(u)) : []),
+    ]);
+    const logoUrlStored = resolvedMedia[0] || logoUrl || null;
+    const bannerUrlStored = resolvedMedia[1] || bannerUrl || null;
+    const galleryUrlsStored = Array.isArray(galleryUrls)
+      ? resolvedMedia.slice(2).filter((u): u is string => !!u)
+      : galleryUrls;
     const storePayload = {
       parent_id: parentId,
       store_name: step1.store_name,
@@ -197,9 +209,9 @@ export async function POST(req: NextRequest) {
       country: step2.country,
       latitude: step2.latitude,
       longitude: step2.longitude,
-      logo_url: logoUrl,
-      banner_url: bannerUrl,
-      gallery_images: galleryUrls,
+      logo_url: logoUrlStored,
+      banner_url: bannerUrlStored,
+      gallery_images: galleryUrlsStored,
       cuisine_types: storeSetup.cuisine_types,
       food_categories: storeSetup.food_categories,
       avg_preparation_time_minutes: storeSetup.avg_preparation_time_minutes,
@@ -247,6 +259,7 @@ export async function POST(req: NextRequest) {
       const mediaRows: any[] = [];
       menuImageUrls.forEach((url, idx) => {
         const key = typeof url === 'string' ? (extractR2KeyFromUrl(url) || (url.includes('://') ? null : url.replace(/^\/+/, '')) || url) : null;
+        const publicUrl = key ? (toStoredDocumentUrl(key) ?? url) : url;
         mediaRows.push({
           store_id: storeData.id,
           media_scope: 'MENU_REFERENCE',
@@ -254,13 +267,15 @@ export async function POST(req: NextRequest) {
           source_entity_id: null,
           original_file_name: `menu_image_${idx + 1}`,
           r2_key: key,
-          public_url: url,
+          public_url: publicUrl,
           mime_type: 'image/*',
           is_active: true,
+          verification_status: 'PENDING',
         });
       });
       if (menuSpreadsheetUrl) {
         const sheetKey = typeof menuSpreadsheetUrl === 'string' ? (extractR2KeyFromUrl(menuSpreadsheetUrl) || (menuSpreadsheetUrl.includes('://') ? null : menuSpreadsheetUrl.replace(/^\/+/, '')) || menuSpreadsheetUrl) : null;
+        const sheetPublicUrl = sheetKey ? (toStoredDocumentUrl(sheetKey) ?? menuSpreadsheetUrl) : menuSpreadsheetUrl;
         mediaRows.push({
           store_id: storeData.id,
           media_scope: 'MENU_REFERENCE',
@@ -268,9 +283,10 @@ export async function POST(req: NextRequest) {
           source_entity_id: null,
           original_file_name: 'menu_spreadsheet',
           r2_key: sheetKey,
-          public_url: menuSpreadsheetUrl,
+          public_url: sheetPublicUrl,
           mime_type: 'application/octet-stream',
           is_active: true,
+          verification_status: 'PENDING',
         });
       }
       if (mediaRows.length > 0) {
@@ -474,42 +490,46 @@ export async function POST(req: NextRequest) {
         OTHER_IMAGE: 'OTHER', OTHER: 'OTHER',
         BANK_PROOF: 'BANK_PROOF',
       };
-      // Merge all document data into a single object for this store
+      // Resolve all document URLs to signed URLs (same format as upload response)
+      const resolvedDocUrls = await Promise.all(
+        (documentUrls || []).map((d: any) => toStoredDocumentUrlSigned(d.url))
+      );
       const docRow: any = { store_id: storeData.id };
-      documentUrls.forEach((doc: any) => {
+      (documentUrls || []).forEach((doc: any, i: number) => {
         const docType = typeMap[doc.type] || doc.type;
+        const storedUrl = resolvedDocUrls[i] || doc.url || null;
         if (docType === 'PAN' && (doc.number || doc.pan_number || doc.url)) {
           docRow.pan_document_number = doc.number || doc.pan_number || null;
-          docRow.pan_document_url = doc.url || null;
+          docRow.pan_document_url = storedUrl || null;
           docRow.pan_document_name = doc.name || null;
         }
         if (docType === 'GST' && (doc.number || doc.gst_number || doc.url)) {
           docRow.gst_document_number = doc.number || doc.gst_number || null;
-          docRow.gst_document_url = doc.url || null;
+          docRow.gst_document_url = storedUrl || null;
           docRow.gst_document_name = doc.name || null;
         }
         if (docType === 'AADHAAR' && (doc.number || doc.aadhar_number || doc.aadhaar_number || doc.url)) {
           docRow.aadhaar_document_number = doc.number || doc.aadhar_number || doc.aadhaar_number || null;
-          docRow.aadhaar_document_url = doc.url || null;
+          docRow.aadhaar_document_url = storedUrl || null;
           docRow.aadhaar_document_name = doc.name || null;
         }
         if (docType === 'FSSAI' && (doc.number || doc.url)) {
           docRow.fssai_document_number = doc.number || null;
-          docRow.fssai_document_url = doc.url || null;
+          docRow.fssai_document_url = storedUrl || null;
           docRow.fssai_document_name = doc.name || null;
           docRow.fssai_issued_date = doc.issued_date || null;
           docRow.fssai_expiry_date = doc.expiry_date || null;
         }
         if (docType === 'TRADE_LICENSE' && (doc.number || doc.url)) {
           docRow.trade_license_document_number = doc.number || null;
-          docRow.trade_license_document_url = doc.url || null;
+          docRow.trade_license_document_url = storedUrl || null;
           docRow.trade_license_document_name = doc.name || null;
           docRow.trade_license_issued_date = doc.issued_date || null;
           docRow.trade_license_expiry_date = doc.expiry_date || null;
         }
         if (docType === 'DRUG_LICENSE' && (doc.number || doc.url)) {
           docRow.drug_license_document_number = doc.number || null;
-          docRow.drug_license_document_url = doc.url || null;
+          docRow.drug_license_document_url = storedUrl || null;
           docRow.drug_license_document_name = doc.name || null;
           docRow.drug_license_type = doc.drug_license_type || null;
           docRow.drug_license_issued_date = doc.issued_date || null;
@@ -517,28 +537,28 @@ export async function POST(req: NextRequest) {
         }
         if (docType === 'SHOP_ESTABLISHMENT' && (doc.number || doc.url)) {
           docRow.shop_establishment_document_number = doc.number || null;
-          docRow.shop_establishment_document_url = doc.url || null;
+          docRow.shop_establishment_document_url = storedUrl || null;
           docRow.shop_establishment_document_name = doc.name || null;
           docRow.shop_establishment_issued_date = doc.issued_date || null;
           docRow.shop_establishment_expiry_date = doc.expiry_date || null;
         }
         if (docType === 'UDYAM' && (doc.number || doc.url)) {
           docRow.udyam_document_number = doc.number || null;
-          docRow.udyam_document_url = doc.url || null;
+          docRow.udyam_document_url = storedUrl || null;
           docRow.udyam_document_name = doc.name || null;
           docRow.udyam_issued_date = doc.issued_date || null;
           docRow.udyam_expiry_date = doc.expiry_date || null;
         }
         if (docType === 'PHARMACIST_CERTIFICATE' && (doc.number || doc.url)) {
           docRow.pharmacist_certificate_document_number = doc.number || null;
-          docRow.pharmacist_certificate_document_url = doc.url || null;
+          docRow.pharmacist_certificate_document_url = storedUrl || null;
           docRow.pharmacist_certificate_document_name = doc.name || null;
           docRow.pharmacist_certificate_issued_date = doc.issued_date || null;
           docRow.pharmacist_certificate_expiry_date = doc.expiry_date || null;
         }
         if (docType === 'PHARMACY_COUNCIL_REGISTRATION' && (doc.number || doc.url)) {
           docRow.pharmacy_council_registration_document_number = doc.number || null;
-          docRow.pharmacy_council_registration_document_url = doc.url || null;
+          docRow.pharmacy_council_registration_document_url = storedUrl || null;
           docRow.pharmacy_council_registration_document_name = doc.name || null;
           docRow.pharmacy_council_registration_type = doc.pharmacy_council_registration_type || null;
           docRow.pharmacy_council_registration_issued_date = doc.issued_date || null;
@@ -546,14 +566,14 @@ export async function POST(req: NextRequest) {
         }
         if (docType === 'BANK_PROOF' && (doc.number || doc.url)) {
           docRow.bank_proof_document_number = doc.number || null;
-          docRow.bank_proof_document_url = doc.url || null;
+          docRow.bank_proof_document_url = storedUrl || null;
           docRow.bank_proof_document_name = doc.name || null;
           docRow.bank_proof_issued_date = doc.issued_date || null;
           docRow.bank_proof_expiry_date = doc.expiry_date || null;
         }
         if (docType === 'OTHER' && (doc.number || doc.url)) {
           docRow.other_document_number = doc.number || null;
-          docRow.other_document_url = doc.url || null;
+          docRow.other_document_url = storedUrl || null;
           docRow.other_document_name = doc.name || null;
           docRow.other_document_type = doc.otherType || doc.type || 'OTHER';
           docRow.other_issued_date = doc.issued_date || null;
@@ -594,35 +614,48 @@ export async function POST(req: NextRequest) {
         contractPdfR2Key = extractR2KeyFromUrl(agreementAcceptance.signedPdfUrl) || null;
       }
 
-      const { error: agreementError } = await db
-        .from('merchant_store_agreement_acceptances')
-        .upsert(
-          [
-            {
-              store_id: storeData.id,
-              template_id: agreementAcceptance.templateId || null,
-              template_key: agreementAcceptance.templateKey || 'DEFAULT_CHILD_ONBOARDING_AGREEMENT',
-              template_version: agreementAcceptance.templateVersion || 'v1',
-              template_snapshot: {
-                ...templateSnapshot,
-                r2_key: contractPdfR2Key, // Store R2 key in snapshot for auto-renewal
-              },
-              contract_pdf_url: agreementAcceptance.signedPdfUrl || agreementAcceptance.templatePdfUrl || null,
-              signer_name: agreementAcceptance.signerName || null,
-              signer_email: agreementAcceptance.signerEmail || null,
-              signer_phone: agreementAcceptance.signerPhone || null,
-              signature_data_url: agreementAcceptance.signatureDataUrl,
-              signature_hash: signatureHash,
-              terms_accepted: !!agreementAcceptance.agreedToTerms,
-              contract_read_confirmed: !!agreementAcceptance.agreedToContract,
-              accepted_at: new Date().toISOString(),
-              accepted_ip: ipAddress,
-              user_agent: userAgent,
-              acceptance_source: 'CHILD_ONBOARDING',
-            },
-          ],
-          { onConflict: 'store_id' }
-        );
+      const commissionFirst = agreementAcceptance.commissionFirstMonthPct != null ? Number(agreementAcceptance.commissionFirstMonthPct) : 0;
+      const commissionSecond = agreementAcceptance.commissionFromSecondMonthPct != null ? Number(agreementAcceptance.commissionFromSecondMonthPct) : 15;
+      const effectiveFrom = agreementAcceptance.agreementEffectiveFrom ? new Date(agreementAcceptance.agreementEffectiveFrom).toISOString() : new Date().toISOString();
+      const effectiveTo = agreementAcceptance.agreementEffectiveTo ? new Date(agreementAcceptance.agreementEffectiveTo).toISOString() : null;
+
+      const basePayload = {
+        store_id: storeData.id,
+        template_id: agreementAcceptance.templateId || null,
+        template_key: agreementAcceptance.templateKey || 'DEFAULT_CHILD_ONBOARDING_AGREEMENT',
+        template_version: agreementAcceptance.templateVersion || 'v1',
+        template_snapshot: {
+          ...templateSnapshot,
+          r2_key: contractPdfR2Key,
+          commission_first_month_pct: commissionFirst,
+          commission_from_second_month_pct: commissionSecond,
+          agreement_effective_from: effectiveFrom,
+          agreement_effective_to: effectiveTo,
+        },
+        contract_pdf_url: agreementAcceptance.signedPdfUrl || agreementAcceptance.templatePdfUrl || null,
+        signer_name: agreementAcceptance.signerName || null,
+        signer_email: agreementAcceptance.signerEmail || null,
+        signer_phone: agreementAcceptance.signerPhone || null,
+        signature_data_url: agreementAcceptance.signatureDataUrl,
+        signature_hash: signatureHash,
+        terms_accepted: !!agreementAcceptance.agreedToTerms,
+        contract_read_confirmed: !!agreementAcceptance.agreedToContract,
+        accepted_at: new Date().toISOString(),
+        accepted_ip: ipAddress,
+        user_agent: userAgent,
+        acceptance_source: 'CHILD_ONBOARDING',
+      };
+      const payloadWithCommission = {
+        ...basePayload,
+        commission_first_month_pct: commissionFirst,
+        commission_from_second_month_pct: commissionSecond,
+        agreement_effective_from: effectiveFrom,
+        agreement_effective_to: effectiveTo,
+      };
+      let agreementError = (await db.from('merchant_store_agreement_acceptances').upsert([payloadWithCommission], { onConflict: 'store_id' })).error;
+      if (agreementError && (agreementError.message?.includes('commission_first_month_pct') || agreementError.message?.includes('does not exist'))) {
+        agreementError = (await db.from('merchant_store_agreement_acceptances').upsert([basePayload], { onConflict: 'store_id' })).error;
+      }
       if (agreementError) throw new Error(agreementError.message);
     }
 

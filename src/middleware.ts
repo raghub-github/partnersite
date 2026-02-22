@@ -58,6 +58,7 @@ export async function middleware(request: NextRequest) {
     const isLoginPage = pathname === "/auth/login" || pathname === "/auth/login-store" || pathname === "/auth/login-store/list";
     const isRegisterPage = pathname === "/auth/register" || pathname.startsWith("/auth/register-");
     const isPublic = isPublicRoute || pathname === "/" || pathname.startsWith("/auth/search");
+    const isPostLoginPage = pathname === "/auth/post-login";
 
     if (pathname.startsWith("/api/") && hasAuthCookie) {
       const cookieWrapper = { get: (name: string) => request.cookies.get(name) ?? undefined };
@@ -145,6 +146,13 @@ export async function middleware(request: NextRequest) {
         updateActivity(cookieManager);
       }
       return response;
+    }
+
+    // No valid session but on post-login: send to login (no error page)
+    if (isPostLoginPage && !session) {
+      const redirectUrl = request.nextUrl.clone();
+      redirectUrl.pathname = "/auth/login";
+      return NextResponse.redirect(redirectUrl);
     }
 
     const protectedPaths = ["/mx", "/auth/store"];

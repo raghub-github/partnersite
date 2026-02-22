@@ -5,6 +5,7 @@ import { MXLayoutWhite } from "@/components/MXLayoutWhite";
 import { R2Image } from "@/components/R2Image";
 import { fetchRestaurantById as fetchStoreById, updateStoreInfo } from "@/lib/database";
 import { MerchantStore } from "@/lib/merchantStore";
+import { getMerchantAssetsPath } from "@/lib/r2-paths";
 import { Toaster, toast } from "sonner";
 import { 
   Building, 
@@ -30,6 +31,9 @@ import {
   Lock,
   Globe,
   Image as ImageIcon,
+  FileCheck,
+  Download,
+  ExternalLink,
 } from "lucide-react";
 import { PageSkeletonProfile } from "@/components/PageSkeleton";
 import { MobileHamburgerButton } from "@/components/MobileHamburgerButton";
@@ -237,6 +241,16 @@ export default function ProfilePage() {
   const [bankAccounts, setBankAccounts] = useState<any[]>([]);
   const [areaManager, setAreaManager] = useState<{ id?: number | null; name: string; email: string; mobile: string } | null>(null);
   const [loadingAreaManager, setLoadingAreaManager] = useState(false);
+  const [agreement, setAgreement] = useState<{
+    contract_pdf_url: string | null;
+    signer_name: string;
+    accepted_at: string;
+    commission_first_month_pct: number | null;
+    commission_from_second_month_pct: number | null;
+    agreement_effective_from: string | null;
+    agreement_effective_to: string | null;
+  } | null>(null);
+  const [agreementLoading, setAgreementLoading] = useState(false);
   const bannerInputRef = useRef<HTMLInputElement>(null);
   const adsInputRef = useRef<HTMLInputElement>(null);
 
@@ -303,6 +317,34 @@ export default function ProfilePage() {
     };
 
     fetchAreaManager();
+  }, [storeId]);
+
+  /* ===== FETCH AGREEMENT (signed contract from onboarding) ===== */
+  useEffect(() => {
+    if (!storeId) {
+      setAgreement(null);
+      return;
+    }
+    setAgreementLoading(true);
+    fetch(`/api/merchant/agreement?storeId=${encodeURIComponent(storeId)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.acceptance) {
+          setAgreement({
+            contract_pdf_url: data.acceptance.contract_pdf_url ?? null,
+            signer_name: data.acceptance.signer_name ?? '—',
+            accepted_at: data.acceptance.accepted_at ?? '',
+            commission_first_month_pct: data.acceptance.commission_first_month_pct ?? null,
+            commission_from_second_month_pct: data.acceptance.commission_from_second_month_pct ?? null,
+            agreement_effective_from: data.acceptance.agreement_effective_from ?? null,
+            agreement_effective_to: data.acceptance.agreement_effective_to ?? null,
+          });
+        } else {
+          setAgreement(null);
+        }
+      })
+      .catch(() => setAgreement(null))
+      .finally(() => setAgreementLoading(false));
   }, [storeId]);
   
   /* ===== FETCH DATA ===== */
@@ -534,10 +576,11 @@ export default function ProfilePage() {
 
   /* ===== R2 UPLOAD (server-side, no Supabase Storage RLS) ===== */
   const uploadFileToR2 = async (file: File, parentFolder: string, filename?: string): Promise<string | null> => {
+    if (!storeId) return null;
     const formData = new FormData();
     formData.append("file", file);
     const ext = file.name.split(".").pop() || "jpg";
-    formData.append("parent", `merchant-assets/${storeId}/${parentFolder}`);
+    formData.append("parent", `${getMerchantAssetsPath(storeId, store?.parent_merchant_id ?? undefined)}/${parentFolder}`);
     formData.append("filename", filename || `${parentFolder}_${Date.now()}.${ext}`);
     const res = await fetch("/api/upload/r2", { method: "POST", body: formData });
     if (!res.ok) {
@@ -984,25 +1027,23 @@ export default function ProfilePage() {
                               <div className="space-y-2">
                                 {areaManager.id != null && (
                                   <div className="flex flex-col">
-                                    <label className="text-xs font-medium text-gray-600 mb-1">AM ID</label>
-                                    <span className="text-sm text-gray-900 font-medium">{areaManager.id}</span>
+                                    <label className="text-xs font-medium text-gray-600 mb-0.5">AM ID</label>
+                                    <span className="text-xs text-gray-900">{areaManager.id}</span>
                                   </div>
                                 )}
                                 <div className="flex flex-col">
-                                  <label className="text-xs font-medium text-gray-600 mb-1">AM Name</label>
-                                  <span className="text-sm text-gray-900 font-medium">
+                                  <label className="text-xs font-medium text-gray-600 mb-0.5">AM Name</label>
+                                  <span className="text-xs text-gray-900 truncate" title={areaManager.name || undefined}>
                                     {areaManager.name || 'Not set'}
                                   </span>
                                 </div>
                                 <div className="flex flex-col">
-                                  <label className="text-xs font-medium text-gray-600 mb-1">AM Mobile</label>
-                                  <span className="text-sm text-gray-900 font-medium">
-                                    {areaManager.mobile || 'Not set'}
-                                  </span>
+                                  <label className="text-xs font-medium text-gray-600 mb-0.5">AM Mobile</label>
+                                  <span className="text-xs text-gray-900">{areaManager.mobile || 'Not set'}</span>
                                 </div>
                                 <div className="flex flex-col">
-                                  <label className="text-xs font-medium text-gray-600 mb-1">AM Email</label>
-                                  <span className="text-sm text-gray-900 font-medium">
+                                  <label className="text-xs font-medium text-gray-600 mb-0.5">AM Email</label>
+                                  <span className="text-xs text-gray-900 truncate" title={areaManager.email || undefined}>
                                     {areaManager.email || 'Not set'}
                                   </span>
                                 </div>
@@ -1228,6 +1269,81 @@ export default function ProfilePage() {
                               <p className="text-xs text-gray-500 text-center py-2">No documents found</p>
                             )}
                           </div>
+                        </div>
+
+                        {/* Agreement contract (signed during onboarding) */}
+                        <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                          <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
+                            <FileCheck size={16} className="text-blue-600" />
+                            Agreement contract
+                          </h3>
+                          <p className="text-xs text-gray-600 mb-3">Partner agreement signed during onboarding. You can view or download the signed contract below.</p>
+                          {agreementLoading ? (
+                            <div className="flex items-center justify-center py-4">
+                              <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-600 border-t-transparent"></div>
+                              <span className="ml-2 text-xs text-gray-500">Loading...</span>
+                            </div>
+                          ) : agreement ? (
+                            <div className="space-y-3">
+                              <div className="bg-white rounded p-2 border border-gray-200 text-xs">
+                                <div className="flex justify-between gap-2">
+                                  <span className="text-gray-600">Signed by</span>
+                                  <span className="font-medium text-gray-900">{agreement.signer_name}</span>
+                                </div>
+                                <div className="flex justify-between gap-2 mt-1">
+                                  <span className="text-gray-600">Accepted on</span>
+                                  <span className="text-gray-900">{agreement.accepted_at ? new Date(agreement.accepted_at).toLocaleDateString('en-IN', { dateStyle: 'medium' }) : '—'}</span>
+                                </div>
+                                {(agreement.commission_first_month_pct != null || agreement.commission_from_second_month_pct != null) && (
+                                  <div className="mt-2 pt-2 border-t border-gray-100">
+                                    <span className="text-gray-600">Commission (as per contract): </span>
+                                    <span className="text-gray-900">
+                                      First month {agreement.commission_first_month_pct ?? 0}%, from second month {agreement.commission_from_second_month_pct ?? 15}% + GST
+                                    </span>
+                                  </div>
+                                )}
+                                {agreement.agreement_effective_from && (
+                                  <div className="flex justify-between gap-2 mt-1">
+                                    <span className="text-gray-600">Effective from</span>
+                                    <span className="text-gray-900">{new Date(agreement.agreement_effective_from).toLocaleDateString('en-IN', { dateStyle: 'medium' })}</span>
+                                  </div>
+                                )}
+                                {agreement.agreement_effective_to && (
+                                  <div className="flex justify-between gap-2 mt-1">
+                                    <span className="text-gray-600">Expiry</span>
+                                    <span className="text-gray-900">{new Date(agreement.agreement_effective_to).toLocaleDateString('en-IN', { dateStyle: 'medium' })}</span>
+                                  </div>
+                                )}
+                              </div>
+                              {agreement.contract_pdf_url ? (
+                                <div className="flex flex-wrap gap-2">
+                                  <a
+                                    href={agreement.contract_pdf_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-medium hover:bg-blue-700"
+                                  >
+                                    <ExternalLink size={14} />
+                                    View contract
+                                  </a>
+                                  <a
+                                    href={agreement.contract_pdf_url}
+                                    download="partner-agreement-signed.pdf"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-gray-700 text-xs font-medium hover:bg-gray-50"
+                                  >
+                                    <Download size={14} />
+                                    Download
+                                  </a>
+                                </div>
+                              ) : (
+                                <p className="text-xs text-amber-600">PDF not available. Contact support if you need a copy.</p>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-gray-500">No agreement record found for this store.</p>
+                          )}
                         </div>
 
                         {/* Bank Details Card - Dynamically show UI data or bank_accounts table data */}
@@ -1531,7 +1647,7 @@ export default function ProfilePage() {
                         
                         {/* ADS IMAGES GRID - 5 fixed boxes */}
                         <div className="grid grid-cols-5 gap-2 mt-3">
-                          {Array.from({ length: 5 }).map((_, index) => {
+                          {Array.from({ length: 5 }).map((_: unknown, index: number) => {
                             const ads = store.ads_images || [];
                             const img = ads[index];
                             const uploadingIndex = index - ads.length;

@@ -19,6 +19,12 @@ function getSupabaseAdmin() {
  */
 export async function GET(request: NextRequest) {
   try {
+    if (!supabaseUrl || !supabaseServiceKey) {
+      return NextResponse.json(
+        { success: false, error: "Server misconfiguration" },
+        { status: 500 }
+      );
+    }
     const merchantParentId = request.nextUrl.searchParams.get("merchantParentId");
     const merchantStoreId = request.nextUrl.searchParams.get("merchantStoreId"); // Store public ID (e.g., GMMC1001)
 
@@ -91,9 +97,10 @@ export async function GET(request: NextRequest) {
       checkedBy: "store_id",
     });
   } catch (e) {
+    const message = e instanceof Error ? e.message : "Server error";
     console.error("[onboarding/payment-status] Error:", e);
     return NextResponse.json(
-      { success: false, error: "Server error" },
+      { success: false, error: message },
       { status: 500 }
     );
   }

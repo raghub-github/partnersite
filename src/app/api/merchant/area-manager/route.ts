@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
 
     const db = getSupabase();
 
-    // 1. Get store with area_manager_id and denormalized am_* fields
+    // 1. Get store area_manager_id and denormalized am_* fields for fallback
     const { data: storeData, error: storeError } = await db
       .from('merchant_stores')
       .select('area_manager_id, am_name, am_mobile, am_email')

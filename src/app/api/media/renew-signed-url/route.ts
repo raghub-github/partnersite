@@ -44,11 +44,11 @@ export async function GET(req: NextRequest) {
         }
         if (path) fileKey = path;
         if (!fileKey) {
-          const match = decoded.match(/(?:menuitems|categories|merchant-assets|tickets)\/[^\s?]+/);
+          const match = decoded.match(/(?:menuitems|categories|merchant-assets|tickets|merchants)\/[^\s?]+/);
           if (match) fileKey = match[0];
         }
       } catch {
-        const match = urlParam.match(/(?:menuitems|categories|merchant-assets|tickets)\/[^\s&]+/);
+        const match = urlParam.match(/(?:menuitems|categories|merchant-assets|tickets|merchants)\/[^\s&]+/);
         if (match) fileKey = decodeURIComponent(match[0]);
       }
     }

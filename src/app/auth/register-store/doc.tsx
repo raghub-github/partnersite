@@ -85,9 +85,9 @@ interface StoreSetupData {
 interface CombinedComponentProps {
   initialDocuments?: Partial<DocumentData> | null;
   initialStoreSetup?: Partial<StoreSetupData> | null;
-  onDocumentComplete?: (documents: DocumentData) => void;
-  /** Called on every "Save & Continue" to persist current doc data (name, id number, signed URL) to DB before moving section. */
-  onDocumentSave?: (documents: DocumentData) => void | Promise<void>;
+  onDocumentComplete?: (documents: DocumentData, savedPatch?: Record<string, unknown>) => void;
+  /** Called on every "Save & Continue" to persist current doc data. Returns the built patch so completion can reuse it (avoids duplicate bank/doc uploads). */
+  onDocumentSave?: (documents: DocumentData) => void | Promise<Record<string, unknown> | undefined>;
   onStoreSetupComplete?: (storeSetup: StoreSetupData) => void;
   /** Called instantly when store hours toggles/slots change to persist to DB. */
   onStoreHoursSave?: (hours: StoreSetupData['store_hours']) => void | Promise<void>;
@@ -251,6 +251,12 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
         pan_image_url: (initialDocuments as any).pan_image_url,
         aadhar_front_url: (initialDocuments as any).aadhar_front_url,
         aadhar_back_url: (initialDocuments as any).aadhar_back_url,
+        fssai_image_url: (initialDocuments as any).fssai_image_url,
+        gst_image_url: (initialDocuments as any).gst_image_url,
+        drug_license_image_url: (initialDocuments as any).drug_license_image_url,
+        pharmacist_certificate_url: (initialDocuments as any).pharmacist_certificate_url,
+        pharmacy_council_registration_url: (initialDocuments as any).pharmacy_council_registration_url,
+        other_document_file_url: (initialDocuments as any).other_document_file_url,
       });
       
       // Always hydrate when step changes to documents, or when documents data changes
@@ -274,14 +280,33 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
           if (typeof initialDocuments.other_document_number === 'string') next.other_document_number = initialDocuments.other_document_number ?? '';
           if (typeof initialDocuments.other_document_name === 'string') next.other_document_name = initialDocuments.other_document_name ?? '';
           if (typeof initialDocuments.other_document_expiry_date === 'string') next.other_document_expiry_date = initialDocuments.other_document_expiry_date ?? '';
-          const docUrlKeys = ['pan_image_url', 'aadhar_front_url', 'aadhar_back_url', 'fssai_image_url', 'gst_image_url', 'drug_license_image_url', 'pharmacist_certificate_url', 'pharmacy_council_registration_url', 'other_document_file_url'] as const;
-          for (const k of docUrlKeys) {
-            if (typeof (initialDocuments as any)[k] === 'string') (next as any)[k] = (initialDocuments as any)[k];
+          const docUrlToFileKey: [string, string][] = [
+            ['pan_image_url', 'pan_image'],
+            ['aadhar_front_url', 'aadhar_front'],
+            ['aadhar_back_url', 'aadhar_back'],
+            ['fssai_image_url', 'fssai_image'],
+            ['gst_image_url', 'gst_image'],
+            ['drug_license_image_url', 'drug_license_image'],
+            ['pharmacist_certificate_url', 'pharmacist_certificate'],
+            ['pharmacy_council_registration_url', 'pharmacy_council_registration'],
+            ['other_document_file_url', 'other_document_file'],
+          ];
+          for (const [urlKey, fileKey] of docUrlToFileKey) {
+            if (typeof (initialDocuments as any)[urlKey] === 'string') {
+              (next as any)[urlKey] = (initialDocuments as any)[urlKey];
+              (next as any)[fileKey] = null;
+            }
           }
           if (initialDocuments.bank && typeof initialDocuments.bank === 'object') {
             next.bank = { ...(prev.bank || {}), ...initialDocuments.bank };
-            if (typeof (initialDocuments.bank as any).bank_proof_file_url === 'string') (next.bank as any).bank_proof_file_url = (initialDocuments.bank as any).bank_proof_file_url;
-            if (typeof (initialDocuments.bank as any).upi_qr_screenshot_url === 'string') (next.bank as any).upi_qr_screenshot_url = (initialDocuments.bank as any).upi_qr_screenshot_url;
+            if (typeof (initialDocuments.bank as any).bank_proof_file_url === 'string') {
+              (next.bank as any).bank_proof_file_url = (initialDocuments.bank as any).bank_proof_file_url;
+              (next.bank as any).bank_proof_file = null;
+            }
+            if (typeof (initialDocuments.bank as any).upi_qr_screenshot_url === 'string') {
+              (next.bank as any).upi_qr_screenshot_url = (initialDocuments.bank as any).upi_qr_screenshot_url;
+              (next.bank as any).upi_qr_file = null;
+            }
           }
           return next;
         });
@@ -602,10 +627,11 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
 
     setDocumentSaving(true);
     try {
-      // Persist current document data to DB on every "Save & Continue" (signed URL, name, id number).
-      if (onDocumentSave) {
-        await onDocumentSave(documents);
-      }
+      const savedPatch = onDocumentSave ? await onDocumentSave(documents) : undefined;
+      const patchArg: Record<string, unknown> | undefined =
+        typeof savedPatch === 'object' && savedPatch !== null && !Array.isArray(savedPatch)
+          ? savedPatch
+          : undefined;
 
       if (activeSection === 'pan') {
         setActiveSection('aadhar');
@@ -616,7 +642,7 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
       } else if (activeSection === 'bank') {
         if (showOtherDocs) setActiveSection('other');
         else {
-          if (onDocumentComplete) onDocumentComplete(documents);
+          if (onDocumentComplete) onDocumentComplete(documents, patchArg);
         }
       } else if (activeSection === 'other') {
         let shouldProceed = true;
@@ -639,9 +665,7 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
         }
         if (shouldProceed) {
           setShowValidationModal(false);
-          if (onDocumentComplete) {
-            onDocumentComplete(documents);
-          }
+          if (onDocumentComplete) onDocumentComplete(documents, patchArg);
         }
       }
     } catch (e) {
@@ -991,8 +1015,14 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
   const removeFile = (fieldName: keyof DocumentData) => {
     const urlKey = getDocUrlKey(String(fieldName));
     setDocuments(prev => {
-      const next = { ...prev, [fieldName]: null };
-      (next as any)[urlKey] = undefined;
+      const next = { ...prev, [fieldName]: null } as DocumentData;
+      (next as any)[urlKey] = null; // explicit null so API and R2 delete
+      if (onDocumentSave) {
+        void Promise.resolve().then((): Record<string, unknown> | undefined => {
+          onDocumentSave!(next);
+          return undefined;
+        });
+      }
       return next;
     });
   };

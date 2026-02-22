@@ -89,7 +89,7 @@ import React, { useState, useEffect, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'next/navigation'
 import { Toaster, toast } from 'sonner'
-import { Plus, Edit2, Trash2, X, Upload, Package, ChevronDown, ChevronUp, Image as ImageIcon, Info, Search } from 'lucide-react'
+import { Plus, Edit2, Trash2, X, Upload, Package, ChevronDown, ChevronUp, Image as ImageIcon, Info, Search, FileText } from 'lucide-react'
 import { MXLayoutWhite } from '@/components/MXLayoutWhite'
 import { MobileHamburgerButton } from '@/components/MobileHamburgerButton'
 import { 
@@ -127,6 +127,45 @@ interface MenuCategory {
 }
 
 const CUSTOMIZATION_VARIANT_LIMIT = 10;
+
+const MENU_CSV_MIN_ROWS = 1;
+const MENU_CSV_MAX_ROWS = 500;
+function validateMenuCsv(file: File): Promise<{ valid: true } | { valid: false; error: string }> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = (reader.result as string) || '';
+      const lines = text.trim().split(/\r?\n/).filter((l) => l.trim().length > 0);
+      if (lines.length === 0) {
+        resolve({ valid: false, error: 'CSV is empty.' });
+        return;
+      }
+      const headers = lines[0].split(/[,;\t]/).map((h) => h.trim().toLowerCase().replace(/^["']|["']$/g, ''));
+      const rowCount = lines.length - 1;
+      if (rowCount < MENU_CSV_MIN_ROWS) {
+        resolve({ valid: false, error: `Minimum ${MENU_CSV_MIN_ROWS} data row(s) required (excluding header).` });
+        return;
+      }
+      if (rowCount > MENU_CSV_MAX_ROWS) {
+        resolve({ valid: false, error: `Maximum ${MENU_CSV_MAX_ROWS} rows allowed. You have ${rowCount}.` });
+        return;
+      }
+      const hasName = ['item_name', 'name'].some((h) => headers.includes(h));
+      const hasPrice = ['price', 'base_price', 'selling_price'].some((h) => headers.includes(h));
+      if (!hasName) {
+        resolve({ valid: false, error: 'CSV must have a column: item_name or name.' });
+        return;
+      }
+      if (!hasPrice) {
+        resolve({ valid: false, error: 'CSV must have a column: price, base_price, or selling_price.' });
+        return;
+      }
+      resolve({ valid: true });
+    };
+    reader.onerror = () => resolve({ valid: false, error: 'Could not read file.' });
+    reader.readAsText(file, 'UTF-8');
+  });
+}
 
 // Menu item image upload rules (production)
 const MENU_ITEM_IMAGE = {
@@ -376,7 +415,7 @@ function ItemForm(props: ItemFormProps) {
   };
 
   const handleDeleteCustomization = (index: number) => {
-    const updatedCustomizations = customizations.filter((_, i) => i !== index);
+    const updatedCustomizations = customizations.filter((_: Customization, i: number) => i !== index);
     setCustomizations(updatedCustomizations);
     setFormData({ ...formData, customizations: updatedCustomizations });
   };
@@ -851,7 +890,7 @@ function ItemForm(props: ItemFormProps) {
                   <span className="text-amber-600 font-normal ml-1">— Max {CUSTOMIZATION_VARIANT_LIMIT} total</span>
                 )}
               </h3>
-              {(formData.variants || []).map((v, idx) => (
+              {(formData.variants || []).map((v: Variant, idx: number) => (
                 <div key={idx} className="flex flex-wrap items-end gap-3 mb-3 p-2.5 bg-gray-50 rounded-lg border border-gray-200">
                   <div className="min-w-[120px]">
                     <label className="text-xs text-gray-600 block mb-0.5">Title *</label>
@@ -865,7 +904,7 @@ function ItemForm(props: ItemFormProps) {
                     <label className="text-xs text-gray-600 block mb-0.5">Price (₹) *</label>
                     <input type="number" min="0" step="0.01" className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value={typeof v.variant_price === 'number' ? v.variant_price : ''} onChange={e => { const vars = [...(formData.variants || [])]; vars[idx] = { ...vars[idx], variant_price: Number(e.target.value) || 0 }; setFormData({ ...formData, variants: vars }); }} placeholder="0" />
                   </div>
-                  <button type="button" onClick={() => { const vars = (formData.variants || []).filter((_, i) => i !== idx); setFormData({ ...formData, variants: vars, has_variants: vars.length > 0 }); }} className="p-1.5 text-red-600 hover:bg-red-50 rounded self-end"><Trash2 size={14} /></button>
+                  <button type="button" onClick={() => { const vars = (formData.variants || []).filter((_: Variant, i: number) => i !== idx); setFormData({ ...formData, variants: vars, has_variants: vars.length > 0 }); }} className="p-1.5 text-red-600 hover:bg-red-50 rounded self-end"><Trash2 size={14} /></button>
                 </div>
               ))}
               <button
@@ -1036,6 +1075,18 @@ function MenuContent() {
     planName?: string;
   } | null>(null);
 
+  const [existingMenuSpreadsheetUrl, setExistingMenuSpreadsheetUrl] = useState<string | null>(null);
+  const [existingMenuImageUrls, setExistingMenuImageUrls] = useState<string[]>([]);
+  const [menuSpreadsheetVerificationStatus, setMenuSpreadsheetVerificationStatus] = useState<string | null>(null);
+  const [menuImageVerificationStatuses, setMenuImageVerificationStatuses] = useState<string[]>([]);
+  const [menuUploadMode, setMenuUploadMode] = useState<'csv' | 'image' | null>(null);
+  const [menuFile, setMenuFile] = useState<File | null>(null);
+  const [menuUploading, setMenuUploading] = useState(false);
+  const [menuReplaceError, setMenuReplaceError] = useState('');
+  const [csvValidationError, setCsvValidationError] = useState('');
+  const [showMenuFileSection, setShowMenuFileSection] = useState(false);
+  const menuFileSectionRef = React.useRef<HTMLDivElement>(null);
+
   const refetchImageCount = React.useCallback(async () => {
     if (!storeId) return;
     try {
@@ -1048,6 +1099,67 @@ function MenuContent() {
       // keep previous count
     }
   }, [storeId]);
+
+  const refetchExistingMenuMedia = React.useCallback(async () => {
+    const storeDbId = (store as { id?: number })?.id;
+    if (storeDbId == null) return;
+    try {
+      const menuRes = await fetch(`/api/auth/store-menu-media-signed?storeDbId=${storeDbId}`);
+      if (menuRes.ok) {
+        const menuData = await menuRes.json();
+        setExistingMenuSpreadsheetUrl(menuData.menuSpreadsheetUrl ?? null);
+        setExistingMenuImageUrls(Array.isArray(menuData.menuImageUrls) ? menuData.menuImageUrls : []);
+        setMenuSpreadsheetVerificationStatus(menuData.menuSpreadsheetVerificationStatus ?? null);
+        setMenuImageVerificationStatuses(Array.isArray(menuData.menuImageVerificationStatuses) ? menuData.menuImageVerificationStatuses : []);
+      }
+    } catch {
+      // keep previous
+    }
+  }, [store]);
+
+  const handleMenuFileUpload = async () => {
+    if (!storeId || !menuUploadMode || !menuFile) {
+      toast.error('Select CSV or image and choose a file.');
+      return;
+    }
+    const storeDbId = (store as { id?: number })?.id;
+    if (storeDbId == null) {
+      toast.error('Store not loaded.');
+      return;
+    }
+    if (menuUploadMode === 'csv') {
+      const validation = await validateMenuCsv(menuFile);
+      if (!validation.valid) {
+        setCsvValidationError(validation.error);
+        return;
+      }
+      setCsvValidationError('');
+    }
+    setMenuReplaceError('');
+    setMenuUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', menuFile);
+      formData.append('storeId', storeId);
+      formData.append('menuUploadMode', menuUploadMode === 'csv' ? 'CSV' : 'IMAGE');
+      const res = await fetch('/api/merchant/menu-upload', { method: 'POST', body: formData });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMenuReplaceError(data?.error || 'Upload failed.');
+        toast.error(data?.error || 'Upload failed.');
+        return;
+      }
+      setMenuFile(null);
+      setMenuUploadMode(null);
+      toast.success('Menu file uploaded. It will replace the previous file. Our team will add items from it.');
+      await refetchExistingMenuMedia();
+    } catch (e) {
+      setMenuReplaceError('Upload failed. Please try again.');
+      toast.error('Upload failed.');
+    } finally {
+      setMenuUploading(false);
+    }
+  };
 
   // Fetch store ID from params or localStorage
   useEffect(() => {
@@ -1134,6 +1246,20 @@ function MenuContent() {
           }
         } catch {
           setPlanLimits(null);
+        }
+
+        const storeDbId = (data as { id?: number })?.id;
+        if (storeDbId != null) {
+          try {
+            const menuRes = await fetch(`/api/auth/store-menu-media-signed?storeDbId=${storeDbId}`);
+            if (menuRes.ok) {
+              const menuData = await menuRes.json();
+              setExistingMenuSpreadsheetUrl(menuData.menuSpreadsheetUrl ?? null);
+              setExistingMenuImageUrls(Array.isArray(menuData.menuImageUrls) ? menuData.menuImageUrls : []);
+            }
+          } catch {
+            // keep defaults
+          }
         }
       } catch (error) {
         console.error('Error loading menu:', error);
@@ -1312,25 +1438,22 @@ function MenuContent() {
     setIsSaving(true);
     try {
       let itemImageUrl = addForm.item_image_url;
-      if (addForm.image) {
-        // Upload image first
+      if (addForm.image && storeId) {
         const formData = new FormData();
         formData.append("file", addForm.image);
-        formData.append("parent", "menuitems");
-        
-        const uploadRes = await fetch("/api/upload/r2", {
+        formData.append("storeId", storeId);
+        const uploadRes = await fetch("/api/merchant/menu-items/upload-image", {
           method: "POST",
           body: formData,
         });
-        
         if (!uploadRes.ok) {
-          setAddError("Image upload failed.");
+          const err = await uploadRes.json().catch(() => ({}));
+          setAddError(err?.error || "Image upload failed.");
           setIsSaving(false);
           return;
         }
-        
         const uploadData = await uploadRes.json();
-        itemImageUrl = uploadData.key || uploadData.url;
+        itemImageUrl = uploadData.key ?? addForm.item_image_url;
         setImagePreview(itemImageUrl);
       }
 
@@ -1463,18 +1586,19 @@ function MenuContent() {
     setIsSaving(true);
     try {
       let itemImageUrl = addForm.item_image_url;
-      if (addForm.image) {
+      if (addForm.image && storeId) {
         const formData = new FormData();
         formData.append('file', addForm.image);
-        formData.append('parent', 'menuitems');
-        const uploadRes = await fetch('/api/upload/r2', { method: 'POST', body: formData });
+        formData.append('storeId', storeId);
+        const uploadRes = await fetch('/api/merchant/menu-items/upload-image', { method: 'POST', body: formData });
         if (!uploadRes.ok) {
-          setAddError('Image upload failed.');
+          const err = await uploadRes.json().catch(() => ({}));
+          setAddError(err?.error || 'Image upload failed.');
           setIsSaving(false);
           return;
         }
         const uploadData = await uploadRes.json();
-        itemImageUrl = uploadData.key || uploadData.url;
+        itemImageUrl = uploadData.key ?? addForm.item_image_url;
         setImagePreview(itemImageUrl);
       }
       const allergensArray = addForm.allergens
@@ -1763,19 +1887,19 @@ function MenuContent() {
     setIsSavingEdit(true);
     try {
       let itemImageUrl = editForm.item_image_url;
-      if (editForm.image) {
+      if (editForm.image && storeId) {
         const formData = new FormData();
         formData.append('file', editForm.image);
-        formData.append('parent', 'menuitems');
-        formData.append('menu_item_id', editingMenuItemId!.toString());
-        const uploadRes = await fetch('/api/upload/r2', { method: 'POST', body: formData });
+        formData.append('storeId', storeId);
+        const uploadRes = await fetch('/api/merchant/menu-items/upload-image', { method: 'POST', body: formData });
         if (!uploadRes.ok) {
-          setEditError('Image upload failed.');
+          const err = await uploadRes.json().catch(() => ({}));
+          setEditError(err?.error || 'Image upload failed.');
           setIsSavingEdit(false);
           return;
         }
         const uploadData = await uploadRes.json();
-        itemImageUrl = uploadData.key || uploadData.url;
+        itemImageUrl = uploadData.key ?? editForm.item_image_url;
         setEditImagePreview(itemImageUrl);
       }
       const allergensArray = editForm.allergens
@@ -1889,19 +2013,19 @@ function MenuContent() {
     setIsSavingEdit(true);
     try {
       let itemImageUrl = editForm.item_image_url;
-      if (editForm.image) {
+      if (editForm.image && storeId) {
         const formData = new FormData();
         formData.append('file', editForm.image);
-        formData.append('parent', 'menuitems');
-        formData.append('menu_item_id', editingMenuItemId!.toString());
-        const uploadRes = await fetch('/api/upload/r2', { method: 'POST', body: formData });
+        formData.append('storeId', storeId);
+        const uploadRes = await fetch('/api/merchant/menu-items/upload-image', { method: 'POST', body: formData });
         if (!uploadRes.ok) {
-          setEditError('Image upload failed.');
+          const err = await uploadRes.json().catch(() => ({}));
+          setEditError(err?.error || 'Image upload failed.');
           setIsSavingEdit(false);
           return;
         }
         const uploadData = await uploadRes.json();
-        itemImageUrl = uploadData.key || uploadData.url;
+        itemImageUrl = uploadData.key ?? editForm.item_image_url;
         setEditImagePreview(itemImageUrl);
       }
       const allergensArray = editForm.allergens
@@ -2149,6 +2273,17 @@ function MenuContent() {
                 <span className="text-xs opacity-90">({menuItems.length}/{planLimits.maxMenuItems})</span>
               )}
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowMenuFileSection(true);
+                setTimeout(() => menuFileSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg border border-amber-600 text-amber-700 bg-white hover:bg-amber-50 transition-colors"
+            >
+              <Upload size={16} />
+              Menu file
+            </button>
           </div>
         </div>
         {/* Stats - compact row */}
@@ -2180,6 +2315,142 @@ function MenuContent() {
             <div className="text-lg font-bold text-blue-600 leading-tight">{categories.length}</div>
           </div>
         </div>
+
+        {/* Menu file (CSV or image) – hidden by default; show when "Menu file" button clicked */}
+        {showMenuFileSection && (
+        <div ref={menuFileSectionRef} className="mx-3 sm:mx-4 mb-3 p-4 bg-amber-50/80 border border-amber-200 rounded-xl">
+          <h3 className="text-sm font-bold text-gray-900 mb-2 flex items-center gap-2">
+            <FileText size={18} className="text-amber-600" />
+            Menu file (CSV or image)
+          </h3>
+          <p className="text-xs text-gray-600 mb-3">
+            Upload a CSV or menu card image. This replaces any file uploaded during onboarding. Our team will add items from it (pending until then).
+          </p>
+          {(existingMenuSpreadsheetUrl || existingMenuImageUrls.length > 0) && (
+            <div className="mb-3">
+              <p className="text-xs font-medium text-gray-700 mb-1">Current file from onboarding:</p>
+              <div className="flex flex-wrap gap-2 items-center">
+                {existingMenuSpreadsheetUrl && (
+                  <span className="inline-flex items-center gap-2 flex-wrap">
+                    <a
+                      href={existingMenuSpreadsheetUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white border border-amber-200 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                    >
+                      <FileText size={14} />
+                      View spreadsheet
+                    </a>
+                    {menuSpreadsheetVerificationStatus === 'PENDING' && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                        Pending verification
+                      </span>
+                    )}
+                    {menuSpreadsheetVerificationStatus === 'VERIFIED' && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 border border-green-200">
+                        Verified
+                      </span>
+                    )}
+                  </span>
+                )}
+                {existingMenuImageUrls.map((url, i) => (
+                  <span key={i} className="inline-flex items-center gap-2">
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white border border-amber-200 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                    >
+                      <ImageIcon size={14} />
+                      Image {i + 1}
+                    </a>
+                    {menuImageVerificationStatuses[i] === 'PENDING' && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                        Pending
+                      </span>
+                    )}
+                    {menuImageVerificationStatuses[i] === 'VERIFIED' && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 border border-green-200">
+                        Verified
+                      </span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => { setMenuUploadMode('csv'); setMenuFile(null); setCsvValidationError(''); setMenuReplaceError(''); }}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium ${menuUploadMode === 'csv' ? 'bg-amber-600 text-white' : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'}`}
+              >
+                Upload CSV
+              </button>
+              <button
+                type="button"
+                onClick={() => { setMenuUploadMode('image'); setMenuFile(null); setMenuReplaceError(''); }}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium ${menuUploadMode === 'image' ? 'bg-amber-600 text-white' : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'}`}
+              >
+                Upload image
+              </button>
+            </div>
+            {menuUploadMode && (
+              <>
+                <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer">
+                  <Upload size={16} />
+                  {menuFile ? menuFile.name : 'Choose file'}
+                  <input
+                    type="file"
+                    accept={menuUploadMode === 'csv' ? '.csv,text/csv,application/csv' : 'image/*'}
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      setMenuFile(f || null);
+                      setCsvValidationError('');
+                      setMenuReplaceError('');
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={handleMenuFileUpload}
+                  disabled={!menuFile || menuUploading}
+                  className="px-4 py-1.5 rounded-lg bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {menuUploading ? (
+                    <>
+                      <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Uploading…
+                    </>
+                  ) : (
+                    'Replace menu file'
+                  )}
+                </button>
+              </>
+            )}
+          </div>
+          {menuUploadMode === 'csv' && (
+            <p className="text-[11px] text-gray-500 mt-2">
+              CSV format: header row with at least <strong>item_name</strong> (or name) and <strong>price</strong> (or base_price / selling_price). Min {MENU_CSV_MIN_ROWS} row(s), max {MENU_CSV_MAX_ROWS} rows.
+            </p>
+          )}
+          {(csvValidationError || menuReplaceError) && (
+            <p className="text-xs text-red-600 mt-2">{csvValidationError || menuReplaceError}</p>
+          )}
+          <div className="mt-2 pt-2 border-t border-amber-200">
+            <button
+              type="button"
+              onClick={() => setShowMenuFileSection(false)}
+              className="text-xs text-gray-500 hover:text-gray-700"
+            >
+              Hide this section
+            </button>
+          </div>
+        </div>
+        )}
+
         {/* Search and Categories - single row, sticky All + horizontal scroll */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-3 sm:px-4 pb-3">
           <div className="flex-1 max-w-sm min-w-0 order-2 sm:order-1">

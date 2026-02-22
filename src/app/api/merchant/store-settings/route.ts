@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { getAuditActor, logMerchantAudit } from '@/lib/audit-merchant';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -36,13 +37,13 @@ export async function GET(req: NextRequest) {
 
     const { data, error } = await db
       .from('merchant_store_settings')
-      .select('self_delivery, platform_delivery')
+      .select('self_delivery, platform_delivery, delivery_priority')
       .eq('store_id', internalId)
       .single();
 
     if (error) {
       if (error.code === 'PGRST116') {
-        return NextResponse.json({ self_delivery: false, platform_delivery: true });
+        return NextResponse.json({ self_delivery: false, platform_delivery: true, delivery_priority: 'GATIMITRA' });
       }
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
@@ -50,6 +51,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       self_delivery: data?.self_delivery ?? false,
       platform_delivery: data?.platform_delivery ?? true,
+      delivery_priority: data?.delivery_priority ?? (data?.self_delivery ? 'SELF' : 'GATIMITRA'),
     });
   } catch (err) {
     console.error('[store-settings GET]', err);
@@ -101,6 +103,23 @@ export async function PATCH(req: NextRequest) {
       const { error: insertErr } = await db.from('merchant_store_settings').insert(payload);
       if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 });
     }
+
+    const actor = await getAuditActor();
+    const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || null;
+    const ua = req.headers.get('user-agent') || null;
+    const modeLabel = self_delivery === true ? 'Self delivery' : 'GatiMitra (platform) delivery';
+    await logMerchantAudit(db, {
+      entity_type: 'STORE',
+      entity_id: internalId,
+      action: 'UPDATE',
+      action_field: 'DELIVERY_MODE',
+      old_value: { self_delivery: self_delivery === true ? false : true },
+      new_value: { self_delivery: !!self_delivery, platform_delivery: platform_delivery !== false },
+      ...actor,
+      ip_address: ip,
+      user_agent: ua,
+      audit_metadata: { description: `Delivery mode changed to ${modeLabel}` },
+    });
 
     return NextResponse.json({ success: true });
   } catch (err) {

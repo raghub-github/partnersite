@@ -180,7 +180,7 @@ export async function POST(req: NextRequest) {
           is_active: false,
           updated_at: now.toISOString(),
         })
-        .eq('id', activeSubscription.id)
+        .eq('id', activeSubscription.id);
 
       if (updateOldError) {
         console.error('[upgrade] mark old UPGRADED failed', updateOldError)
@@ -188,6 +188,7 @@ export async function POST(req: NextRequest) {
           { success: false, error: 'Failed to deactivate current plan' },
           { status: 500 }
         )
+      }
     }
 
     const { data: newSub, error: insertError } = await supabase
@@ -210,7 +211,7 @@ export async function POST(req: NextRequest) {
         next_billing_date: newExpiry.toISOString(),
       })
       .select('id')
-      .single()
+      .single();
 
     if (insertError) {
       console.error('[upgrade] create new subscription failed', insertError)
@@ -218,7 +219,7 @@ export async function POST(req: NextRequest) {
         await supabase
           .from('merchant_subscriptions')
           .update({ subscription_status: 'ACTIVE', is_active: true, updated_at: now.toISOString() })
-          .eq('id', activeSubscription.id)
+          .eq('id', activeSubscription.id);
       }
       return NextResponse.json(
         { success: false, error: insertError.message },
@@ -242,7 +243,7 @@ export async function POST(req: NextRequest) {
       billing_period_start: now.toISOString(),
       billing_period_end: newExpiry.toISOString(),
       notes: creditToApply > 0 ? `Upgrade: ₹${creditToApply} credit applied from previous plan` : 'Plan upgrade',
-    })
+    });
 
     return NextResponse.json({
       success: true,
@@ -250,12 +251,12 @@ export async function POST(req: NextRequest) {
       message: 'Upgrade successful. Your new plan is active.',
       creditApplied: creditToApply,
       amountCharged: amountToCharge,
-    })
+    });
   } catch (e: unknown) {
-    console.error('[upgrade]', e)
+    console.error('[upgrade]', e);
     return NextResponse.json(
       { success: false, error: e instanceof Error ? e.message : 'Server error' },
       { status: 500 }
-    )
+    );
   }
 }

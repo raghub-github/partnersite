@@ -15,23 +15,6 @@ import { MobileHamburgerButton } from '@/components/MobileHamburgerButton'
 
 export const dynamic = 'force-dynamic'
 
-// Razorpay types
-declare global {
-  interface Window {
-    Razorpay?: new (options: {
-      key: string;
-      amount: number;
-      order_id: string;
-      name: string;
-      description: string;
-      handler: (res: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) => void;
-      prefill?: { email?: string; contact?: string };
-      theme?: { color?: string };
-      on?: (event: string, handler: (response: any) => void) => void;
-    }) => { open: () => void };
-  }
-}
-
 // Day types
 type DayType = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday'
 
@@ -59,10 +42,10 @@ function StoreSettingsContent() {
   const [isLoading, setIsLoading] = useState(true)
   const [storeId, setStoreId] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
-  const [activeTab, setActiveTab] = useState<'plans' | 'timings' | 'operations' | 'menu-capacity' | 'delivery' | 'pos' | 'notifications' | 'audit' | 'gatimitra'>(() => {
+  const [activeTab, setActiveTab] = useState<'plans' | 'premium' | 'timings' | 'operations' | 'menu-capacity' | 'delivery' | 'riders' | 'pos' | 'notifications' | 'audit' | 'gatimitra'>(() => {
     if (typeof window !== 'undefined') {
       const urlTab = new URLSearchParams(window.location.search).get('tab')
-      const validTabs = ['plans', 'timings', 'operations', 'menu-capacity', 'delivery', 'pos', 'notifications', 'audit', 'gatimitra']
+      const validTabs = ['plans', 'premium', 'timings', 'operations', 'menu-capacity', 'delivery', 'riders', 'pos', 'notifications', 'audit', 'gatimitra']
       if (urlTab && validTabs.includes(urlTab)) return urlTab as any
     }
     return 'plans'
@@ -144,6 +127,16 @@ function StoreSettingsContent() {
   const [selfDeliveryEnabled, setSelfDeliveryEnabled] = useState(false)
   const [deliveryRadiusKm, setDeliveryRadiusKm] = useState(5)
   const [showSelfDeliveryConfirm, setShowSelfDeliveryConfirm] = useState(false)
+
+  // Self-delivery riders (Settings > Riders tab)
+  type RiderRow = { id: number; rider_name: string; rider_mobile: string; rider_email: string | null; vehicle_number: string | null; is_primary: boolean; is_active: boolean; has_active_orders: boolean; created_at: string; updated_at: string }
+  const [riders, setRiders] = useState<RiderRow[]>([])
+  const [ridersLoading, setRidersLoading] = useState(false)
+  const [riderForm, setRiderForm] = useState<{ rider_name: string; rider_mobile: string; rider_email: string; vehicle_number: string }>({ rider_name: '', rider_mobile: '', rider_email: '', vehicle_number: '' })
+  const [riderEditId, setRiderEditId] = useState<number | null>(null)
+  const [riderSaving, setRiderSaving] = useState(false)
+  const [riderDeleteId, setRiderDeleteId] = useState<number | null>(null)
+  const [riderDeleting, setRiderDeleting] = useState(false)
   
   // Notifications & Alerts state
   const [smsAlerts, setSmsAlerts] = useState(true)
@@ -579,6 +572,96 @@ function StoreSettingsContent() {
     loadMenuStats()
   }, [storeId])
 
+  // Load self-delivery riders when Riders tab is active
+  useEffect(() => {
+    if (!storeId || activeTab !== 'riders') return
+    setRidersLoading(true)
+    fetch(`/api/merchant/self-delivery-riders?storeId=${encodeURIComponent(storeId)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.riders) setRiders(data.riders)
+        else setRiders([])
+      })
+      .catch(() => setRiders([]))
+      .finally(() => setRidersLoading(false))
+  }, [storeId, activeTab])
+
+  const fetchRiders = () => {
+    if (!storeId) return
+    setRidersLoading(true)
+    fetch(`/api/merchant/self-delivery-riders?storeId=${encodeURIComponent(storeId)}`)
+      .then((res) => res.json())
+      .then((data) => { if (data.riders) setRiders(data.riders) })
+      .finally(() => setRidersLoading(false))
+  }
+
+  const saveRider = async (editId: number | null) => {
+    if (!storeId) return
+    const name = riderForm.rider_name.trim()
+    const mobile = riderForm.rider_mobile.trim()
+    if (!name || !mobile) {
+      toast.error('Name and mobile are required')
+      return
+    }
+    setRiderSaving(true)
+    try {
+      if (editId !== null) {
+        const res = await fetch(`/api/merchant/self-delivery-riders/${editId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ storeId, rider_name: name, rider_mobile: mobile, rider_email: riderForm.rider_email.trim() || undefined, vehicle_number: riderForm.vehicle_number.trim() || undefined }),
+        })
+        const data = await res.json()
+        if (res.ok && data.success) {
+          toast.success('Rider updated')
+          setRiderEditId(null)
+          setRiderForm({ rider_name: '', rider_mobile: '', rider_email: '', vehicle_number: '' })
+          fetchRiders()
+        } else {
+          toast.error(data.error || 'Failed to update rider')
+        }
+      } else {
+        const res = await fetch('/api/merchant/self-delivery-riders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ storeId, rider_name: name, rider_mobile: mobile, rider_email: riderForm.rider_email.trim() || undefined, vehicle_number: riderForm.vehicle_number.trim() || undefined }),
+        })
+        const data = await res.json()
+        if (res.ok && data.success) {
+          toast.success('Rider added')
+          setRiderForm({ rider_name: '', rider_mobile: '', rider_email: '', vehicle_number: '' })
+          fetchRiders()
+        } else {
+          toast.error(data.error || 'Failed to add rider')
+        }
+      }
+    } catch {
+      toast.error('Request failed')
+    } finally {
+      setRiderSaving(false)
+    }
+  }
+
+  const deleteRider = async (id: number) => {
+    if (!storeId) return
+    setRiderDeleting(true)
+    try {
+      const res = await fetch(`/api/merchant/self-delivery-riders/${id}?storeId=${encodeURIComponent(storeId)}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        toast.success('Rider removed')
+        setRiderDeleteId(null)
+        fetchRiders()
+      } else {
+        toast.error(data.error || 'Failed to delete rider')
+      }
+    } catch {
+      toast.error('Request failed')
+    } finally {
+      setRiderDeleting(false)
+    }
+  }
+
   const savePosIntegration = async () => {
     if (!storeId || !posPartner.trim()) {
       toast.error('Please choose your partner POS')
@@ -1010,8 +1093,8 @@ function StoreSettingsContent() {
           }
         },
         prefill: {
-          email: store?.email || '',
-          contact: store?.phone || '',
+          email: store?.store_email || '',
+          contact: store?.store_phones?.[0] ?? '',
         },
       });
 
@@ -1969,6 +2052,17 @@ function StoreSettingsContent() {
                     Delivery
                   </button>
                   <button
+                    onClick={() => setActiveTab('riders')}
+                    className={`px-4 py-2 font-semibold text-xs border-b-2 transition-colors flex items-center gap-1 whitespace-nowrap ${
+                      activeTab === 'riders'
+                        ? 'border-orange-600 text-orange-700'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    <Users size={14} />
+                    Riders
+                  </button>
+                  <button
                     onClick={() => setActiveTab('pos')}
                     className={`px-4 py-2 font-semibold text-xs border-b-2 transition-colors flex items-center gap-1 whitespace-nowrap ${
                       activeTab === 'pos'
@@ -2595,6 +2689,141 @@ function StoreSettingsContent() {
                       />
                     </div>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'riders' && (
+              <div className="space-y-4 sm:space-y-6">
+                <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 shadow-sm">
+                  <h3 className="text-lg font-bold text-gray-900 mb-2">Self-Delivery Riders</h3>
+                  <p className="text-sm text-gray-600 mb-4">Add and manage riders for self delivery. Edit and delete are disabled when a rider has an active order.</p>
+                  <div className="mb-4 p-4 bg-gray-50 rounded-lg space-y-3">
+                    <p className="text-sm font-semibold text-gray-800">{riderEditId !== null ? 'Edit rider' : 'Add new rider'}</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <input
+                        type="text"
+                        placeholder="Rider name *"
+                        value={riderForm.rider_name}
+                        onChange={(e) => setRiderForm((f) => ({ ...f, rider_name: e.target.value }))}
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Mobile *"
+                        value={riderForm.rider_mobile}
+                        onChange={(e) => setRiderForm((f) => ({ ...f, rider_mobile: e.target.value }))}
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Email (optional)"
+                        value={riderForm.rider_email}
+                        onChange={(e) => setRiderForm((f) => ({ ...f, rider_email: e.target.value }))}
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Vehicle number (optional)"
+                        value={riderForm.vehicle_number}
+                        onChange={(e) => setRiderForm((f) => ({ ...f, vehicle_number: e.target.value }))}
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => saveRider(riderEditId)}
+                        disabled={riderSaving}
+                        className="px-4 py-2 bg-orange-600 text-white rounded-lg text-sm font-medium hover:bg-orange-700 disabled:opacity-50"
+                      >
+                        {riderSaving ? 'Saving...' : riderEditId !== null ? 'Update rider' : 'Add rider'}
+                      </button>
+                      {riderEditId !== null && (
+                        <button
+                          type="button"
+                          onClick={() => { setRiderEditId(null); setRiderForm({ rider_name: '', rider_mobile: '', rider_email: '', vehicle_number: '' }); }}
+                          className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50"
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {ridersLoading ? (
+                    <p className="text-sm text-gray-500">Loading riders…</p>
+                  ) : riders.length === 0 ? (
+                    <p className="text-sm text-gray-500">No riders added yet. Add one above.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-gray-200 text-left">
+                            <th className="py-2 pr-4 font-semibold text-gray-700">ID</th>
+                            <th className="py-2 pr-4 font-semibold text-gray-700">Name</th>
+                            <th className="py-2 pr-4 font-semibold text-gray-700">Mobile</th>
+                            <th className="py-2 pr-4 font-semibold text-gray-700">Email</th>
+                            <th className="py-2 pr-4 font-semibold text-gray-700">Status</th>
+                            <th className="py-2 text-right font-semibold text-gray-700">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {riders.map((r) => (
+                            <tr key={r.id} className="border-b border-gray-100">
+                              <td className="py-2 pr-4 font-mono text-gray-600">{r.id}</td>
+                              <td className="py-2 pr-4 font-medium">{r.rider_name}</td>
+                              <td className="py-2 pr-4">{r.rider_mobile}</td>
+                              <td className="py-2 pr-4 text-gray-600">{r.rider_email || '—'}</td>
+                              <td className="py-2 pr-4">
+                                {r.has_active_orders ? <span className="text-amber-600 font-medium">Active order</span> : <span className="text-gray-500">—</span>}
+                              </td>
+                              <td className="py-2 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => { setRiderEditId(r.id); setRiderForm({ rider_name: r.rider_name, rider_mobile: r.rider_mobile, rider_email: r.rider_email || '', vehicle_number: r.vehicle_number || '' }); }}
+                                  disabled={r.has_active_orders}
+                                  className="mr-2 text-orange-600 hover:text-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setRiderDeleteId(r.id)}
+                                  disabled={r.has_active_orders}
+                                  className="text-red-600 hover:text-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium"
+                                >
+                                  Delete
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {riderDeleteId !== null && (
+                    <div className="mt-4 p-4 bg-red-50 rounded-lg flex items-center justify-between gap-4">
+                      <span className="text-sm text-gray-800">Delete this rider?</span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => deleteRider(riderDeleteId)}
+                          disabled={riderDeleting}
+                          className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+                        >
+                          {riderDeleting ? 'Deleting...' : 'Yes, delete'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRiderDeleteId(null)}
+                          disabled={riderDeleting}
+                          className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -3603,6 +3832,17 @@ function StoreSettingsContent() {
                 >
                   <Package size={18} />
                   Delivery Settings
+                </button>
+                <button
+                  onClick={() => setActiveTab('riders')}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                    activeTab === 'riders'
+                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <Users size={18} />
+                  Self-Delivery Riders
                 </button>
                 <button
                   onClick={() => setActiveTab('pos')}

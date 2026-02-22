@@ -65,7 +65,7 @@ export async function PATCH(
 
     const { data: existing, error: fetchErr } = await db
       .from('orders_food')
-      .select('id, order_id, order_status, merchant_store_id')
+      .select('id, order_id, order_status, merchant_store_id, food_items_total_value')
       .eq('id', orderIdNum)
       .single();
 
@@ -121,6 +121,40 @@ export async function PATCH(
     if (error) {
       console.error('[food-orders PATCH] Error:', error);
       return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    // When order transitions to DELIVERED, credit merchant wallet (ORDER_EARNING) so dashboard/payments show correct earnings
+    const didJustDeliver = newStatus === 'DELIVERED' && currentStatus !== 'DELIVERED';
+    if (didJustDeliver) {
+      const amount = Number(existing.food_items_total_value ?? 0);
+      if (amount > 0) {
+        try {
+          const { data: walletId, error: rpcWalletErr } = await db.rpc('get_or_create_merchant_wallet', {
+            p_merchant_store_id: existing.merchant_store_id,
+          });
+          if (rpcWalletErr || walletId == null) {
+            console.error('[food-orders PATCH] get_or_create_merchant_wallet:', rpcWalletErr);
+          } else {
+            const idempotencyKey = `order_earning_${orderIdNum}`;
+            const { error: creditErr } = await db.rpc('merchant_wallet_credit', {
+              p_wallet_id: walletId,
+              p_amount: amount,
+              p_category: 'ORDER_EARNING',
+              p_balance_type: 'AVAILABLE',
+              p_reference_type: 'ORDER',
+              p_reference_id: orderIdNum,
+              p_idempotency_key: idempotencyKey,
+              p_description: `Order #${existing.order_id} delivered`,
+              p_metadata: {},
+            });
+            if (creditErr) {
+              console.error('[food-orders PATCH] merchant_wallet_credit:', creditErr);
+            }
+          }
+        } catch (e) {
+          console.error('[food-orders PATCH] wallet credit failed:', e);
+        }
+      }
     }
 
     return NextResponse.json({ order: data });

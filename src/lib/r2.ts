@@ -20,18 +20,6 @@ function getR2Config() {
   const R2_REGION = process.env.R2_REGION?.trim();
   const R2_ENDPOINT = process.env.R2_ENDPOINT?.trim();
 
-  // Debug: Log R2 env variables (mask secrets)
-  if (typeof window === 'undefined') {
-    console.log('[R2][DEBUG] ENV', {
-      R2_ACCESS_KEY: R2_ACCESS_KEY ? R2_ACCESS_KEY.slice(0, 4) + '...' : undefined,
-      R2_SECRET_KEY: R2_SECRET_KEY ? R2_SECRET_KEY.slice(0, 4) + '...' : undefined,
-      R2_BUCKET_NAME,
-      R2_REGION,
-      R2_ENDPOINT,
-      R2_PUBLIC_BASE_URL: process.env.R2_PUBLIC_BASE_URL,
-    });
-  }
-
   // Only validate R2 credentials on the server, not in the browser
   const isServer = typeof window === 'undefined';
   if (isServer) {
@@ -161,20 +149,58 @@ export function extractR2KeyFromUrl(imageUrl: string): string | null {
   }
 }
 
+/**
+ * Converts an R2 key or proxy URL into a storable document URL.
+ * - If value is already a full URL (https://...), returns as-is.
+ * - If value is a key or proxy URL, returns /api/attachments/proxy?key=... (fallback for non-async paths).
+ */
+export function toStoredDocumentUrl(value: string | null | undefined): string | null {
+  if (!value || typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes("://")) return trimmed;
+  if (trimmed.startsWith("/api/attachments/proxy")) return trimmed;
+  const key = trimmed.replace(/^\/+/, "");
+  return `/api/attachments/proxy?key=${encodeURIComponent(key)}`;
+}
+
+/** Default expiry for stored document signed URLs (7 days). */
+const DEFAULT_DOCUMENT_SIGNED_EXPIRY_SEC = 86400 * 7;
+
+/**
+ * Returns a proper signed URL for storage in DB (same format as upload response).
+ * - Full URL (https://...): returned as-is.
+ * - Key or proxy URL: generates R2 signed URL (7-day expiry) so "View document" links work.
+ */
+export async function toStoredDocumentUrlSigned(
+  value: string | null | undefined,
+  expiresInSeconds = DEFAULT_DOCUMENT_SIGNED_EXPIRY_SEC
+): Promise<string | null> {
+  if (!value || typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) return trimmed;
+  const key = extractR2KeyFromUrl(trimmed) || trimmed.replace(/^\/+/, "");
+  if (!key) return null;
+  try {
+    return await getR2SignedUrl(key, expiresInSeconds);
+  } catch {
+    return null;
+  }
+}
+
 export async function deleteFromR2(key: string): Promise<void> {
   if (!key) {
     throw new Error('Key is required for deletion');
   }
   const s3 = getS3Client();
   const bucketName = getBucketName();
-  console.log('[R2][DEBUG] Deleting from R2', { key, bucketName });
   const command = new DeleteObjectCommand({
     Bucket: bucketName,
     Key: key,
   });
   try {
-    const result = await s3.send(command);
-    console.log('[R2][DEBUG] Delete result', result);
+    await s3.send(command);
   } catch (err) {
     console.error('[R2][ERROR] Delete failed', err);
     throw err;

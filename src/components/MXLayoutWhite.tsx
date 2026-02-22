@@ -61,7 +61,7 @@ export const MXLayoutWhite: React.FC<MXLayoutWhiteProps> = ({
       />
       <main className={`flex-1 flex flex-col overflow-hidden h-full relative z-0 transition-[margin] duration-200 ${effectiveCollapsed ? (isRight ? 'mr-0 md:mr-16' : 'ml-0 md:ml-16') : (isRight ? 'mr-0 md:mr-64' : 'ml-0 md:ml-64')}`}>
         <ParentBlockedBanner />
-        <div className="bg-white flex-1 overflow-hidden flex flex-col min-h-0">
+        <div className="bg-white flex-1 overflow-y-auto overflow-x-hidden flex flex-col min-h-0 scroll-smooth">
           {children}
         </div>
       </main>

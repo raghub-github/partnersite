@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Store, Mail, Phone, User, Loader2, ArrowRight, CheckCircle, MapPin, Image } from "lucide-react";
@@ -9,6 +9,8 @@ import { ENABLE_PHONE_OTP_REGISTER } from "@/lib/auth/phone-otp-config";
 import { supabase } from "@/lib/supabase";
 
 type Step = 1 | 2 | 3;
+
+const RESEND_OTP_COOLDOWN_SEC = 60; // Resend OTP button becomes active after this many seconds
 
 function normalizePhone(input: string): string {
   const digits = input.replace(/\D/g, "");
@@ -20,6 +22,35 @@ export default function RegisterPage() {
   const [step, setStep] = useState<Step>(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
+  const [resendCooldown, setResendCooldown] = useState(0); // Cooldown in seconds (email)
+  const [mobileResendCooldown, setMobileResendCooldown] = useState(0); // Cooldown for Resend SMS
+
+  // Cooldown timer effect (email)
+  useEffect(() => {
+    if (resendCooldown > 0) {
+      const timer = setInterval(() => {
+        setResendCooldown((prev) => {
+          if (prev <= 1) {
+            clearInterval(timer);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [resendCooldown]);
+
+  // Cooldown timer for mobile Resend SMS
+  useEffect(() => {
+    if (mobileResendCooldown > 0) {
+      const timer = setInterval(() => {
+        setMobileResendCooldown((prev) => (prev <= 1 ? 0 : prev - 1));
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [mobileResendCooldown]);
 
   // Step 1: email OTP
   const [email, setEmail] = useState("");
@@ -67,10 +98,23 @@ export default function RegisterPage() {
       }
       const result = await requestEmailOTP(em);
       if (!result.success) {
-        setError(result.error || "Failed to send OTP to email.");
+        if (result.error === "EMAIL_RATE_LIMIT_EXCEEDED") {
+          setError(
+            "Email rate limit exceeded. Supabase limits email OTP requests to prevent spam. Please wait 5 minutes before requesting a new code, or try again later."
+          );
+          setResendCooldown(300); // 5 minute cooldown to prevent hitting Supabase rate limits
+          setSuccessMessage("");
+        } else {
+          const errMsg = typeof result.error === "string" ? result.error : "Failed to send OTP to email.";
+          setError(errMsg);
+          setSuccessMessage("");
+        }
         return;
       }
       setEmailOtpSent(true);
+      setSuccessMessage("");
+      setError("");
+      setResendCooldown(RESEND_OTP_COOLDOWN_SEC);
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {
@@ -90,7 +134,13 @@ export default function RegisterPage() {
     try {
       const result = await verifyEmailOTP(em, emailOtp.trim());
       if (!result.success) {
-        setError(result.error || "Invalid or expired code.");
+        const errorMsg = result.error || "Invalid or expired code.";
+        // Provide helpful message for expired tokens
+        if (errorMsg.toLowerCase().includes("expired") || errorMsg.toLowerCase().includes("invalid")) {
+          setError("The verification code has expired or is invalid. Please click 'Resend OTP' to get a new code.");
+        } else {
+          setError(errorMsg);
+        }
         return;
       }
       const uid = result.data?.session?.user?.id;
@@ -140,8 +190,29 @@ export default function RegisterPage() {
         return;
       }
       setMobileOtpSent(true);
+      setMobileResendCooldown(RESEND_OTP_COOLDOWN_SEC);
     } catch {
       setError("Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendMobileOtp = async () => {
+    if (mobileResendCooldown > 0) return;
+    const ten = normalizePhone(mobile);
+    if (ten.length !== 10) return;
+    setError("");
+    setLoading(true);
+    try {
+      const result = await requestPhoneOTP(`+91${ten}`);
+      if (!result.success) {
+        setError(result.error || "Failed to resend OTP. Please try again.");
+        return;
+      }
+      setMobileResendCooldown(RESEND_OTP_COOLDOWN_SEC);
+    } catch {
+      setError("Failed to resend OTP. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -186,7 +257,7 @@ export default function RegisterPage() {
     try {
       const result = await verifyPhoneOTP(`+91${ten}`, mobileOtp.trim());
       if (!result.success) {
-        setError(result.error || "Invalid or expired OTP.");
+        setError(typeof result.error === "string" ? result.error : "Invalid or expired OTP.");
         return;
       }
       setStep(3);
@@ -256,7 +327,7 @@ export default function RegisterPage() {
       }
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || "Registration failed.");
+        setError(typeof data.error === "string" ? data.error : "Registration failed.");
         setLoading(false);
         return;
       }
@@ -292,77 +363,90 @@ export default function RegisterPage() {
   const isSmsError = error && /sms|provider|configured|dlt/i.test(error);
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 bg-[#f0f4f8]">
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(59,130,246,0.12),transparent)]" />
-      <div className="relative w-full max-w-md md:max-w-xl rounded-2xl bg-white shadow-[0_4px_24px_rgba(0,0,0,0.06)] border border-slate-200/80 overflow-hidden">
-        <div className="px-6 pt-6 pb-2 flex items-start justify-between gap-4">
-          <div className="flex-1">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-900">
-                <Store className="h-6 w-6 text-white" />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold text-slate-900 tracking-tight">Merchant Registration</h1>
-                <p className="text-slate-500 text-sm">
-                  {ENABLE_PHONE_OTP_REGISTER
-                    ? "Email & mobile OTP, then details"
-                    : "Email OTP, mobile, then details"}
-                </p>
-              </div>
+    <div className="min-h-screen flex items-center justify-center p-4 sm:p-6 bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/40 relative overflow-hidden">
+      {/* Background accents */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_-30%,rgba(99,102,241,0.15),transparent)]" />
+      <div className="absolute top-0 right-0 w-[40%] h-[40%] bg-gradient-to-bl from-blue-400/10 to-transparent rounded-full blur-3xl" />
+      <div className="absolute bottom-0 left-0 w-[30%] h-[30%] bg-gradient-to-tr from-indigo-400/10 to-transparent rounded-full blur-3xl" />
+
+      <div className="relative w-full max-w-lg rounded-3xl bg-white/90 backdrop-blur-xl shadow-xl shadow-slate-200/50 border border-slate-200/60 overflow-hidden">
+        {/* Header with gradient strip */}
+        <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 px-6 pt-6 pb-5">
+          <div className="flex items-center gap-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/20">
+              <Store className="h-7 w-7 text-white" />
             </div>
-            <div className="flex gap-2 mt-2">
-              {[1, 2, 3].map((s) => (
-                <div
-                  key={s}
-                  className={`h-1 flex-1 rounded-full transition-colors ${step >= s ? "bg-blue-600" : "bg-slate-200"}`}
-                />
-              ))}
+            <div>
+              <h1 className="text-xl font-bold text-white tracking-tight">Merchant Registration</h1>
+              <p className="text-slate-300 text-sm mt-0.5">
+                {ENABLE_PHONE_OTP_REGISTER ? "Email & mobile OTP, then details" : "Email OTP, mobile, then details"}
+              </p>
             </div>
+          </div>
+          {/* Step indicator */}
+          <div className="flex gap-2 mt-4">
+            {[1, 2, 3].map((s) => (
+              <div
+                key={s}
+                className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${step >= s ? "bg-white/90" : "bg-white/20"}`}
+              />
+            ))}
           </div>
         </div>
 
-        <div className="px-6 pb-6 pt-4">
+        <div className="px-6 pb-6 pt-6">
         {error && (
-          <div className="mb-4 p-3.5 rounded-xl bg-red-50 border border-red-200/80 text-red-800 text-sm">
-            {error}
+          <div className="mb-4 p-4 rounded-2xl bg-red-50/90 border border-red-200/80 text-red-800 text-sm">
+            {typeof error === "string" ? error : "Something went wrong. Please try again."}
+          </div>
+        )}
+        {successMessage && (
+          <div className="mb-4 p-4 rounded-2xl bg-emerald-50/90 border border-emerald-200/80 text-emerald-800 text-sm">
+            {successMessage}
           </div>
         )}
 
         {/* Step 1: Email → OTP */}
         {step === 1 && (
-          <div className="space-y-4">
+          <div className="space-y-5">
             {!emailOtpSent ? (
-              <form onSubmit={handleSendEmailOtp} className="space-y-4">
+              <form onSubmit={handleSendEmailOtp} className="space-y-5">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Email (Gmail or any)</label>
-                  <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Email address</label>
+                  <div className="relative group">
+                    <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
                     <input
                       type="email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="you@example.com"
                       required
-                      className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      className="w-full pl-12 pr-4 py-3 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 bg-slate-50/50 transition-shadow placeholder:text-slate-400"
                     />
                   </div>
-                  <p className="text-xs text-slate-500 mt-1">We’ll send an 8-digit verification code to your email.</p>
+                  <p className="text-xs text-slate-500 mt-2">We’ll send an 8-digit verification code to your email.</p>
                 </div>
                 <button
                   type="submit"
-                  disabled={loading}
-                  className="w-full py-3 rounded-xl font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                  disabled={loading || resendCooldown > 0}
+                  className="w-full py-3.5 rounded-2xl font-semibold text-white bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/25 transition-all"
                 >
-                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Send OTP to email"}
+                  {loading ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : resendCooldown > 0 ? (
+                    `Wait ${resendCooldown}s`
+                  ) : (
+                    "Send OTP to email"
+                  )}
                 </button>
               </form>
             ) : (
-              <form onSubmit={handleVerifyEmailOtp} className="space-y-4">
-                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-700">
-                  Code sent to <strong>{email.trim().toLowerCase()}</strong>. Enter the 8-digit code from your email.
+              <form onSubmit={handleVerifyEmailOtp} className="space-y-5">
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 text-sm text-slate-700">
+                  Code sent to <strong className="text-slate-900">{email.trim().toLowerCase()}</strong>. Enter the 8-digit code from your email.
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Email verification code</label>
+                  <label className="block text-sm font-semibold text-slate-700 mb-2">Verification code</label>
                   <input
                     type="text"
                     inputMode="numeric"
@@ -371,25 +455,85 @@ export default function RegisterPage() {
                     onChange={(e) => setEmailOtp(e.target.value.replace(/\D/g, "").slice(0, 8))}
                     placeholder="00000000"
                     maxLength={8}
-                    className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-center text-lg tracking-widest focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-4 py-3.5 border border-slate-200 rounded-2xl text-center text-xl tracking-[0.4em] font-medium focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 bg-slate-50/50"
                   />
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => { setEmailOtpSent(false); setEmailOtp(""); setError(""); }}
-                    className="py-2.5 px-4 rounded-xl border border-slate-300 text-slate-700 text-sm font-medium"
+                    onClick={() => { setEmailOtpSent(false); setEmailOtp(""); setError(""); setSuccessMessage(""); setResendCooldown(0); }}
+                    className="py-2.5 px-4 rounded-xl border border-slate-200 text-slate-600 text-sm font-medium hover:bg-slate-50 hover:border-slate-300 transition-colors"
                   >
                     Change email
                   </button>
                   <button
+                    type="button"
+                    onClick={async (e) => {
+                      e.preventDefault();
+                      if (resendCooldown > 0) return;
+                      setError("");
+                      setSuccessMessage("");
+                      setEmailOtp("");
+                      setLoading(true);
+                      try {
+                        const em = email.trim().toLowerCase();
+                        if (!em || !/^\S+@\S+\.\S+$/.test(em)) {
+                          setError("Invalid email address.");
+                          setLoading(false);
+                          return;
+                        }
+                        const result = await requestEmailOTP(em);
+                        if (!result.success) {
+                          if (result.error === "EMAIL_RATE_LIMIT_EXCEEDED") {
+                            setError(
+                              "Email rate limit exceeded. Please wait 5 minutes before requesting a new code."
+                            );
+                            setResendCooldown(300);
+                            setSuccessMessage("");
+                          } else {
+                            setError(typeof result.error === "string" ? result.error : "Failed to resend OTP. Please try again.");
+                            setSuccessMessage("");
+                          }
+                          return;
+                        }
+                        setSuccessMessage("New verification code sent! Please check your email.");
+                        setError("");
+                        setResendCooldown(RESEND_OTP_COOLDOWN_SEC);
+                      } catch {
+                        setError("Something went wrong. Please try again.");
+                        setSuccessMessage("");
+                      } finally {
+                        setLoading(false);
+                      }
+                    }}
+                    disabled={loading || resendCooldown > 0}
+                    className={`py-2.5 px-4 rounded-xl border text-sm font-medium flex items-center gap-1.5 transition-all ${
+                      resendCooldown > 0
+                        ? "border-slate-200 bg-slate-50 text-slate-500 cursor-not-allowed"
+                        : "border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:border-indigo-400"
+                    }`}
+                  >
+                    {loading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : resendCooldown > 0 ? (
+                      <>Resend OTP in {resendCooldown}s</>
+                    ) : (
+                      "Resend OTP"
+                    )}
+                  </button>
+                  <button
                     type="submit"
                     disabled={loading || emailOtp.length < 8}
-                    className="flex-1 py-3 rounded-xl font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                    className="flex-1 min-w-[140px] py-3 rounded-2xl font-semibold text-white bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/25 transition-all"
                   >
                     {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Verify & continue"}
                   </button>
                 </div>
+                {resendCooldown > 0 && (
+                  <p className="text-xs text-slate-500 text-center">
+                    You can request a new code in <span className="font-medium text-slate-700">{resendCooldown}</span> seconds.
+                  </p>
+                )}
               </form>
             )}
           </div>
@@ -398,7 +542,7 @@ export default function RegisterPage() {
         {/* Step 2: Mobile (collect only when OTP disabled; otherwise OTP verify) */}
         {step === 2 && (
           <div className="space-y-4">
-            <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg p-2">
+            <div className="flex items-center gap-2 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-2xl p-3">
               <CheckCircle className="w-4 h-4 flex-shrink-0" />
               <span>Email verified: {verifiedEmail}</span>
             </div>
@@ -444,7 +588,7 @@ export default function RegisterPage() {
                       className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                     />
                   </div>
-                  <p className="text-xs text-slate-500 mt-1">We’ll send a 6-digit OTP via SMS (MSG91).</p>
+                  <p className="text-xs text-slate-500 mt-1">We’ll send a 6-digit OTP via SMS.</p>
                 </div>
                 <button
                   type="submit"
@@ -453,16 +597,18 @@ export default function RegisterPage() {
                 >
                   {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Send OTP to mobile"}
                 </button>
-                <p className="text-xs text-slate-500 text-center">
-                  OTP requires DLT. Can&apos;t receive SMS?{" "}
-                  <button
-                    type="button"
-                    onClick={(e) => { e.preventDefault(); handleMobileContinueWithoutOtp({ preventDefault: () => {} } as React.FormEvent); }}
-                    className="text-blue-600 hover:underline font-medium"
-                  >
-                    Skip mobile verification
-                  </button>
-                </p>
+                {!ENABLE_PHONE_OTP_REGISTER && (
+                  <p className="text-xs text-slate-500 text-center">
+                    OTP requires DLT. Can&apos;t receive SMS?{" "}
+                    <button
+                      type="button"
+                      onClick={(e) => { e.preventDefault(); handleMobileContinueWithoutOtp({ preventDefault: () => {} } as React.FormEvent); }}
+                      className="text-blue-600 hover:underline font-medium"
+                    >
+                      Skip mobile verification
+                    </button>
+                  </p>
+                )}
               </form>
             ) : (
               <form onSubmit={handleVerifyMobileOtp} className="space-y-4">
@@ -485,7 +631,7 @@ export default function RegisterPage() {
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    onClick={() => { setMobileOtpSent(false); setMobileOtp(""); setError(""); }}
+                    onClick={() => { setMobileOtpSent(false); setMobileOtp(""); setError(""); setMobileResendCooldown(0); }}
                     className="py-2.5 px-4 rounded-xl border border-slate-300 text-slate-700 text-sm font-medium"
                   >
                     Change number
@@ -498,16 +644,33 @@ export default function RegisterPage() {
                     {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Verify & continue"}
                   </button>
                 </div>
-                <p className="text-xs text-slate-500 text-center">
+                <p className="text-sm text-slate-600 text-center">
                   Didn&apos;t receive OTP?{" "}
-                  <button
-                    type="button"
-                    onClick={(e) => { e.preventDefault(); handleMobileContinueWithoutOtp({ preventDefault: () => {} } as React.FormEvent); }}
-                    className="text-blue-600 hover:underline font-medium"
-                  >
-                    Skip mobile verification
-                  </button>
+                  {mobileResendCooldown > 0 ? (
+                    <span className="text-slate-500">Resend SMS in {mobileResendCooldown}s</span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleResendMobileOtp}
+                      disabled={loading}
+                      className="text-blue-600 hover:underline font-medium disabled:opacity-50"
+                    >
+                      Resend SMS
+                    </button>
+                  )}
                 </p>
+                {!ENABLE_PHONE_OTP_REGISTER && (
+                  <p className="text-xs text-slate-500 text-center">
+                    Can&apos;t receive SMS?{" "}
+                    <button
+                      type="button"
+                      onClick={(e) => { e.preventDefault(); handleMobileContinueWithoutOtp({ preventDefault: () => {} } as React.FormEvent); }}
+                      className="text-blue-600 hover:underline font-medium"
+                    >
+                      Skip mobile verification
+                    </button>
+                  </p>
+                )}
               </form>
             )}
             <button
@@ -523,7 +686,7 @@ export default function RegisterPage() {
         {/* Step 3: Full parent details — responsive */}
         {step === 3 && (
           <form onSubmit={handleSubmitDetails} className="space-y-5">
-            <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg p-2">
+            <div className="flex items-center gap-2 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-2xl p-3">
               <CheckCircle className="w-4 h-4 flex-shrink-0" />
               <span>{ENABLE_PHONE_OTP_REGISTER ? "Email & mobile verified" : "Email verified, mobile added"}</span>
             </div>
@@ -718,15 +881,17 @@ export default function RegisterPage() {
           </form>
         )}
 
-        <p className="mt-6 text-center text-sm text-slate-600">
-          Already registered?{" "}
-          <Link href="/auth/login" className="font-medium text-blue-600 hover:text-blue-700 hover:underline">
-            Login
-          </Link>
-        </p>
-        <p className="mt-2 text-center text-sm text-slate-500">
-          <Link href="/auth" className="text-slate-500 hover:text-slate-700 hover:underline">Back to home</Link>
-        </p>
+        <div className="mt-8 pt-6 border-t border-slate-200/80 space-y-2">
+          <p className="text-center text-sm text-slate-600">
+            Already registered?{" "}
+            <Link href="/auth/login" className="font-semibold text-indigo-600 hover:text-indigo-700 hover:underline">
+              Login
+            </Link>
+          </p>
+          <p className="text-center text-sm text-slate-500">
+            <Link href="/auth" className="text-slate-500 hover:text-slate-700 hover:underline transition-colors">Back to home</Link>
+          </p>
+        </div>
         </div>
       </div>
     </div>

@@ -1,6 +1,6 @@
 'use client'
 
-import { Crown, Clock, Power, ChefHat, Package, Smartphone, Bell, Activity } from 'lucide-react'
+import { Crown, Clock, Power, ChefHat, Package, Users, Smartphone, Bell, Activity } from 'lucide-react'
 
 interface MobileTabsProps {
   activeTab: string
@@ -14,6 +14,7 @@ export function MobileTabs({ activeTab, onTabChange }: MobileTabsProps) {
     { id: 'operations', label: 'Operations', icon: Power },
     { id: 'menu-capacity', label: 'Menu', icon: ChefHat },
     { id: 'delivery', label: 'Delivery', icon: Package },
+    { id: 'riders', label: 'Riders', icon: Users },
     { id: 'pos', label: 'POS', icon: Smartphone },
     { id: 'notifications', label: 'Alerts', icon: Bell },
     { id: 'audit', label: 'Audit', icon: Activity },

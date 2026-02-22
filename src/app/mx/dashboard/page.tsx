@@ -26,7 +26,9 @@ import {
   Loader2,
   Calendar,
   SlidersHorizontal,
-  ChevronUp
+  ChevronUp,
+  Wallet,
+  IndianRupee
 } from 'lucide-react'
 import {
   LineChart,
@@ -54,6 +56,7 @@ import { useMerchantSession } from '@/context/MerchantSessionContext';
 import { PageSkeletonDashboard } from '@/components/PageSkeleton';
 import { createClient } from '@/lib/supabase/client';
 import { MobileHamburgerButton } from '@/components/MobileHamburgerButton';
+import { useMerchantWallet, useSelfDeliveryRiders } from '@/hooks/useMerchantApi';
 
 export const dynamic = 'force-dynamic'
 
@@ -224,6 +227,8 @@ function DashboardContent() {
   // Store Status & Delivery Mode (synced with store-operations API / merchant_store_availability)
   const [isStoreOpen, setIsStoreOpen] = useState(true)
   const [mxDeliveryEnabled, setMxDeliveryEnabled] = useState(false)
+  const { data: selfDeliveryRidersData = [], isLoading: selfDeliveryRidersLoading } = useSelfDeliveryRiders(storeId, mxDeliveryEnabled)
+  const selfDeliveryRiders = selfDeliveryRidersData
   const [openingTime, setOpeningTime] = useState('09:00')
   const [closingTime, setClosingTime] = useState('23:00')
   const [todayDate, setTodayDate] = useState('')
@@ -288,6 +293,12 @@ function DashboardContent() {
   const [chartDateTo, setChartDateTo] = useState('')
   const [chartOrderType, setChartOrderType] = useState('all')
   const [statusLog, setStatusLog] = useState<{ id: string | number; action: string; action_field?: string | null; restriction_type?: string | null; close_reason?: string | null; performed_by_name: string | null; performed_by_id: string | number | null; performed_by_email: string | null; created_at: string; type?: 'status' | 'settings' }[]>([])
+
+  const { data: walletData, isLoading: walletLoading } = useMerchantWallet(storeId)
+  const walletAvailableBalance = walletData?.available_balance ?? null
+  const walletTodayEarning = walletData?.today_earning ?? 0
+  const walletYesterdayEarning = walletData?.yesterday_earning ?? 0
+  const walletPendingBalance = walletData?.pending_balance ?? 0
 
   // Get store ID and default stats date (today)
   useEffect(() => {
@@ -1069,32 +1080,50 @@ function DashboardContent() {
                 </div>
               </div>
 
-              {/* Three compact cards: Ordering mode | Store Status | Delivery status */}
+              {/* Three compact cards: Wallet (replaces Ordering mode) | Store Status | Delivery status */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {/* Ordering mode */}
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm hover:shadow-md transition-shadow p-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <div className="p-1.5 rounded-lg bg-orange-500/10">
-                        <Monitor size={16} className="text-orange-600" />
+                {/* Wallet & Earnings – in place of Ordering mode card */}
+                <div className="bg-gradient-to-br from-emerald-50/90 to-green-50/70 rounded-xl border border-emerald-200/80 shadow-sm hover:shadow-md transition-shadow p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="p-1.5 rounded-lg bg-emerald-500/20">
+                      <Wallet size={16} className="text-emerald-700" />
+                    </div>
+                    <p className="text-[10px] font-semibold text-gray-600 uppercase">Wallet &amp; Earnings</p>
+                  </div>
+                  {walletLoading ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      {[1, 2, 3, 4].map((i) => (
+                        <div key={i} className="h-10 bg-gray-100 rounded animate-pulse" />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+                      <div>
+                        <p className="text-[9px] font-medium text-gray-500 uppercase">Available</p>
+                        <p className="text-sm font-bold text-emerald-800">
+                          ₹{walletAvailableBalance != null ? Number(walletAvailableBalance).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+                        </p>
                       </div>
                       <div>
-                        <p className="text-[10px] font-semibold text-gray-500 uppercase">Ordering mode</p>
-                        <p className="text-xs font-bold text-gray-900 truncate max-w-[120px]">
-                          {orderMode === 'dashboard' ? 'GatiMitra Orders' : 'POS'}
+                        <p className="text-[9px] font-medium text-gray-500 uppercase">Today</p>
+                        <p className="text-sm font-bold text-orange-700">
+                          ₹{Number(walletTodayEarning).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] font-medium text-gray-500 uppercase">Yesterday</p>
+                        <p className="text-sm font-bold text-slate-700">
+                          ₹{Number(walletYesterdayEarning).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[9px] font-medium text-gray-500 uppercase">Pending</p>
+                        <p className="text-sm font-bold text-violet-700">
+                          ₹{Number(walletPendingBalance).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </p>
                       </div>
                     </div>
-                    <button
-                      onClick={handleSwitchOrderMode}
-                      className="text-[10px] font-semibold text-orange-600 hover:text-orange-700 px-2 py-1 rounded-lg border border-orange-200 hover:bg-orange-50"
-                    >
-                      Switch
-                    </button>
-                  </div>
-                  <p className="text-[10px] text-gray-500 mt-2">
-                    {orderMode === 'dashboard' ? 'Receiving in GatiMitra' : 'Via POS'}
-                  </p>
+                  )}
                 </div>
 
                 {/* Store Status – accountability, restriction badges, color coding */}
@@ -1200,30 +1229,64 @@ function DashboardContent() {
                   </div>
                 </div>
 
-                {/* Delivery status */}
+                {/* Delivery mode: clear GatiMitra (default) vs Self delivery toggle + riders when Self */}
                 <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm hover:shadow-md transition-shadow p-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <div className="p-1.5 rounded-lg bg-violet-500/10">
-                        <Truck size={16} className="text-violet-600" />
-                      </div>
-                      <div>
-                        <p className="text-[10px] font-semibold text-gray-500 uppercase">Delivery mode</p>
-                        <p className="text-xs font-bold text-gray-900">
-                          {mxDeliveryEnabled ? 'Self delivery' : 'GatiMitra Delivery'}
-                        </p>
-                      </div>
+                  <p className="text-[10px] font-semibold text-gray-500 uppercase mb-2">Delivery mode</p>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`text-xs font-semibold shrink-0 ${!mxDeliveryEnabled ? 'text-violet-700' : 'text-gray-400'}`}>GatiMitra</span>
+                      <button
+                        type="button"
+                        onClick={handleMXDeliveryToggle}
+                        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${mxDeliveryEnabled ? 'bg-orange-500' : 'bg-gray-300'}`}
+                        aria-label={mxDeliveryEnabled ? 'Switch to GatiMitra delivery' : 'Switch to Self delivery'}
+                      >
+                        <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform transition-transform ${mxDeliveryEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                      </button>
+                      <span className={`text-xs font-semibold shrink-0 ${mxDeliveryEnabled ? 'text-orange-700' : 'text-gray-400'}`}>Self</span>
                     </div>
-                    <button
-                      onClick={handleMXDeliveryToggle}
-                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${mxDeliveryEnabled ? 'bg-orange-500' : 'bg-gray-300'}`}
-                    >
-                      <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform ${mxDeliveryEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                    </button>
+                    <p className="text-[10px] text-gray-500 truncate">
+                      {mxDeliveryEnabled ? 'Your riders' : 'Platform riders'}
+                    </p>
                   </div>
-                  <p className="text-[10px] text-gray-500 mt-2">
-                    {mxDeliveryEnabled ? 'Your riders' : 'Platform riders'}
-                  </p>
+                  {mxDeliveryEnabled && (
+                    <div className="mt-3 pt-3 border-t border-gray-100">
+                      {selfDeliveryRidersLoading ? (
+                        <p className="text-[10px] text-gray-500">Loading riders…</p>
+                      ) : selfDeliveryRiders.length === 0 ? (
+                        <>
+                          <p className="text-xs text-amber-700 mb-1">Add your first rider to use self delivery.</p>
+                          <Link
+                            href={storeId ? `/mx/store-settings?storeId=${encodeURIComponent(storeId)}&tab=riders` : '/mx/store-settings'}
+                            className="text-xs font-medium text-orange-600 hover:text-orange-700"
+                          >
+                            Add rider in Settings →
+                          </Link>
+                        </>
+                      ) : (
+                        <>
+                          <ul className="space-y-1.5">
+                            {selfDeliveryRiders.slice(0, 2).map((r) => (
+                              <li key={r.id} className="text-[10px] text-gray-700 flex items-center gap-2 flex-wrap">
+                                <span className="font-mono text-gray-500">#{r.id}</span>
+                                <span className="font-medium">{r.rider_name}</span>
+                                <span className="text-gray-500">{r.rider_mobile}</span>
+                              </li>
+                            ))}
+                          </ul>
+                          {selfDeliveryRiders.length > 2 && (
+                            <p className="text-[10px] text-gray-500 mt-1">+{selfDeliveryRiders.length - 2} more</p>
+                          )}
+                          <Link
+                            href={storeId ? `/mx/store-settings?storeId=${encodeURIComponent(storeId)}&tab=riders` : '/mx/store-settings'}
+                            className="text-[10px] font-medium text-orange-600 hover:text-orange-700 mt-1 inline-block"
+                          >
+                            Manage all riders →
+                          </Link>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 

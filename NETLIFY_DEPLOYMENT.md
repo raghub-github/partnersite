@@ -46,6 +46,12 @@ RAZORPAY_KEY_SECRET
 RAZORPAY_WEBHOOK_SECRET
 ```
 
+#### Auth redirect (Google login on production):
+- **`NEXT_PUBLIC_APP_URL`**: Set to your production site URL (e.g. `https://your-app.netlify.app`). This ensures after Google sign-in the user is redirected back to your deployed site, not localhost. Leave unset for local dev.
+
+#### Optional – store location step:
+- **`NEXT_PUBLIC_DISABLE_CURRENT_LOCATION`**: Set to `true` to hide the “Use current location” button on the store address step (avoids unreliable browser/IP geolocation; users can still use address search).
+
 #### Important Notes:
 - For `NEXTAUTH_URL`: Use your Netlify domain (e.g., `https://your-app.netlify.app`)
 - For `NEXTAUTH_SECRET`: Generate a new secure secret for production (not the dev one)
@@ -84,11 +90,23 @@ Here's a checklist of all variables you need to add:
 - [ ] NEXT_PUBLIC_R2_PUBLIC_BASE_URL
 - [ ] GOOGLE_CLIENT_ID
 - [ ] GOOGLE_CLIENT_SECRET
+- [ ] NEXT_PUBLIC_APP_URL (production site URL, e.g. https://your-app.netlify.app — for Google login redirect)
 - [ ] NEXTAUTH_URL (update for production)
 - [ ] NEXTAUTH_SECRET (generate new for production)
 - [ ] RAZORPAY_KEY_ID
 - [ ] RAZORPAY_KEY_SECRET
 - [ ] RAZORPAY_WEBHOOK_SECRET
+
+## Google login redirecting to localhost
+
+If after Google sign-in users are sent to `http://localhost:3000`:
+
+1. **Set `NEXT_PUBLIC_APP_URL`** in Netlify (and redeploy) to your production URL, e.g. `https://your-app.netlify.app`.
+2. **Supabase Dashboard** → Authentication → URL Configuration:
+   - **Site URL**: Set to your production URL (e.g. `https://your-app.netlify.app`).
+   - **Redirect URLs**: Add both:
+     - `https://your-app.netlify.app/auth/callback`
+     - `http://localhost:3000/auth/callback` (for local dev)
 
 ## Troubleshooting
 

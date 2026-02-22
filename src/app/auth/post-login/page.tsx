@@ -33,8 +33,7 @@ type ResolveData = {
 
 export default function PostLoginPage() {
   const router = useRouter();
-  const [status, setStatus] = useState<"loading" | "home" | "error">("loading");
-  const [errorMessage, setErrorMessage] = useState("");
+  const [status, setStatus] = useState<"loading" | "home">("loading");
   const [data, setData] = useState<ResolveData | null>(null);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -49,27 +48,27 @@ export default function PostLoginPage() {
 
         if (cancelled) return;
         if (!res.ok || !result.success) {
-          setStatus("error");
-          const errorMsg = result.success === false ? (result as any).error ?? "Session invalid. Please login again." : "Could not load your account.";
-          setErrorMessage(errorMsg);
-          
-          // If it's a 403 error (merchant not found), clear the session to prevent loops
-          if (res.status === 403) {
-            try {
-              await fetch("/api/auth/logout", { method: "POST" });
-            } catch (logoutError) {
-              console.warn("Failed to clear session:", logoutError);
-            }
+          // Session expired, invalid, or API error: clear and redirect to login (no error page)
+          try {
+            await fetch("/api/auth/logout", { method: "POST" });
+          } catch {
+            // ignore
           }
+          window.location.href = "/auth/login";
           return;
         }
 
         setData(result);
         setStatus("home");
-      } catch (e) {
+      } catch {
         if (!cancelled) {
-          setStatus("error");
-          setErrorMessage("Something went wrong. Please try again.");
+          // Network or other error: redirect to login so user can try again
+          try {
+            await fetch("/api/auth/logout", { method: "POST" });
+          } catch {
+            // ignore
+          }
+          window.location.href = "/auth/login";
         }
       }
     }
@@ -117,32 +116,6 @@ export default function PostLoginPage() {
             <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
           </div>
           <p className="text-sm font-medium text-slate-700">Loading your account...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (status === "error") {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 px-4">
-        <div className="w-full max-w-md bg-white/95 backdrop-blur rounded-2xl shadow-xl border border-slate-200 p-6 sm:p-8 text-center space-y-4">
-          <p className="text-red-600 text-sm">{errorMessage}</p>
-          <button 
-            onClick={async () => {
-              try {
-                // Clear session first
-                await fetch("/api/auth/logout", { method: "POST" });
-              } catch (e) {
-                console.warn("Logout failed:", e);
-              } finally {
-                // Redirect to login regardless
-                window.location.href = "/auth/login";
-              }
-            }}
-            className="inline-block py-3 px-6 rounded-xl font-semibold text-white bg-blue-600 hover:bg-blue-700 cursor-pointer"
-          >
-            Back to login
-          </button>
         </div>
       </div>
     );

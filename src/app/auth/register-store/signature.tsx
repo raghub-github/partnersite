@@ -2,7 +2,8 @@
 
 import { useRef, useState, useCallback, useEffect, useMemo } from "react";
 import { ChevronLeft, Upload, Trash2, Loader2 } from "lucide-react";
-import { buildContractText, buildStructuredContract, type ContractData } from "./agreement";
+import { buildContractText, buildStructuredContract, escapePdfText, sanitizeTextForPdf, type ContractData } from "./agreement";
+import { getOnboardingR2Path } from "@/lib/r2-paths";
 
 interface SignatureStepPageProps {
   step1: any;
@@ -259,7 +260,9 @@ export default function SignatureStepPage({
 
       const logoUrl = typeof logoUrlProp === "string" && logoUrlProp.trim()
         ? logoUrlProp
-        : (typeof process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL === "string" ? process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL : "");
+        : (typeof process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL === "string" && process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL
+            ? process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL
+            : "/logo.png");
       let logoSrc = "";
       if (logoUrl) {
         if (logoUrl.startsWith("http") || logoUrl.startsWith("data:")) {
@@ -289,28 +292,28 @@ export default function SignatureStepPage({
       doc.setFont("helvetica", "normal");
       doc.setFontSize(10);
       const approvedDate = new Date().toLocaleString("en-IN", { dateStyle: "long", timeStyle: "short" });
-      doc.text("Reference: Partner Agreement – " + (step1?.store_name || "Store"), margin, y);
+      doc.text(escapePdfText("Reference: Partner Agreement – " + (step1?.store_name || "Store")), margin, y);
       y += lineH;
       doc.text("Approved / Signed on: " + approvedDate, margin, y);
       y += lineH;
       doc.text("Status: Approved", margin, y);
       y += lineH;
-      doc.text("Signatory: " + (signerName || "—"), margin, y);
+      doc.text(escapePdfText("Signatory: " + (signerName || "—")), margin, y);
       y += lineH + 4;
       doc.setFont("helvetica", "bold");
-      doc.text("RESTAURANT PARTNER ENROLMENT FORM (\"FORM\")", margin, y);
+      doc.text(escapePdfText("RESTAURANT PARTNER ENROLMENT FORM (\"FORM\")"), margin, y);
       y += headH;
       doc.setFont("helvetica", "normal");
       const introLines = [
-        `Effective Date: ${structured.intro.effectiveDate}`,
-        `Restaurant Name: ${structured.intro.storeName}`,
-        `Legal Entity Name: ${structured.intro.ownerName}`,
-        `Address: ${structured.intro.address}`,
-        `Contact: ${structured.intro.contactPerson} | ${structured.intro.phone} | ${structured.intro.email}`,
+        `Effective Date: ${sanitizeTextForPdf(structured.intro.effectiveDate)}`,
+        `Restaurant Name: ${sanitizeTextForPdf(structured.intro.storeName)}`,
+        `Legal Entity Name: ${sanitizeTextForPdf(structured.intro.ownerName)}`,
+        `Address: ${sanitizeTextForPdf(structured.intro.address)}`,
+        `Contact: ${sanitizeTextForPdf(structured.intro.contactPerson)} | ${sanitizeTextForPdf(structured.intro.phone)} | ${sanitizeTextForPdf(structured.intro.email)}`,
       ];
       introLines.forEach((line) => {
         checkNewPage(lineH);
-        doc.text(line, margin, y);
+        doc.text(escapePdfText(line), margin, y);
         y += lineH;
       });
       y += 3;
@@ -321,11 +324,11 @@ export default function SignatureStepPage({
       y += headH;
       doc.setFont("helvetica", "normal");
       structured.definitions.forEach((d) => {
-        const defLine = d.term + ": " + d.meaning;
+        const defLine = sanitizeTextForPdf(d.term) + ": " + sanitizeTextForPdf(d.meaning);
         const wrapped = doc.splitTextToSize(defLine, pageW - margin * 2 - 2);
         wrapped.forEach((line: string) => {
           checkNewPage(smallH);
-          doc.text(line, margin + 2, y);
+          doc.text(escapePdfText(line), margin + 2, y);
           y += smallH;
         });
         y += 1;
@@ -336,25 +339,25 @@ export default function SignatureStepPage({
         checkNewPage(headH + 5);
         doc.setFont("helvetica", "bold");
         doc.setFontSize(10);
-        doc.text(sec.title, margin, y);
+        doc.text(escapePdfText(sanitizeTextForPdf(sec.title)), margin, y);
         y += headH;
         doc.setFont("helvetica", "normal");
         if (sec.bullets) {
           sec.bullets.forEach((b) => {
-            const wrapped = doc.splitTextToSize("• " + b, pageW - margin * 2 - 4);
+            const wrapped = doc.splitTextToSize("• " + sanitizeTextForPdf(b), pageW - margin * 2 - 4);
             wrapped.forEach((line: string) => {
               checkNewPage(smallH);
-              doc.text(line, margin + 4, y);
+              doc.text(escapePdfText(line), margin + 4, y);
               y += smallH;
             });
           });
         }
         if (sec.paragraphs) {
           sec.paragraphs.forEach((p) => {
-            const wrapped = doc.splitTextToSize(p, pageW - margin * 2);
+            const wrapped = doc.splitTextToSize(sanitizeTextForPdf(p), pageW - margin * 2);
             wrapped.forEach((line: string) => {
               checkNewPage(smallH);
-              doc.text(line, margin, y);
+              doc.text(escapePdfText(line), margin, y);
               y += smallH;
             });
           });
@@ -367,7 +370,7 @@ export default function SignatureStepPage({
       doc.text("Annexure A - Commission and Charges", margin, y);
       y += headH;
       doc.setFont("helvetica", "normal");
-      doc.text(structured.annexureA.description, margin, y);
+      doc.text(escapePdfText(sanitizeTextForPdf(structured.annexureA.description)), margin, y);
       y += lineH + 2;
       const aHeaders = structured.annexureA.table.headers;
       const aRows = structured.annexureA.table.rows;
@@ -389,8 +392,9 @@ export default function SignatureStepPage({
         x = margin;
         row.forEach((cell) => {
           doc.rect(x, y - 4, aColW, aRowH);
-          const text = doc.splitTextToSize(cell, aColW - 4);
-          doc.text(text[0] || "—", x + 2, y + 0.5);
+          const safe = sanitizeTextForPdf(cell);
+          const text = doc.splitTextToSize(safe, aColW - 4);
+          doc.text(escapePdfText(text[0] || "—"), x + 2, y + 0.5);
           x += aColW;
         });
         y += aRowH;
@@ -421,8 +425,9 @@ export default function SignatureStepPage({
         x = margin;
         row.forEach((cell) => {
           doc.rect(x, y - 4, bColW, bRowH);
-          const text = doc.splitTextToSize(cell, bColW - 4);
-          doc.text(text[0] || "—", x + 2, y + 0.5);
+          const safe = sanitizeTextForPdf(cell);
+          const text = doc.splitTextToSize(safe, bColW - 4);
+          doc.text(escapePdfText(text[0] || "—"), x + 2, y + 0.5);
           x += bColW;
         });
         y += bRowH;
@@ -436,10 +441,10 @@ export default function SignatureStepPage({
 
       checkNewPage(16);
       doc.setFont("helvetica", "italic");
-      const certLines = doc.splitTextToSize(structured.certification, pageW - margin * 2);
+      const certLines = doc.splitTextToSize(sanitizeTextForPdf(structured.certification), pageW - margin * 2);
       certLines.forEach((line: string) => {
         checkNewPage(smallH);
-        doc.text(line, margin, y);
+        doc.text(escapePdfText(line), margin, y);
         y += smallH;
       });
       y += 6;
@@ -454,7 +459,7 @@ export default function SignatureStepPage({
       doc.addImage(signatureDataUrl, "PNG", imgX, y, imgW, imgH);
       doc.setFont("helvetica", "normal");
       doc.setFontSize(9);
-      doc.text("Signed by: " + (signerName || "—"), imgX, y + imgH + 4);
+      doc.text(escapePdfText("Signed by: " + (signerName || "—")), imgX, y + imgH + 4);
       doc.text("Date: " + new Date().toLocaleDateString("en-IN", { dateStyle: "medium" }), imgX, y + imgH + 8);
 
       const filename = `contract-approval-${(step1?.store_name || "store").replace(/[^a-zA-Z0-9-_]/g, "_")}-${Date.now()}.pdf`;
@@ -506,6 +511,9 @@ export default function SignatureStepPage({
         (typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("parent_id") : null);
       if (!parentMerchantId) throw new Error("Parent merchant ID missing");
 
+      const parentId = parentMerchantId;
+      const childStoreId = step1?.store_public_id ?? null;
+
       async function uploadToR2(file: File, parent: string, filename: string): Promise<string | null> {
         if (!file) return null;
         const form = new FormData();
@@ -515,33 +523,32 @@ export default function SignatureStepPage({
         const res = await fetch("/api/upload/r2", { method: "POST", body: form });
         const data = await res.json();
         if (!data.url) throw new Error("Image upload failed");
-        // Return the path (R2 key) instead of URL for signed URL generation
         return data.path || data.url;
       }
 
-      const storeFolder = parentMerchantId || "store";
-      const logoUrl = await uploadToR2(storeSetup.logo, storeFolder, "logo");
-      const bannerUrl = await uploadToR2(storeSetup.banner, storeFolder, "banner");
+      const logoUrl = await uploadToR2(storeSetup.logo, getOnboardingR2Path(parentId, childStoreId, "STORE_MEDIA"), "logo");
+      const bannerUrl = await uploadToR2(storeSetup.banner, getOnboardingR2Path(parentId, childStoreId, "STORE_MEDIA"), "banner");
       const galleryUrls = await Promise.all(
         (storeSetup.gallery_images || []).map((file: File, idx: number) =>
-          uploadToR2(file, storeFolder, `gallery_${idx + 1}`)
+          uploadToR2(file, getOnboardingR2Path(parentId, childStoreId, "STORE_MEDIA_GALLERY"), `gallery_${idx + 1}`)
         )
       );
       const uploadedMenuImageUrls = await Promise.all(
         (menuData?.menuImageFiles || []).map((file: File, idx: number) =>
-          uploadToR2(file, `${storeFolder}/menu/images`, `menu_image_${idx + 1}_${Date.now()}`)
+          uploadToR2(file, getOnboardingR2Path(parentId, childStoreId, "MENU_IMAGES"), `menu_image_${idx + 1}_${Date.now()}`)
         )
       );
       const uploadedMenuSpreadsheetUrl = menuData?.menuSpreadsheetFile
-        ? await uploadToR2(menuData.menuSpreadsheetFile, `${storeFolder}/menu/csv`, `menu_sheet_${Date.now()}`)
+        ? await uploadToR2(menuData.menuSpreadsheetFile, getOnboardingR2Path(parentId, childStoreId, "MENU_CSV"), `menu_sheet_${Date.now()}.csv`)
         : null;
       const menuImageUrls = [...(menuData?.menuImageUrls || []), ...uploadedMenuImageUrls.filter(Boolean)];
       const menuSpreadsheetUrl = menuData?.menuSpreadsheetUrl || uploadedMenuSpreadsheetUrl;
 
+      const documentsPath = getOnboardingR2Path(parentId, childStoreId, "DOCUMENTS");
       const documentUrls: { type: string; url: string; name: string }[] = [];
       for (const [key, value] of Object.entries(documents)) {
         if (value instanceof File) {
-          const url = await uploadToR2(value, storeFolder, key);
+          const url = await uploadToR2(value, documentsPath, key);
           if (url) documentUrls.push({ type: key.toUpperCase(), url, name: value.name });
         }
       }
@@ -552,7 +559,7 @@ export default function SignatureStepPage({
         const pdfData = await generatePdfBlob();
         if (pdfData) {
           const pdfFile = new File([pdfData.blob], pdfData.filename, { type: "application/pdf" });
-          const pdfR2Key = await uploadToR2(pdfFile, `${storeFolder}/agreements`, pdfData.filename);
+          const pdfR2Key = await uploadToR2(pdfFile, getOnboardingR2Path(parentId, childStoreId, "AGREEMENTS"), pdfData.filename);
           if (pdfR2Key) {
             // Get signed URL from R2 (7 days expiry)
             const signedUrlRes = await fetch(`/api/r2/signed-url?key=${encodeURIComponent(pdfR2Key)}&expires=${7 * 24 * 60 * 60}`);
@@ -600,6 +607,10 @@ export default function SignatureStepPage({
             signatureDataUrl,
             agreedToContract,
             agreedToTerms,
+            commissionFirstMonthPct: 0,
+            commissionFromSecondMonthPct: 15,
+            agreementEffectiveFrom: new Date().toISOString(),
+            agreementEffectiveTo: null,
           },
           documentUrls,
           parentInfo,

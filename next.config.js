@@ -2,6 +2,7 @@ const path = require("path");
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: 'standalone',
   reactCompiler: true,
   turbopack: {
     // Explicitly set root to current directory to avoid resolving from parent

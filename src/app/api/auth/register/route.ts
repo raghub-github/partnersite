@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { getR2SignedUrl } from "@/lib/r2";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -34,16 +35,16 @@ function getR2Client(): S3Client | null {
   });
 }
 
-/** Upload parent logo to R2: merchant-parents/{parent_merchant_id}/logo/{timestamp}_{safeName}.ext */
+/** Upload parent logo to R2 and return a signed URL (https://...) for merchant_parents.store_logo. */
 async function uploadParentLogoToR2(
   file: File,
   parentMerchantId: string
 ): Promise<string | null> {
   const s3 = getR2Client();
-  if (!s3 || !process.env.R2_BUCKET_NAME || !process.env.R2_PUBLIC_BASE_URL) return null;
+  if (!s3 || !process.env.R2_BUCKET_NAME) return null;
   const ext = (file.name.split(".").pop() || "png").replace(/[^a-z0-9]/gi, "").toLowerCase() || "png";
-  const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, "_").slice(0, 80) || "logo";
-  const key = `merchant-parents/${parentMerchantId}/logo/${Date.now()}_${safeName}.${ext}`;
+  const baseName = file.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9.-]/g, "_").slice(0, 80) || "logo";
+  const key = `merchant-parents/${parentMerchantId}/logo/${Date.now()}_${baseName}.${ext}`;
   const buffer = Buffer.from(await file.arrayBuffer());
   await s3.send(
     new PutObjectCommand({
@@ -53,8 +54,11 @@ async function uploadParentLogoToR2(
       ContentType: file.type || "image/png",
     })
   );
-  const base = process.env.R2_PUBLIC_BASE_URL.replace(/\/+$/, "");
-  return `${base}/${key}`;
+  try {
+    return await getR2SignedUrl(key, 86400 * 7);
+  } catch {
+    return null;
+  }
 }
 
 /**

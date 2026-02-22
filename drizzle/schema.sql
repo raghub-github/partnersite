@@ -1658,6 +1658,23 @@ CREATE TABLE public.location_logs_y2025m01 (
   CONSTRAINT location_logs_y2025m01_pkey PRIMARY KEY (id, created_at),
   CONSTRAINT location_logs_rider_id_fkey FOREIGN KEY (rider_id) REFERENCES public.riders(id)
 );
+CREATE TABLE public.merchant_agreement_templates (
+  id bigint NOT NULL DEFAULT nextval('merchant_agreement_templates_id_seq'::regclass),
+  template_key text NOT NULL,
+  title text NOT NULL,
+  version text NOT NULL,
+  content_markdown text NOT NULL,
+  pdf_url text,
+  applies_to jsonb NOT NULL DEFAULT '{}'::jsonb,
+  is_active boolean NOT NULL DEFAULT true,
+  effective_from timestamp with time zone NOT NULL DEFAULT now(),
+  effective_to timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  created_by integer,
+  updated_by integer,
+  CONSTRAINT merchant_agreement_templates_pkey PRIMARY KEY (id)
+);
 CREATE TABLE public.merchant_area_managers (
   id bigint NOT NULL DEFAULT nextval('merchant_area_managers_id_seq'::regclass),
   manager_id text NOT NULL UNIQUE,
@@ -1691,6 +1708,32 @@ CREATE TABLE public.merchant_audit_logs (
   audit_metadata jsonb DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT merchant_audit_logs_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.merchant_bank_verification_payouts (
+  id bigint NOT NULL DEFAULT nextval('merchant_bank_verification_payouts_id_seq'::regclass),
+  merchant_parent_id bigint NOT NULL,
+  merchant_store_id bigint NOT NULL,
+  bank_account_id bigint,
+  account_type text NOT NULL CHECK (account_type = ANY (ARRAY['bank'::text, 'upi'::text])),
+  amount_paise integer NOT NULL DEFAULT 100 CHECK (amount_paise >= 0),
+  beneficiary_name text NOT NULL,
+  account_number_masked text,
+  ifsc_code text,
+  bank_name text,
+  upi_id text,
+  razorpay_contact_id text,
+  razorpay_fund_account_id text,
+  razorpay_payout_id text UNIQUE,
+  razorpay_status text,
+  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'processing'::text, 'success'::text, 'failed'::text, 'reversed'::text])),
+  attempted_at timestamp with time zone NOT NULL DEFAULT now(),
+  completed_at timestamp with time zone,
+  failure_reason text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  CONSTRAINT merchant_bank_verification_payouts_pkey PRIMARY KEY (id),
+  CONSTRAINT merchant_bank_verification_payouts_merchant_parent_id_fkey FOREIGN KEY (merchant_parent_id) REFERENCES public.merchant_parents(id),
+  CONSTRAINT merchant_bank_verification_payouts_merchant_store_id_fkey FOREIGN KEY (merchant_store_id) REFERENCES public.merchant_stores(id),
+  CONSTRAINT merchant_bank_verification_payouts_bank_account_id_fkey FOREIGN KEY (bank_account_id) REFERENCES public.merchant_store_bank_accounts(id)
 );
 CREATE TABLE public.merchant_coupons (
   id bigint NOT NULL DEFAULT nextval('merchant_coupons_id_seq'::regclass),
@@ -1758,12 +1801,11 @@ CREATE TABLE public.merchant_menu_categories (
   category_name text NOT NULL,
   category_description text,
   category_image_url text,
-  display_order integer DEFAULT 0,
   is_active boolean DEFAULT true,
-  category_metadata jsonb DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT merchant_menu_categories_pkey PRIMARY KEY (id)
+  CONSTRAINT merchant_menu_categories_pkey PRIMARY KEY (id),
+  CONSTRAINT merchant_menu_categories_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id)
 );
 CREATE TABLE public.merchant_menu_item_addons (
   id bigint NOT NULL DEFAULT nextval('merchant_menu_item_addons_id_seq'::regclass),
@@ -1838,15 +1880,13 @@ CREATE TABLE public.merchant_menu_items (
   is_recommended boolean DEFAULT false,
   preparation_time_minutes integer DEFAULT 15,
   serves integer DEFAULT 1,
-  display_order integer DEFAULT 0,
   is_active boolean DEFAULT true,
-  item_metadata jsonb DEFAULT '{}'::jsonb,
-  nutritional_info jsonb DEFAULT '{}'::jsonb,
   allergens ARRAY,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT merchant_menu_items_pkey PRIMARY KEY (id),
-  CONSTRAINT merchant_menu_items_category_id_fkey FOREIGN KEY (category_id) REFERENCES public.merchant_menu_categories(id)
+  CONSTRAINT merchant_menu_items_category_id_fkey FOREIGN KEY (category_id) REFERENCES public.merchant_menu_categories(id),
+  CONSTRAINT merchant_menu_items_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id)
 );
 CREATE TABLE public.merchant_offer_applicability (
   id bigint NOT NULL DEFAULT nextval('merchant_offer_applicability_id_seq'::regclass),
@@ -1893,7 +1933,39 @@ CREATE TABLE public.merchant_offers (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   created_by integer,
-  CONSTRAINT merchant_offers_pkey PRIMARY KEY (id)
+  CONSTRAINT merchant_offers_pkey PRIMARY KEY (id),
+  CONSTRAINT merchant_offers_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id)
+);
+CREATE TABLE public.merchant_onboarding_payments (
+  id bigint NOT NULL DEFAULT nextval('merchant_onboarding_payments_id_seq'::regclass),
+  merchant_parent_id bigint NOT NULL,
+  merchant_store_id bigint,
+  amount_paise integer NOT NULL CHECK (amount_paise >= 0),
+  currency text NOT NULL DEFAULT 'INR'::text,
+  plan_id text,
+  plan_name text,
+  standard_amount_paise integer,
+  promo_amount_paise integer,
+  promo_label text,
+  razorpay_order_id text UNIQUE,
+  razorpay_payment_id text UNIQUE,
+  razorpay_signature text,
+  razorpay_status text,
+  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'created'::text, 'authorized'::text, 'captured'::text, 'failed'::text, 'refunded'::text, 'partially_refunded'::text, 'cancelled'::text])),
+  payer_email text,
+  payer_phone text,
+  payer_name text,
+  ip_address text,
+  user_agent text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  captured_at timestamp with time zone,
+  failed_at timestamp with time zone,
+  failure_reason text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  CONSTRAINT merchant_onboarding_payments_pkey PRIMARY KEY (id),
+  CONSTRAINT merchant_onboarding_payments_merchant_parent_id_fkey FOREIGN KEY (merchant_parent_id) REFERENCES public.merchant_parents(id),
+  CONSTRAINT merchant_onboarding_payments_merchant_store_id_fkey FOREIGN KEY (merchant_store_id) REFERENCES public.merchant_stores(id)
 );
 CREATE TABLE public.merchant_parents (
   id bigint NOT NULL DEFAULT nextval('merchant_parents_id_seq'::regclass),
@@ -1916,12 +1988,35 @@ CREATE TABLE public.merchant_parents (
   state text,
   pincode text,
   approval_status USER-DEFINED NOT NULL DEFAULT 'APPROVED'::parent_approval_status,
-  area_manager_id bigint,
-  created_by_name text,
   store_logo text,
   supabase_user_id uuid,
-  CONSTRAINT merchant_parents_pkey PRIMARY KEY (id),
-  CONSTRAINT fk_merchant_parents_area_manager FOREIGN KEY (area_manager_id) REFERENCES public.area_managers(id)
+  created_by_name text,
+  CONSTRAINT merchant_parents_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.merchant_plans (
+  id bigint NOT NULL DEFAULT nextval('merchant_plans_id_seq'::regclass),
+  plan_name text NOT NULL UNIQUE,
+  plan_code text NOT NULL UNIQUE,
+  description text,
+  price numeric NOT NULL DEFAULT 0,
+  billing_cycle USER-DEFINED NOT NULL DEFAULT 'MONTHLY'::billing_cycle_type,
+  max_menu_items integer,
+  max_cuisines integer,
+  max_menu_categories integer,
+  image_upload_allowed boolean DEFAULT false,
+  max_image_uploads integer DEFAULT 0,
+  analytics_access boolean DEFAULT false,
+  advanced_analytics boolean DEFAULT false,
+  priority_support boolean DEFAULT false,
+  marketing_automation boolean DEFAULT false,
+  custom_api_integrations boolean DEFAULT false,
+  dedicated_account_manager boolean DEFAULT false,
+  display_order integer DEFAULT 0,
+  is_active boolean DEFAULT true,
+  is_popular boolean DEFAULT false,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT merchant_plans_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.merchant_store_activity_log (
   id bigint NOT NULL DEFAULT nextval('merchant_store_activity_log_id_seq'::regclass),
@@ -1941,7 +2036,37 @@ CREATE TABLE public.merchant_store_activity_log (
   reversed_by integer,
   reversal_notes text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT merchant_store_activity_log_pkey PRIMARY KEY (id)
+  activity_description text,
+  activity_metadata jsonb DEFAULT '{}'::jsonb,
+  CONSTRAINT merchant_store_activity_log_pkey PRIMARY KEY (id),
+  CONSTRAINT merchant_store_activity_log_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id)
+);
+CREATE TABLE public.merchant_store_agreement_acceptances (
+  id bigint NOT NULL DEFAULT nextval('merchant_store_agreement_acceptances_id_seq'::regclass),
+  store_id bigint NOT NULL UNIQUE,
+  template_id bigint,
+  template_key text NOT NULL,
+  template_version text NOT NULL,
+  template_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+  contract_pdf_url text,
+  signer_name text NOT NULL,
+  signer_email text,
+  signer_phone text,
+  signature_data_url text NOT NULL,
+  signature_hash text NOT NULL,
+  terms_accepted boolean NOT NULL DEFAULT false,
+  contract_read_confirmed boolean NOT NULL DEFAULT false,
+  accepted_at timestamp with time zone NOT NULL DEFAULT now(),
+  accepted_ip text,
+  user_agent text,
+  acceptance_source text NOT NULL DEFAULT 'CHILD_ONBOARDING'::text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  created_by integer,
+  updated_by integer,
+  CONSTRAINT merchant_store_agreement_acceptances_pkey PRIMARY KEY (id),
+  CONSTRAINT merchant_store_agreement_acceptances_template_id_fkey FOREIGN KEY (template_id) REFERENCES public.merchant_agreement_templates(id),
+  CONSTRAINT merchant_store_agreement_acceptances_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id)
 );
 CREATE TABLE public.merchant_store_availability (
   id bigint NOT NULL DEFAULT nextval('merchant_store_availability_id_seq'::regclass),
@@ -1957,6 +2082,15 @@ CREATE TABLE public.merchant_store_availability (
   updated_by_id integer,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  manual_close_until timestamp with time zone,
+  auto_open_from_schedule boolean NOT NULL DEFAULT true,
+  last_toggled_by_email text,
+  last_toggle_type text,
+  last_toggled_at timestamp with time zone,
+  block_auto_open boolean NOT NULL DEFAULT false,
+  restriction_type text,
+  last_toggled_by_name text,
+  last_toggled_by_id text,
   CONSTRAINT merchant_store_availability_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.merchant_store_bank_accounts (
@@ -1980,7 +2114,15 @@ CREATE TABLE public.merchant_store_bank_accounts (
   bank_metadata jsonb DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT merchant_store_bank_accounts_pkey PRIMARY KEY (id)
+  payout_method text,
+  bank_proof_type text,
+  bank_proof_file_url text,
+  upi_qr_screenshot_url text,
+  razorpay_contact_id text,
+  razorpay_fund_account_id text,
+  verification_status text DEFAULT 'pending'::text,
+  CONSTRAINT merchant_store_bank_accounts_pkey PRIMARY KEY (id),
+  CONSTRAINT merchant_store_bank_accounts_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id)
 );
 CREATE TABLE public.merchant_store_blocks (
   id bigint NOT NULL DEFAULT nextval('merchant_store_blocks_id_seq'::regclass),
@@ -2021,7 +2163,8 @@ CREATE TABLE public.merchant_store_commission_rules (
   created_by integer,
   parent_merchant_id text,
   CONSTRAINT merchant_store_commission_rules_pkey PRIMARY KEY (id),
-  CONSTRAINT merchant_store_commission_rules_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.merchant_parents(id)
+  CONSTRAINT merchant_store_commission_rules_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.merchant_parents(id),
+  CONSTRAINT merchant_store_commission_rules_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id)
 );
 CREATE TABLE public.merchant_store_compliance (
   id bigint NOT NULL DEFAULT nextval('merchant_store_compliance_id_seq'::regclass),
@@ -2065,6 +2208,23 @@ CREATE TABLE public.merchant_store_daily_analytics (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT merchant_store_daily_analytics_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.merchant_store_document_verification_logs (
+  id bigint NOT NULL DEFAULT nextval('merchant_store_document_verification_logs_id_seq'::regclass),
+  store_id bigint NOT NULL,
+  document_type text NOT NULL,
+  document_number text,
+  action text NOT NULL CHECK (action = ANY (ARRAY['SUBMITTED'::text, 'APPROVED'::text, 'REJECTED'::text, 'RESUBMITTED'::text])),
+  old_status text,
+  new_status text,
+  action_reason text,
+  verified_by integer,
+  verified_by_name text,
+  verified_by_email text,
+  action_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT merchant_store_document_verification_logs_pkey PRIMARY KEY (id),
+  CONSTRAINT merchant_store_document_verification_logs_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id)
 );
 CREATE TABLE public.merchant_store_documents (
   id bigint NOT NULL DEFAULT nextval('merchant_store_documents_new_id_seq'::regclass),
@@ -2254,6 +2414,8 @@ CREATE TABLE public.merchant_store_documents (
   other_updated_at timestamp with time zone,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  pan_holder_name text,
+  aadhaar_holder_name text,
   CONSTRAINT merchant_store_documents_pkey PRIMARY KEY (id),
   CONSTRAINT merchant_store_documents_new_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id)
 );
@@ -2284,7 +2446,54 @@ CREATE TABLE public.merchant_store_manager_assignments (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT merchant_store_manager_assignments_pkey PRIMARY KEY (id),
-  CONSTRAINT merchant_store_manager_assignments_manager_id_fkey FOREIGN KEY (manager_id) REFERENCES public.merchant_area_managers(id)
+  CONSTRAINT merchant_store_manager_assignments_manager_id_fkey FOREIGN KEY (manager_id) REFERENCES public.merchant_area_managers(id),
+  CONSTRAINT merchant_store_manager_assignments_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id)
+);
+CREATE TABLE public.merchant_store_media_files (
+  id bigint NOT NULL DEFAULT nextval('merchant_store_media_files_id_seq'::regclass),
+  store_id bigint NOT NULL,
+  media_scope text NOT NULL CHECK (media_scope = ANY (ARRAY['PROFILE'::text, 'BANNER'::text, 'GALLERY'::text, 'MENU_ITEM'::text, 'DOCUMENT'::text, 'MENU_REFERENCE'::text])),
+  source_entity text,
+  source_entity_id bigint,
+  original_file_name text,
+  r2_key text NOT NULL,
+  public_url text,
+  mime_type text,
+  file_size_bytes bigint,
+  checksum_sha256 text,
+  version_no integer NOT NULL DEFAULT 1,
+  is_active boolean NOT NULL DEFAULT true,
+  uploaded_by uuid,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  deleted_at timestamp with time zone,
+  CONSTRAINT merchant_store_media_files_pkey PRIMARY KEY (id),
+  CONSTRAINT merchant_store_media_files_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id)
+);
+CREATE TABLE public.merchant_store_menu_drafts (
+  id bigint NOT NULL DEFAULT nextval('merchant_store_menu_drafts_id_seq'::regclass),
+  progress_id bigint NOT NULL,
+  store_id bigint,
+  category_name text NOT NULL,
+  subcategory_name text,
+  item_name text NOT NULL,
+  food_type text NOT NULL DEFAULT 'VEG'::text,
+  item_description text,
+  display_price numeric NOT NULL CHECK (display_price > 0::numeric),
+  tax_rate numeric NOT NULL DEFAULT 5 CHECK (tax_rate >= 0::numeric AND tax_rate <= 100::numeric),
+  percent_discount numeric NOT NULL DEFAULT 0 CHECK (percent_discount >= 0::numeric AND percent_discount <= 100::numeric),
+  group_name text,
+  group_min integer NOT NULL DEFAULT 0 CHECK (group_min >= 0),
+  group_max integer NOT NULL DEFAULT 1,
+  option_name text,
+  option_price numeric,
+  is_default_option boolean NOT NULL DEFAULT false,
+  source_mode text NOT NULL DEFAULT 'MANUAL'::text CHECK (source_mode = ANY (ARRAY['MANUAL'::text, 'CSV'::text, 'IMAGE'::text])),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT merchant_store_menu_drafts_pkey PRIMARY KEY (id),
+  CONSTRAINT merchant_store_menu_drafts_progress_id_fkey FOREIGN KEY (progress_id) REFERENCES public.merchant_store_registration_progress(id),
+  CONSTRAINT merchant_store_menu_drafts_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id)
 );
 CREATE TABLE public.merchant_store_ondc_mapping (
   id bigint NOT NULL DEFAULT nextval('merchant_store_ondc_mapping_id_seq'::regclass),
@@ -2305,7 +2514,7 @@ CREATE TABLE public.merchant_store_ondc_mapping (
   CONSTRAINT merchant_store_ondc_mapping_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.merchant_store_operating_hours (
-  id bigint NOT NULL DEFAULT nextval('merchant_store_operating_hours_new_id_seq1'::regclass),
+  id bigint NOT NULL DEFAULT nextval('merchant_store_operating_hours_id_seq'::regclass),
   store_id bigint NOT NULL UNIQUE,
   monday_open boolean NOT NULL DEFAULT false,
   monday_slot1_start time without time zone,
@@ -2359,25 +2568,6 @@ CREATE TABLE public.merchant_store_operating_hours (
   CONSTRAINT merchant_store_operating_hours_pkey PRIMARY KEY (id),
   CONSTRAINT merchant_store_operating_hours_new_store_id_fkey1 FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id)
 );
-CREATE TABLE public.merchant_store_orders (
-  id bigint NOT NULL DEFAULT nextval('merchant_store_orders_id_seq'::regclass),
-  merchant_id bigint,
-  store_id bigint NOT NULL,
-  order_id bigint NOT NULL,
-  order_type USER-DEFINED NOT NULL,
-  service_type USER-DEFINED NOT NULL,
-  order_value numeric DEFAULT 0,
-  commission_amount numeric DEFAULT 0,
-  tax_amount numeric DEFAULT 0,
-  merchant_payout numeric DEFAULT 0,
-  order_status USER-DEFINED,
-  order_placed_at timestamp with time zone,
-  order_completed_at timestamp with time zone,
-  created_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT merchant_store_orders_pkey PRIMARY KEY (id),
-  CONSTRAINT merchant_store_orders_merchant_id_fkey FOREIGN KEY (merchant_id) REFERENCES public.merchant_parents(id),
-  CONSTRAINT merchant_store_orders_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(id)
-);
 CREATE TABLE public.merchant_store_payout_history (
   id bigint NOT NULL DEFAULT nextval('merchant_store_payout_history_id_seq'::regclass),
   payout_id bigint NOT NULL,
@@ -2429,6 +2619,18 @@ CREATE TABLE public.merchant_store_payouts (
   CONSTRAINT merchant_store_payouts_pkey PRIMARY KEY (id),
   CONSTRAINT merchant_store_payouts_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.merchant_parents(id),
   CONSTRAINT merchant_store_payouts_bank_account_id_fkey FOREIGN KEY (bank_account_id) REFERENCES public.merchant_store_bank_accounts(id)
+);
+CREATE TABLE public.merchant_store_pos_integration (
+  id bigint NOT NULL DEFAULT nextval('merchant_store_pos_integration_id_seq'::regclass),
+  store_id bigint NOT NULL,
+  pos_partner text NOT NULL,
+  pos_store_id text,
+  status text NOT NULL DEFAULT 'PENDING'::text,
+  activated_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT merchant_store_pos_integration_pkey PRIMARY KEY (id),
+  CONSTRAINT merchant_store_pos_integration_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id)
 );
 CREATE TABLE public.merchant_store_preparation_times (
   id bigint NOT NULL DEFAULT nextval('merchant_store_preparation_times_id_seq'::regclass),
@@ -2495,7 +2697,7 @@ CREATE TABLE public.merchant_store_registration_progress (
   parent_id bigint NOT NULL,
   store_id bigint,
   current_step integer NOT NULL DEFAULT 1,
-  total_steps integer DEFAULT 6,
+  total_steps integer DEFAULT 9,
   completed_steps integer DEFAULT 0,
   step_1_completed boolean DEFAULT false,
   step_2_completed boolean DEFAULT false,
@@ -2510,6 +2712,10 @@ CREATE TABLE public.merchant_store_registration_progress (
   abandonment_reason text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  last_step_completed_at timestamp with time zone,
+  step_payloads jsonb NOT NULL DEFAULT '{}'::jsonb,
+  menu_upload_mode text CHECK (menu_upload_mode IS NULL OR (menu_upload_mode = ANY (ARRAY['IMAGE'::text, 'CSV'::text, 'MANUAL'::text]))),
+  menu_upload_files jsonb NOT NULL DEFAULT '[]'::jsonb,
   CONSTRAINT merchant_store_registration_progress_pkey PRIMARY KEY (id),
   CONSTRAINT merchant_store_registration_progress_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.merchant_parents(id)
 );
@@ -2590,7 +2796,20 @@ CREATE TABLE public.merchant_store_status_history (
   to_approval_status USER-DEFINED,
   from_operational_status USER-DEFINED,
   to_operational_status USER-DEFINED,
-  CONSTRAINT merchant_store_status_history_pkey PRIMARY KEY (id)
+  CONSTRAINT merchant_store_status_history_pkey PRIMARY KEY (id),
+  CONSTRAINT merchant_store_status_history_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id)
+);
+CREATE TABLE public.merchant_store_status_log (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  store_id bigint NOT NULL,
+  action text NOT NULL,
+  restriction_type text,
+  performed_by_id text,
+  performed_by_email text,
+  performed_by_name text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  close_reason text,
+  CONSTRAINT merchant_store_status_log_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.merchant_store_tax_details (
   id bigint NOT NULL DEFAULT nextval('merchant_store_tax_details_id_seq'::regclass),
@@ -2690,10 +2909,48 @@ CREATE TABLE public.merchant_stores (
   operational_status USER-DEFINED DEFAULT 'CLOSED'::store_operational_status,
   parent_merchant_id text,
   area_manager_id bigint,
+  ads_images ARRAY DEFAULT '{}'::text[],
   CONSTRAINT merchant_stores_pkey PRIMARY KEY (id),
   CONSTRAINT merchant_stores_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.merchant_parents(id),
   CONSTRAINT merchant_stores_area_manager_id_fkey FOREIGN KEY (area_manager_id) REFERENCES public.area_managers(id),
   CONSTRAINT fk_merchant_stores_area_manager FOREIGN KEY (area_manager_id) REFERENCES public.area_managers(id)
+);
+CREATE TABLE public.merchant_subscriptions (
+  id bigint NOT NULL DEFAULT nextval('merchant_subscriptions_id_seq'::regclass),
+  merchant_id bigint NOT NULL,
+  store_id bigint,
+  plan_id bigint NOT NULL,
+  subscription_status USER-DEFINED NOT NULL DEFAULT 'INACTIVE'::subscription_status_type,
+  payment_status USER-DEFINED NOT NULL DEFAULT 'PENDING'::subscription_payment_status_type,
+  start_date timestamp with time zone NOT NULL,
+  expiry_date timestamp with time zone NOT NULL,
+  is_active boolean DEFAULT false,
+  auto_renew boolean DEFAULT false,
+  last_payment_date timestamp with time zone,
+  next_billing_date timestamp with time zone,
+  cancelled_at timestamp with time zone,
+  cancellation_reason text,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  auto_pay_enabled_at timestamp with time zone,
+  auto_pay_disabled_at timestamp with time zone,
+  last_auto_pay_attempt timestamp with time zone,
+  auto_pay_failure_count integer DEFAULT 0,
+  razorpay_customer_id text,
+  razorpay_subscription_id text,
+  payment_method text,
+  payment_method_details jsonb DEFAULT '{}'::jsonb,
+  auto_pay_enabled_by bigint,
+  auto_pay_disabled_by bigint,
+  next_auto_pay_date timestamp with time zone,
+  upgraded_from bigint,
+  credit_applied numeric DEFAULT 0,
+  billing_start_at timestamp with time zone,
+  billing_end_at timestamp with time zone,
+  CONSTRAINT merchant_subscriptions_pkey PRIMARY KEY (id),
+  CONSTRAINT merchant_subscriptions_merchant_id_fk FOREIGN KEY (merchant_id) REFERENCES public.merchant_parents(id),
+  CONSTRAINT merchant_subscriptions_store_id_fk FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id),
+  CONSTRAINT merchant_subscriptions_plan_id_fk FOREIGN KEY (plan_id) REFERENCES public.merchant_plans(id)
 );
 CREATE TABLE public.merchant_user_store_access (
   id bigint NOT NULL DEFAULT nextval('merchant_user_store_access_id_seq'::regclass),
@@ -3059,6 +3316,29 @@ CREATE TABLE public.order_food_items (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT order_food_items_pkey PRIMARY KEY (id),
   CONSTRAINT order_food_items_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(id)
+);
+CREATE TABLE public.order_food_otp_audit (
+  id bigint NOT NULL DEFAULT nextval('order_food_otp_audit_id_seq'::regclass),
+  order_id bigint NOT NULL,
+  action text NOT NULL CHECK (action = ANY (ARRAY['GENERATE'::text, 'VALIDATE_SUCCESS'::text, 'VALIDATE_FAIL'::text, 'CONVERT_RTO'::text])),
+  otp_type text,
+  actor text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT order_food_otp_audit_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.order_food_otps (
+  id bigint NOT NULL DEFAULT nextval('order_food_otps_id_seq'::regclass),
+  order_id bigint NOT NULL UNIQUE,
+  otp_code text NOT NULL,
+  otp_type text NOT NULL CHECK (otp_type = ANY (ARRAY['PICKUP'::text, 'RTO'::text])),
+  verified_at timestamp with time zone,
+  verified_by text,
+  attempt_count integer NOT NULL DEFAULT 0,
+  locked_until timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT order_food_otps_pkey PRIMARY KEY (id),
+  CONSTRAINT order_food_otps_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders_core(id)
 );
 CREATE TABLE public.order_instructions (
   id bigint NOT NULL DEFAULT nextval('order_instructions_id_seq'::regclass),
@@ -3770,6 +4050,10 @@ CREATE TABLE public.orders_core (
   estimated_delivery_time timestamp with time zone,
   actual_pickup_time timestamp with time zone,
   actual_delivery_time timestamp with time zone,
+  items jsonb,
+  cancelled_by_type text CHECK (cancelled_by_type IS NULL OR (cancelled_by_type = ANY (ARRAY['store'::text, 'customer'::text, 'system'::text, 'rider'::text, 'admin'::text]))),
+  cancellation_details jsonb,
+  formatted_order_id text UNIQUE,
   CONSTRAINT orders_core_pkey PRIMARY KEY (id),
   CONSTRAINT orders_core_merchant_store_id_fkey FOREIGN KEY (merchant_store_id) REFERENCES public.merchant_stores(id),
   CONSTRAINT orders_core_cancellation_reason_id_fkey FOREIGN KEY (cancellation_reason_id) REFERENCES public.order_cancellation_reasons(id),
@@ -3786,16 +4070,40 @@ CREATE TABLE public.orders_food (
   preparation_time_minutes integer,
   food_items_count integer,
   food_items_total_value numeric,
+  items jsonb,
   requires_utensils boolean DEFAULT false,
   is_fragile boolean NOT NULL DEFAULT false,
   is_high_value boolean NOT NULL DEFAULT false,
   veg_non_veg USER-DEFINED,
   delivery_instructions text,
+  customer_id bigint,
+  customer_name text,
+  customer_phone text,
+  customer_email text,
+  rider_id integer,
+  rider_name text,
+  rider_phone text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  order_status text NOT NULL DEFAULT 'CREATED'::text CHECK (order_status = ANY (ARRAY['CREATED'::text, 'ACCEPTED'::text, 'PREPARING'::text, 'READY_FOR_PICKUP'::text, 'OUT_FOR_DELIVERY'::text, 'DELIVERED'::text, 'RTO'::text, 'CANCELLED'::text])),
+  accepted_at timestamp with time zone,
+  prepared_at timestamp with time zone,
+  dispatched_at timestamp with time zone,
+  delivered_at timestamp with time zone,
+  cancelled_at timestamp with time zone,
+  rejected_reason text,
+  cancelled_by text,
+  cancelled_by_id bigint,
+  cancelled_by_type text CHECK (cancelled_by_type IS NULL OR (cancelled_by_type = ANY (ARRAY['store'::text, 'customer'::text, 'system'::text, 'rider'::text, 'admin'::text]))),
+  cancellation_reason_id bigint,
+  cancellation_details jsonb,
+  is_rto boolean NOT NULL DEFAULT false,
+  rto_at timestamp with time zone,
+  formatted_order_id text,
   CONSTRAINT orders_food_pkey PRIMARY KEY (id),
+  CONSTRAINT orders_food_merchant_store_id_fkey FOREIGN KEY (merchant_store_id) REFERENCES public.merchant_stores(id),
   CONSTRAINT orders_food_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders_core(id),
-  CONSTRAINT orders_food_merchant_store_id_fkey FOREIGN KEY (merchant_store_id) REFERENCES public.merchant_stores(id)
+  CONSTRAINT orders_food_cancellation_reason_id_fkey FOREIGN KEY (cancellation_reason_id) REFERENCES public.order_cancellation_reasons(id)
 );
 CREATE TABLE public.orders_parcel (
   id bigint NOT NULL DEFAULT nextval('orders_parcel_id_seq'::regclass),
@@ -4805,6 +5113,32 @@ CREATE TABLE public.store_type_document_requirements (
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT store_type_document_requirements_pkey PRIMARY KEY (id)
 );
+CREATE TABLE public.subscription_payments (
+  id bigint NOT NULL DEFAULT nextval('subscription_payments_id_seq'::regclass),
+  merchant_id bigint NOT NULL,
+  store_id bigint,
+  subscription_id bigint NOT NULL,
+  plan_id bigint NOT NULL,
+  amount numeric NOT NULL,
+  payment_gateway text,
+  payment_gateway_id text,
+  payment_gateway_response jsonb,
+  payment_status USER-DEFINED NOT NULL DEFAULT 'PENDING'::subscription_payment_status_type,
+  payment_date timestamp with time zone DEFAULT now(),
+  billing_period_start timestamp with time zone,
+  billing_period_end timestamp with time zone,
+  refunded_at timestamp with time zone,
+  refund_amount numeric,
+  refund_reason text,
+  notes text,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT subscription_payments_pkey PRIMARY KEY (id),
+  CONSTRAINT subscription_payments_merchant_id_fk FOREIGN KEY (merchant_id) REFERENCES public.merchant_parents(id),
+  CONSTRAINT subscription_payments_store_id_fk FOREIGN KEY (store_id) REFERENCES public.merchant_stores(id),
+  CONSTRAINT subscription_payments_subscription_id_fk FOREIGN KEY (subscription_id) REFERENCES public.merchant_subscriptions(id),
+  CONSTRAINT subscription_payments_plan_id_fk FOREIGN KEY (plan_id) REFERENCES public.merchant_plans(id)
+);
 CREATE TABLE public.supervisor_mappings (
   id bigint NOT NULL DEFAULT nextval('supervisor_mappings_id_seq'::regclass),
   supervisor_user_id bigint NOT NULL,
@@ -5807,6 +6141,59 @@ CREATE TABLE public.unified_ticket_activities (
   CONSTRAINT unified_ticket_activities_pkey PRIMARY KEY (id),
   CONSTRAINT unified_ticket_activities_ticket_id_fkey FOREIGN KEY (ticket_id) REFERENCES public.unified_tickets(id)
 );
+CREATE TABLE public.unified_ticket_activity_audit (
+  id bigint NOT NULL DEFAULT nextval('unified_ticket_activity_audit_id_seq'::regclass),
+  ticket_id bigint NOT NULL,
+  activity_type text NOT NULL,
+  activity_category text NOT NULL,
+  activity_description text NOT NULL,
+  actor_user_id bigint,
+  actor_type text,
+  actor_id bigint,
+  actor_name text,
+  actor_role text,
+  assigned_to_user_id bigint,
+  assigned_to_name text,
+  assigned_by_type text,
+  previous_assignee_user_id bigint,
+  previous_assignee_name text,
+  old_status text,
+  new_status text,
+  status_change_reason text,
+  old_priority text,
+  new_priority text,
+  priority_change_reason text,
+  old_group_id bigint,
+  new_group_id bigint,
+  reopened_by_user_id bigint,
+  reopened_reason text,
+  reopened_from_status text,
+  reopened_to_status text,
+  response_message_id bigint,
+  response_type text,
+  is_first_response boolean DEFAULT false,
+  resolved_by_user_id bigint,
+  resolution_type text,
+  resolution_notes text,
+  unassigned_by_user_id bigint,
+  unassignment_reason text,
+  old_value jsonb,
+  new_value jsonb,
+  changed_fields ARRAY,
+  metadata jsonb DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  actor_email text,
+  CONSTRAINT unified_ticket_activity_audit_pkey PRIMARY KEY (id),
+  CONSTRAINT unified_ticket_activity_audit_ticket_id_fkey FOREIGN KEY (ticket_id) REFERENCES public.unified_tickets(id),
+  CONSTRAINT unified_ticket_activity_audit_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES public.system_users(id),
+  CONSTRAINT unified_ticket_activity_audit_assigned_to_user_id_fkey FOREIGN KEY (assigned_to_user_id) REFERENCES public.system_users(id),
+  CONSTRAINT unified_ticket_activity_audit_new_group_id_fkey FOREIGN KEY (new_group_id) REFERENCES public.ticket_groups(id),
+  CONSTRAINT unified_ticket_activity_audit_old_group_id_fkey FOREIGN KEY (old_group_id) REFERENCES public.ticket_groups(id),
+  CONSTRAINT unified_ticket_activity_audit_previous_assignee_user_id_fkey FOREIGN KEY (previous_assignee_user_id) REFERENCES public.system_users(id),
+  CONSTRAINT unified_ticket_activity_audit_reopened_by_user_id_fkey FOREIGN KEY (reopened_by_user_id) REFERENCES public.system_users(id),
+  CONSTRAINT unified_ticket_activity_audit_resolved_by_user_id_fkey FOREIGN KEY (resolved_by_user_id) REFERENCES public.system_users(id),
+  CONSTRAINT unified_ticket_activity_audit_unassigned_by_user_id_fkey FOREIGN KEY (unassigned_by_user_id) REFERENCES public.system_users(id)
+);
 CREATE TABLE public.unified_ticket_messages (
   id bigint NOT NULL DEFAULT nextval('unified_ticket_messages_id_seq'::regclass),
   ticket_id bigint NOT NULL,
@@ -5895,6 +6282,9 @@ CREATE TABLE public.unified_tickets (
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   closed_at timestamp with time zone,
   order_type text,
+  group_id bigint,
+  sla_due_at timestamp with time zone,
+  reopened_at timestamp with time zone,
   CONSTRAINT unified_tickets_pkey PRIMARY KEY (id),
   CONSTRAINT unified_tickets_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(id),
   CONSTRAINT unified_tickets_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES public.customers(id),
@@ -5903,7 +6293,8 @@ CREATE TABLE public.unified_tickets (
   CONSTRAINT unified_tickets_assigned_to_agent_id_fkey FOREIGN KEY (assigned_to_agent_id) REFERENCES public.system_users(id),
   CONSTRAINT unified_tickets_resolved_by_fkey FOREIGN KEY (resolved_by) REFERENCES public.system_users(id),
   CONSTRAINT unified_tickets_escalated_to_fkey FOREIGN KEY (escalated_to) REFERENCES public.system_users(id),
-  CONSTRAINT unified_tickets_parent_ticket_id_fkey FOREIGN KEY (parent_ticket_id) REFERENCES public.unified_tickets(id)
+  CONSTRAINT unified_tickets_parent_ticket_id_fkey FOREIGN KEY (parent_ticket_id) REFERENCES public.unified_tickets(id),
+  CONSTRAINT unified_tickets_group_id_fkey FOREIGN KEY (group_id) REFERENCES public.ticket_groups(id)
 );
 CREATE TABLE public.user_data (
   id uuid NOT NULL DEFAULT gen_random_uuid(),

@@ -7,6 +7,8 @@ import { Loader2, Store, Phone, ArrowRight } from "lucide-react";
 import { signInWithGoogle, requestPhoneOTP, verifyPhoneOTP } from "@/lib/auth/supabase-client";
 import { ENABLE_PHONE_OTP_LOGIN } from "@/lib/auth/phone-otp-config";
 
+const RESEND_SMS_COOLDOWN_SEC = 60;
+
 function normalizePhone(input: string): string {
   const digits = input.replace(/\D/g, "");
   const ten = digits.length > 10 ? digits.slice(-10) : digits;
@@ -21,6 +23,7 @@ function LoginPageContent() {
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState("");
+  const [smsResendCooldown, setSmsResendCooldown] = useState(0);
 
   const registered = searchParams?.get("registered");
   const queryError = searchParams?.get("error");
@@ -53,6 +56,13 @@ function LoginPageContent() {
     const normalized = normalizeLoginError(queryError || "");
     if (normalized) setError(normalized);
   }, [queryError]);
+
+  useEffect(() => {
+    if (smsResendCooldown > 0) {
+      const timer = setInterval(() => setSmsResendCooldown((prev) => (prev <= 1 ? 0 : prev - 1)), 1000);
+      return () => clearInterval(timer);
+    }
+  }, [smsResendCooldown]);
 
   const setSessionAndRedirect = async (access_token: string, refresh_token: string) => {
     const res = await fetch("/api/auth/set-cookie", {
@@ -91,6 +101,13 @@ function LoginPageContent() {
     }
     setLoading(true);
     try {
+      const checkRes = await fetch(`/api/auth/check-existing?phone=${encodeURIComponent(p)}`);
+      const checkData = await checkRes.json().catch(() => ({}));
+      if (checkData.exists !== true) {
+        setError("No merchant account found for this mobile number. Please register first.");
+        setLoading(false);
+        return;
+      }
       const result = await requestPhoneOTP(p);
       if (!result.success) {
         const msg = result.error || "Failed to send OTP.";
@@ -102,8 +119,36 @@ function LoginPageContent() {
         return;
       }
       setOtpSent(true);
+      setSmsResendCooldown(RESEND_SMS_COOLDOWN_SEC);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send OTP.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendPhoneOtp = async () => {
+    if (smsResendCooldown > 0) return;
+    const p = normalizePhone(phone);
+    if (!p) return;
+    setError("");
+    setLoading(true);
+    try {
+      const checkRes = await fetch(`/api/auth/check-existing?phone=${encodeURIComponent(p)}`);
+      const checkData = await checkRes.json().catch(() => ({}));
+      if (checkData.exists !== true) {
+        setError("No merchant account found for this mobile number. Please register first.");
+        setLoading(false);
+        return;
+      }
+      const result = await requestPhoneOTP(p);
+      if (!result.success) {
+        setError(result.error || "Failed to resend OTP.");
+        return;
+      }
+      setSmsResendCooldown(RESEND_SMS_COOLDOWN_SEC);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to resend OTP.");
     } finally {
       setLoading(false);
     }
@@ -260,7 +305,7 @@ function LoginPageContent() {
                     <div className="flex gap-2">
                       <button
                         type="button"
-                        onClick={() => { setOtpSent(false); setOtp(""); setError(""); }}
+                        onClick={() => { setOtpSent(false); setOtp(""); setError(""); setSmsResendCooldown(0); }}
                         className="py-2.5 px-4 rounded-xl border border-slate-300 text-slate-700 text-sm font-medium"
                       >
                         Change number
@@ -273,6 +318,21 @@ function LoginPageContent() {
                         {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : "Verify & sign in"}
                       </button>
                     </div>
+                    <p className="text-sm text-slate-600 text-center">
+                      Didn&apos;t receive OTP?{" "}
+                      {smsResendCooldown > 0 ? (
+                        <span className="text-slate-500">Resend SMS in {smsResendCooldown}s</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleResendPhoneOtp}
+                          disabled={loading}
+                          className="text-blue-600 hover:underline font-medium disabled:opacity-50"
+                        >
+                          Resend SMS
+                        </button>
+                      )}
+                    </p>
                   </form>
                 )}
               </>
