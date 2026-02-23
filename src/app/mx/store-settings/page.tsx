@@ -1,6 +1,7 @@
 'use client'
 
-import React, { useState, useEffect, Suspense } from 'react'
+import React, { useState, useEffect, Suspense, useRef, useCallback } from 'react'
+import dynamicImport from 'next/dynamic'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'next/navigation'
 import { MXLayoutWhite } from '@/components/MXLayoutWhite'
@@ -12,6 +13,9 @@ import { Clock, Phone, Save, AlertCircle, CheckCircle2, X, Zap, Shield, BarChart
 import { PageSkeletonGeneric } from '@/components/PageSkeleton'
 import { Toaster, toast } from 'sonner'
 import { MobileHamburgerButton } from '@/components/MobileHamburgerButton'
+
+const StoreLocationMapboxGL = dynamicImport(() => import('@/components/StoreLocationMapboxGL'), { ssr: false })
+const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || ''
 
 export const dynamic = 'force-dynamic'
 
@@ -42,10 +46,10 @@ function StoreSettingsContent() {
   const [isLoading, setIsLoading] = useState(true)
   const [storeId, setStoreId] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
-  const [activeTab, setActiveTab] = useState<'plans' | 'premium' | 'timings' | 'operations' | 'menu-capacity' | 'delivery' | 'riders' | 'pos' | 'notifications' | 'audit' | 'gatimitra'>(() => {
+  const [activeTab, setActiveTab] = useState<'plans' | 'premium' | 'timings' | 'operations' | 'menu-capacity' | 'delivery' | 'address' | 'riders' | 'pos' | 'notifications' | 'audit' | 'gatimitra'>(() => {
     if (typeof window !== 'undefined') {
       const urlTab = new URLSearchParams(window.location.search).get('tab')
-      const validTabs = ['plans', 'premium', 'timings', 'operations', 'menu-capacity', 'delivery', 'riders', 'pos', 'notifications', 'audit', 'gatimitra']
+      const validTabs = ['plans', 'premium', 'timings', 'operations', 'menu-capacity', 'delivery', 'address', 'riders', 'pos', 'notifications', 'audit', 'gatimitra']
       if (urlTab && validTabs.includes(urlTab)) return urlTab as any
     }
     return 'plans'
@@ -88,6 +92,16 @@ function StoreSettingsContent() {
   const [storeName, setStoreName] = useState('')
   const [storeAddress, setStoreAddress] = useState('')
   const [storeDescription, setStoreDescription] = useState('')
+  // Address (change address) tab state
+  const [fullAddress, setFullAddress] = useState('')
+  const [addressLandmark, setAddressLandmark] = useState('')
+  const [addressState, setAddressState] = useState('')
+  const [addressPostalCode, setAddressPostalCode] = useState('')
+  const [addressSearchQuery, setAddressSearchQuery] = useState('')
+  const [addressSearchResults, setAddressSearchResults] = useState<any[]>([])
+  const [isAddressSearching, setIsAddressSearching] = useState(false)
+  const addressMapRef = useRef<{ flyTo: (opts: { center: [number, number]; zoom: number; duration?: number }) => void } | null>(null)
+  const addressSearchRef = useRef<HTMLDivElement>(null)
 
   // Plans & Subscription state
   const [plans, setPlans] = useState<any[]>([])
@@ -355,13 +369,21 @@ function StoreSettingsContent() {
           storeData = await fetchStoreByName(storeId)
         }
         if (storeData) {
-          setStore(storeData as MerchantStore)
-          setPhone(storeData.am_mobile || '')
-          setStoreName(storeData.store_name || '')
-          setStoreAddress(storeData.city || '')
-          setStoreDescription(storeData.store_description || '')
-          setLatitude('')
-          setLongitude('')
+          const s = storeData as MerchantStore
+          setStore(s)
+          setPhone(s.am_mobile || '')
+          setStoreName(s.store_name || '')
+          setStoreAddress(s.city || '')
+          setStoreDescription(s.store_description || '')
+          setLatitude(s.latitude != null && !isNaN(Number(s.latitude)) ? String(s.latitude) : '')
+          setLongitude(s.longitude != null && !isNaN(Number(s.longitude)) ? String(s.longitude) : '')
+          setFullAddress(s.full_address ?? '')
+          setAddressLandmark(s.landmark ?? '')
+          setAddressState(s.state ?? '')
+          setAddressPostalCode(s.postal_code ?? '')
+          setAddressSearchQuery(s.full_address ?? '')
+          const radius = typeof s.delivery_radius_km === 'number' && !isNaN(s.delivery_radius_km) ? s.delivery_radius_km : 5
+          setDeliveryRadiusKm(radius)
         }
       } catch (error) {
         console.error('Error loading store:', error)
@@ -404,6 +426,140 @@ function StoreSettingsContent() {
   useEffect(() => {
     if (storeId) fetchStoreOperations()
   }, [storeId])
+
+  // Load delivery settings (toggles + radius comes from store in loadStore)
+  useEffect(() => {
+    if (!storeId) return
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/merchant/store-settings?storeId=${encodeURIComponent(storeId)}`)
+        const data = await res.json().catch(() => ({}))
+        if (res.ok) {
+          setGatimitraDeliveryEnabled(data.platform_delivery !== false)
+          setSelfDeliveryEnabled(data.self_delivery === true)
+          if (typeof data.delivery_radius_km === 'number' && !isNaN(data.delivery_radius_km)) {
+            setDeliveryRadiusKm(data.delivery_radius_km)
+          }
+          if (data.address) {
+            if (data.address.full_address != null) setFullAddress(data.address.full_address)
+            if (data.address.landmark != null) setAddressLandmark(data.address.landmark)
+            if (data.address.city != null) setStoreAddress(data.address.city)
+            if (data.address.state != null) setAddressState(data.address.state)
+            if (data.address.postal_code != null) setAddressPostalCode(data.address.postal_code)
+            if (data.address.latitude != null) setLatitude(String(data.address.latitude))
+            if (data.address.longitude != null) setLongitude(String(data.address.longitude))
+            if (data.address.full_address != null) setAddressSearchQuery(data.address.full_address)
+          }
+        }
+      } catch {
+        // keep defaults
+      }
+    }
+    load()
+  }, [storeId])
+
+  // Address search: click outside to close results
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (addressSearchRef.current && !addressSearchRef.current.contains(event.target as Node)) {
+        setAddressSearchResults([])
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const addressSearchLocation = useCallback(async () => {
+    if (!addressSearchQuery.trim() || !mapboxToken) return
+    setIsAddressSearching(true)
+    try {
+      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(addressSearchQuery)}.json?access_token=${mapboxToken}&country=IN&limit=10&language=en&types=address,place,postcode,poi,neighborhood,locality&proximity=77.1025,28.7041&autocomplete=true`
+      const res = await fetch(url)
+      const json = await res.json()
+      if (json.features?.length > 0) {
+        const unique = json.features.filter((r: any, i: number, self: any[]) => self.findIndex((x: any) => x.place_name === r.place_name) === i)
+        setAddressSearchResults(unique)
+      } else {
+        setAddressSearchResults([])
+      }
+    } catch {
+      setAddressSearchResults([])
+    } finally {
+      setIsAddressSearching(false)
+    }
+  }, [addressSearchQuery])
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (addressSearchQuery.length > 2) addressSearchLocation()
+      else setAddressSearchResults([])
+    }, 500)
+    return () => clearTimeout(t)
+  }, [addressSearchQuery, addressSearchLocation])
+
+  const addressSelectLocation = useCallback((result: any) => {
+    const [lng, lat] = result.center
+    const context = result.context || []
+    let city = ''
+    let state = ''
+    let postal_code = ''
+    context.forEach((item: any) => {
+      if (item.id?.includes('postcode')) postal_code = item.text
+      else if (item.id?.includes('place') || item.id?.includes('locality') || item.id?.includes('district')) city = item.text
+      else if (item.id?.includes('region')) state = item.text
+    })
+    if (!postal_code && result.place_name) {
+      const m = result.place_name.match(/\b\d{6}\b/)
+      if (m) postal_code = m[0]
+    }
+    if (!city) city = result.text || ''
+    setFullAddress(result.place_name || '')
+    setStoreAddress(city)
+    setAddressState(state)
+    setAddressPostalCode(postal_code)
+    setLatitude(String(lat))
+    setLongitude(String(lng))
+    setAddressSearchQuery(result.place_name || '')
+    setAddressSearchResults([])
+    if (addressMapRef.current) {
+      addressMapRef.current.flyTo({ center: [lng, lat], zoom: 16, duration: 1.4 })
+    }
+  }, [])
+
+  const addressReverseGeocode = useCallback(async (lat: number, lng: number) => {
+    if (!mapboxToken) return
+    try {
+      const res = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${mapboxToken}&country=IN&limit=1&language=en`)
+      const json = await res.json()
+      const best = json.features?.[0]
+      if (best) {
+        const context = best.context || []
+        let city = ''
+        let state = ''
+        let postal_code = ''
+        context.forEach((item: any) => {
+          if (item.id?.includes('postcode')) postal_code = item.text
+          else if (item.id?.includes('place') || item.id?.includes('locality') || item.id?.includes('district')) city = item.text
+          else if (item.id?.includes('region')) state = item.text
+        })
+        setFullAddress(best.place_name || '')
+        setStoreAddress(city || storeAddress)
+        setAddressState(state || addressState)
+        setAddressPostalCode(postal_code || addressPostalCode)
+        setAddressSearchQuery(best.place_name || '')
+      }
+    } catch {
+      // ignore
+    }
+  }, [storeAddress, addressState, addressPostalCode])
+
+  const handleAddressMapClick = useCallback(async (e: { lngLat: { lat: number; lng: number } }) => {
+    const { lat, lng } = e.lngLat
+    setLatitude(String(lat))
+    setLongitude(String(lng))
+    if (addressMapRef.current) addressMapRef.current.flyTo({ center: [lng, lat], zoom: 16, duration: 1.2 })
+    addressReverseGeocode(lat, lng)
+  }, [addressReverseGeocode])
 
   // Add/remove body class when modal opens/closes to blur sidebar
   useEffect(() => {
@@ -802,14 +958,64 @@ function StoreSettingsContent() {
   }
 
   const handleSaveSettings = async () => {
-    // Delivery tab does not require phone/lat/long; only enforce on tabs that use them
-    if (activeTab !== 'delivery' && (!phone || !latitude || !longitude)) {
+    if (activeTab !== 'delivery' && activeTab !== 'address' && (!phone || !latitude || !longitude)) {
       toast.error('⚠️ Please fill in all required fields')
+      return
+    }
+    if (activeTab === 'address' && (!fullAddress?.trim() || !storeAddress?.trim() || !addressState?.trim() || !addressPostalCode?.trim())) {
+      toast.error('⚠️ Please fill in full address, city, state and postal code')
       return
     }
 
     setIsSaving(true)
     try {
+      if (activeTab === 'delivery' && storeId) {
+        const res = await fetch('/api/merchant/store-settings', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            storeId,
+            self_delivery: selfDeliveryEnabled,
+            platform_delivery: gatimitraDeliveryEnabled,
+            delivery_radius_km: typeof deliveryRadiusKm === 'number' && !isNaN(deliveryRadiusKm) ? deliveryRadiusKm : 5,
+          }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          toast.error(data.error || '❌ Failed to save delivery settings')
+          return
+        }
+        toast.success('✅ Delivery settings saved successfully!')
+        return
+      }
+      if (activeTab === 'address' && storeId) {
+        const latNum = latitude ? parseFloat(latitude) : undefined
+        const lngNum = longitude ? parseFloat(longitude) : undefined
+        const res = await fetch('/api/merchant/store-settings', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            storeId,
+            address: {
+              full_address: fullAddress.trim(),
+              landmark: addressLandmark.trim() || undefined,
+              city: storeAddress.trim(),
+              state: addressState.trim(),
+              postal_code: addressPostalCode.trim(),
+              latitude: latNum != null && !isNaN(latNum) ? latNum : undefined,
+              longitude: lngNum != null && !isNaN(lngNum) ? lngNum : undefined,
+            },
+          }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          toast.error(data.error || '❌ Failed to save address')
+          return
+        }
+        toast.success('✅ Address saved successfully!')
+        if (store) setStore({ ...store, full_address: fullAddress, landmark: addressLandmark, city: storeAddress, state: addressState, postal_code: addressPostalCode, latitude: latNum, longitude: lngNum })
+        return
+      }
       await new Promise(resolve => setTimeout(resolve, 800))
       toast.success('✅ Settings saved successfully!')
     } catch (error) {
@@ -2052,6 +2258,17 @@ function StoreSettingsContent() {
                     Delivery
                   </button>
                   <button
+                    onClick={() => setActiveTab('address')}
+                    className={`px-4 py-2 font-semibold text-xs border-b-2 transition-colors flex items-center gap-1 whitespace-nowrap ${
+                      activeTab === 'address'
+                        ? 'border-orange-600 text-orange-700'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    <MapPin size={14} />
+                    Address
+                  </button>
+                  <button
                     onClick={() => setActiveTab('riders')}
                     className={`px-4 py-2 font-semibold text-xs border-b-2 transition-colors flex items-center gap-1 whitespace-nowrap ${
                       activeTab === 'riders'
@@ -2687,6 +2904,160 @@ function StoreSettingsContent() {
                         max="50"
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
                       />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'address' && (
+              <div className="space-y-4 sm:space-y-6">
+                <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-gray-900">Change Address</h3>
+                    <button
+                      onClick={handleSaveSettings}
+                      disabled={isSaving}
+                      className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-all font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      <Save size={16} />
+                      {isSaving ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                  <p className="text-sm text-gray-600 mb-4">Update your store address. Search or click on the map to set location. Existing address is shown below.</p>
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                    <div className="space-y-4">
+                      <div ref={addressSearchRef} className="relative">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Search Location</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={addressSearchQuery}
+                            onChange={(e) => setAddressSearchQuery(e.target.value)}
+                            placeholder="Enter address, postal code, city..."
+                            className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 bg-white min-w-0"
+                          />
+                          <button
+                            type="button"
+                            onClick={addressSearchLocation}
+                            disabled={isAddressSearching}
+                            className="px-3 py-2 text-sm bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50 font-medium whitespace-nowrap"
+                          >
+                            {isAddressSearching ? 'Searching...' : 'Search'}
+                          </button>
+                        </div>
+                        {addressSearchResults.length > 0 && (
+                          <div className="absolute z-50 mt-1 w-full max-w-md border border-gray-200 rounded-lg bg-white shadow-lg max-h-40 overflow-y-auto">
+                            {addressSearchResults.map((result: any, idx: number) => (
+                              <div
+                                key={idx}
+                                onClick={() => { addressSelectLocation(result); setAddressSearchResults([]); }}
+                                className="p-3 hover:bg-orange-50 cursor-pointer border-b border-gray-100 last:border-b-0 text-sm"
+                              >
+                                <div className="font-medium text-gray-800">{result.text}</div>
+                                <div className="text-xs text-gray-600 truncate mt-1">{result.place_name}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Full Address *</label>
+                        <textarea
+                          value={fullAddress}
+                          onChange={(e) => setFullAddress(e.target.value)}
+                          rows={2}
+                          className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 bg-white"
+                          placeholder="Complete address with landmarks"
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">City *</label>
+                          <input
+                            type="text"
+                            value={storeAddress}
+                            onChange={(e) => setStoreAddress(e.target.value)}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 bg-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">State *</label>
+                          <input
+                            type="text"
+                            value={addressState}
+                            onChange={(e) => setAddressState(e.target.value)}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 bg-white"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Postal Code *</label>
+                          <input
+                            type="text"
+                            value={addressPostalCode}
+                            onChange={(e) => setAddressPostalCode(e.target.value)}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 bg-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Landmark</label>
+                          <input
+                            type="text"
+                            value={addressLandmark}
+                            onChange={(e) => setAddressLandmark(e.target.value)}
+                            placeholder="Nearby landmark"
+                            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 bg-white"
+                          />
+                        </div>
+                      </div>
+                      <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                        <div className="text-sm font-semibold text-gray-800 mb-2">GPS Coordinates</div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <div className="text-xs text-gray-600 mb-1">Latitude</div>
+                            <input
+                              type="number"
+                              step="any"
+                              value={latitude}
+                              onChange={(e) => setLatitude(e.target.value)}
+                              className="font-mono w-full text-sm bg-white p-2 rounded-lg border border-gray-300"
+                              placeholder="e.g. 22.5726"
+                            />
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-600 mb-1">Longitude</div>
+                            <input
+                              type="number"
+                              step="any"
+                              value={longitude}
+                              onChange={(e) => setLongitude(e.target.value)}
+                              className="font-mono w-full text-sm bg-white p-2 rounded-lg border border-gray-300"
+                              placeholder="e.g. 88.3639"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="min-h-[280px] h-[280px] sm:h-[360px] xl:min-h-0 xl:h-[360px]">
+                      <div className="h-full rounded-lg overflow-hidden border border-gray-300 bg-gray-50">
+                        {!mapboxToken ? (
+                          <div className="h-full flex items-center justify-center text-sm text-gray-500 p-4 text-center">
+                            Add NEXT_PUBLIC_MAPBOX_TOKEN to .env.local to use the map.
+                          </div>
+                        ) : (
+                          <StoreLocationMapboxGL
+                            ref={(r) => { addressMapRef.current = r }}
+                            latitude={latitude !== '' && !isNaN(parseFloat(latitude)) ? parseFloat(latitude) : null}
+                            longitude={longitude !== '' && !isNaN(parseFloat(longitude)) ? parseFloat(longitude) : null}
+                            mapboxToken={mapboxToken}
+                            onLocationChange={(lat, lng) => { setLatitude(String(lat)); setLongitude(String(lng)); }}
+                            onMapClick={handleAddressMapClick}
+                          />
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-500 mt-2">Drag marker or click on map to set location. Search above for exact address.</p>
                     </div>
                   </div>
                 </div>
@@ -3832,6 +4203,17 @@ function StoreSettingsContent() {
                 >
                   <Package size={18} />
                   Delivery Settings
+                </button>
+                <button
+                  onClick={() => setActiveTab('address')}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                    activeTab === 'address'
+                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <MapPin size={18} />
+                  Address
                 </button>
                 <button
                   onClick={() => setActiveTab('riders')}

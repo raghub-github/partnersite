@@ -35,23 +35,48 @@ export async function GET(req: NextRequest) {
     const internalId = await resolveStoreId(db, storeId);
     if (internalId === null) return NextResponse.json({ error: 'Store not found' }, { status: 404 });
 
-    const { data, error } = await db
-      .from('merchant_store_settings')
-      .select('self_delivery, platform_delivery, delivery_priority')
-      .eq('store_id', internalId)
-      .single();
+    const [settingsResult, storeResult] = await Promise.all([
+      db.from('merchant_store_settings').select('self_delivery, platform_delivery, delivery_priority').eq('store_id', internalId).maybeSingle(),
+      db.from('merchant_stores').select('delivery_radius_km, full_address, landmark, city, state, postal_code, latitude, longitude').eq('store_id', storeId).maybeSingle(),
+    ]);
 
-    if (error) {
-      if (error.code === 'PGRST116') {
-        return NextResponse.json({ self_delivery: false, platform_delivery: true, delivery_priority: 'GATIMITRA' });
-      }
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    const { data: settingsData, error: settingsError } = settingsResult;
+    const { data: storeData } = storeResult;
+
+    if (settingsError && settingsError.code !== 'PGRST116') {
+      return NextResponse.json({ error: settingsError.message }, { status: 500 });
     }
 
+    const deliveryRadiusKm = storeData?.delivery_radius_km != null && !Number.isNaN(Number(storeData.delivery_radius_km))
+      ? Number(storeData.delivery_radius_km)
+      : undefined;
+
+    const address =
+      storeData &&
+      (storeData.full_address != null ||
+        storeData.landmark != null ||
+        storeData.city != null ||
+        storeData.state != null ||
+        storeData.postal_code != null ||
+        storeData.latitude != null ||
+        storeData.longitude != null)
+        ? {
+            full_address: storeData.full_address ?? undefined,
+            landmark: storeData.landmark ?? undefined,
+            city: storeData.city ?? undefined,
+            state: storeData.state ?? undefined,
+            postal_code: storeData.postal_code ?? undefined,
+            latitude: storeData.latitude != null && !Number.isNaN(Number(storeData.latitude)) ? Number(storeData.latitude) : undefined,
+            longitude: storeData.longitude != null && !Number.isNaN(Number(storeData.longitude)) ? Number(storeData.longitude) : undefined,
+          }
+        : undefined;
+
     return NextResponse.json({
-      self_delivery: data?.self_delivery ?? false,
-      platform_delivery: data?.platform_delivery ?? true,
-      delivery_priority: data?.delivery_priority ?? (data?.self_delivery ? 'SELF' : 'GATIMITRA'),
+      self_delivery: settingsData?.self_delivery ?? false,
+      platform_delivery: settingsData?.platform_delivery ?? true,
+      delivery_priority: settingsData?.delivery_priority ?? (settingsData?.self_delivery ? 'SELF' : 'GATIMITRA'),
+      ...(deliveryRadiusKm !== undefined && { delivery_radius_km: deliveryRadiusKm }),
+      ...(address && { address }),
     });
   } catch (err) {
     console.error('[store-settings GET]', err);
@@ -61,8 +86,8 @@ export async function GET(req: NextRequest) {
 
 /**
  * PATCH /api/merchant/store-settings
- * Body: { storeId: string, self_delivery?: boolean, platform_delivery?: boolean }
- * Upserts merchant_store_settings for the store (delivery mode persisted here).
+ * Body: { storeId, self_delivery?, platform_delivery?, delivery_radius_km?, address?: { full_address?, landmark?, city?, state?, postal_code?, latitude?, longitude? } }
+ * Upserts merchant_store_settings (delivery mode). Updates merchant_stores for delivery_radius_km and address when provided.
  */
 export async function PATCH(req: NextRequest) {
   try {
@@ -76,50 +101,87 @@ export async function PATCH(req: NextRequest) {
 
     const self_delivery = typeof body.self_delivery === 'boolean' ? body.self_delivery : undefined;
     const platform_delivery = typeof body.platform_delivery === 'boolean' ? body.platform_delivery : undefined;
-    if (self_delivery === undefined && platform_delivery === undefined) {
+    const delivery_radius_km = typeof body.delivery_radius_km === 'number' && !Number.isNaN(body.delivery_radius_km) && body.delivery_radius_km >= 0
+      ? body.delivery_radius_km
+      : undefined;
+    const addressPayload = body?.address && typeof body.address === 'object' ? body.address : undefined;
+    const hasDeliveryPayload = self_delivery !== undefined || platform_delivery !== undefined || delivery_radius_km !== undefined;
+    const hasAddressPayload =
+      addressPayload &&
+      (addressPayload.full_address !== undefined ||
+        addressPayload.landmark !== undefined ||
+        addressPayload.city !== undefined ||
+        addressPayload.state !== undefined ||
+        addressPayload.postal_code !== undefined ||
+        addressPayload.latitude !== undefined ||
+        addressPayload.longitude !== undefined);
+    if (!hasDeliveryPayload && !hasAddressPayload) {
       return NextResponse.json({ success: true });
     }
 
-    const { data: existing } = await db
-      .from('merchant_store_settings')
-      .select('id')
-      .eq('store_id', internalId)
-      .single();
-
-    const payload: Record<string, unknown> = {
-      store_id: internalId,
-      updated_at: new Date().toISOString(),
-    };
-    if (self_delivery !== undefined) payload.self_delivery = self_delivery;
-    if (platform_delivery !== undefined) payload.platform_delivery = platform_delivery;
-
-    if (existing?.id != null) {
-      const { error: updateErr } = await db
+    if (hasDeliveryPayload) {
+      const { data: existing } = await db
         .from('merchant_store_settings')
-        .update(payload)
-        .eq('store_id', internalId);
-      if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 });
-    } else {
-      const { error: insertErr } = await db.from('merchant_store_settings').insert(payload);
-      if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 });
+        .select('id')
+        .eq('store_id', internalId)
+        .maybeSingle();
+
+      const payload: Record<string, unknown> = {
+        store_id: internalId,
+        updated_at: new Date().toISOString(),
+      };
+      if (self_delivery !== undefined) payload.self_delivery = self_delivery;
+      if (platform_delivery !== undefined) payload.platform_delivery = platform_delivery;
+
+      if (existing?.id != null) {
+        const { error: updateErr } = await db
+          .from('merchant_store_settings')
+          .update(payload)
+          .eq('store_id', internalId);
+        if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 });
+      } else {
+        const { error: insertErr } = await db.from('merchant_store_settings').insert(payload);
+        if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 });
+      }
     }
 
-    const actor = await getAuditActor();
-    const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || null;
-    const ua = req.headers.get('user-agent') || null;
-    const modeLabel = self_delivery === true ? 'Self delivery' : 'GatiMitra (platform) delivery';
-    await logMerchantAudit(db, {
-      entity_type: 'STORE',
-      entity_id: internalId,
-      action: 'UPDATE',
-      action_field: 'DELIVERY_MODE',
-      old_value: { self_delivery: self_delivery === true ? false : true },
-      new_value: { self_delivery: !!self_delivery, platform_delivery: platform_delivery !== false },
-      ...actor,
-      ip_address: ip,
-      user_agent: ua,
-      audit_metadata: { description: `Delivery mode changed to ${modeLabel}` },
-    });
+    const storeUpdates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (delivery_radius_km !== undefined) storeUpdates.delivery_radius_km = delivery_radius_km;
+    if (hasAddressPayload && addressPayload) {
+      if (addressPayload.full_address !== undefined) storeUpdates.full_address = addressPayload.full_address;
+      if (addressPayload.landmark !== undefined) storeUpdates.landmark = addressPayload.landmark;
+      if (addressPayload.city !== undefined) storeUpdates.city = addressPayload.city;
+      if (addressPayload.state !== undefined) storeUpdates.state = addressPayload.state;
+      if (addressPayload.postal_code !== undefined) storeUpdates.postal_code = addressPayload.postal_code;
+      if (addressPayload.latitude !== undefined) storeUpdates.latitude = addressPayload.latitude;
+      if (addressPayload.longitude !== undefined) storeUpdates.longitude = addressPayload.longitude;
+    }
+    if (Object.keys(storeUpdates).length > 1) {
+      const { error: storeUpdateErr } = await db
+        .from('merchant_stores')
+        .update(storeUpdates)
+        .eq('store_id', String(storeId).trim());
+      if (storeUpdateErr) return NextResponse.json({ error: storeUpdateErr.message }, { status: 500 });
+    }
+
+    if (hasDeliveryPayload) {
+      const actor = await getAuditActor();
+      const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || null;
+      const ua = req.headers.get('user-agent') || null;
+      const modeLabel = self_delivery === true ? 'Self delivery' : 'GatiMitra (platform) delivery';
+      await logMerchantAudit(db, {
+        entity_type: 'STORE',
+        entity_id: internalId,
+        action: 'UPDATE',
+        action_field: 'DELIVERY_MODE',
+        old_value: { self_delivery: self_delivery === true ? false : true },
+        new_value: { self_delivery: !!self_delivery, platform_delivery: platform_delivery !== false },
+        ...actor,
+        ip_address: ip,
+        user_agent: ua,
+        audit_metadata: { description: `Delivery mode changed to ${modeLabel}` },
+      });
+    }
 
     return NextResponse.json({ success: true });
   } catch (err) {

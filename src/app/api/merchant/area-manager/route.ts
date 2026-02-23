@@ -13,7 +13,7 @@ function getSupabase() {
 /**
  * GET /api/merchant/area-manager?storeId=GMMxxxx
  * Returns Area Manager details for the store (name, email, mobile, id).
- * Uses service role to bypass RLS. Falls back to denormalized am_* fields if area_manager_id is null.
+ * Uses service role to bypass RLS. Resolves name/email/mobile from area_managers → system_users.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -23,10 +23,10 @@ export async function GET(req: NextRequest) {
 
     const db = getSupabase();
 
-    // 1. Get store area_manager_id and denormalized am_* fields for fallback
+    // 1. Get store area_manager_id (merchant_stores has no am_name/am_mobile/am_email columns)
     const { data: storeData, error: storeError } = await db
       .from('merchant_stores')
-      .select('area_manager_id, am_name, am_mobile, am_email')
+      .select('area_manager_id')
       .eq('store_id', String(storeId).trim())
       .maybeSingle();
 
@@ -88,20 +88,7 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // 3. Fallback: use denormalized am_name, am_mobile, am_email from merchant_stores
-    if (storeData.am_name || storeData.am_mobile || storeData.am_email) {
-      return NextResponse.json({
-        success: true,
-        areaManager: {
-          id: storeData.area_manager_id ?? null,
-          name: storeData.am_name || 'Not set',
-          email: storeData.am_email || 'Not set',
-          mobile: storeData.am_mobile || 'Not set',
-        },
-      });
-    }
-
-    // 4. No area manager assigned
+    // 3. No area manager assigned
     return NextResponse.json({
       success: true,
       areaManager: null,
