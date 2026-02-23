@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, Suspense, useRef, useCallback } from 'react'
+import React, { useState, useEffect, Suspense, useRef, useCallback, useMemo } from 'react'
 import dynamicImport from 'next/dynamic'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'next/navigation'
@@ -55,7 +55,16 @@ function StoreSettingsContent() {
     return 'plans'
   })
 
-  // Sync tab with URL
+  // Sync tab FROM URL when search params change (e.g. "Manage all riders" → tab=riders)
+  const validTabsList = ['plans', 'premium', 'timings', 'operations', 'menu-capacity', 'delivery', 'address', 'riders', 'pos', 'notifications', 'audit', 'gatimitra']
+  useEffect(() => {
+    const urlTab = searchParams?.get('tab') || 'plans'
+    if (validTabsList.includes(urlTab) && urlTab !== activeTab) {
+      setActiveTab(urlTab as typeof activeTab)
+    }
+  }, [searchParams])
+
+  // Sync tab TO URL when activeTab changes (so sidebar clicks update URL)
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search)
@@ -102,6 +111,8 @@ function StoreSettingsContent() {
   const [isAddressSearching, setIsAddressSearching] = useState(false)
   const addressMapRef = useRef<{ flyTo: (opts: { center: [number, number]; zoom: number; duration?: number }) => void } | null>(null)
   const addressSearchRef = useRef<HTMLDivElement>(null)
+  /** Snapshot of address when last loaded or saved; used to enable Save only when something changed */
+  const initialAddressRef = useRef<{ full_address: string; landmark: string; city: string; state: string; postal_code: string; latitude: string; longitude: string } | null>(null)
 
   // Plans & Subscription state
   const [plans, setPlans] = useState<any[]>([])
@@ -375,13 +386,24 @@ function StoreSettingsContent() {
           setStoreName(s.store_name || '')
           setStoreAddress(s.city || '')
           setStoreDescription(s.store_description || '')
-          setLatitude(s.latitude != null && !isNaN(Number(s.latitude)) ? String(s.latitude) : '')
-          setLongitude(s.longitude != null && !isNaN(Number(s.longitude)) ? String(s.longitude) : '')
+          const latStr = s.latitude != null && !isNaN(Number(s.latitude)) ? String(s.latitude) : ''
+          const lngStr = s.longitude != null && !isNaN(Number(s.longitude)) ? String(s.longitude) : ''
+          setLatitude(latStr)
+          setLongitude(lngStr)
           setFullAddress(s.full_address ?? '')
           setAddressLandmark(s.landmark ?? '')
           setAddressState(s.state ?? '')
           setAddressPostalCode(s.postal_code ?? '')
           setAddressSearchQuery(s.full_address ?? '')
+          initialAddressRef.current = {
+            full_address: s.full_address ?? '',
+            landmark: s.landmark ?? '',
+            city: s.city ?? '',
+            state: s.state ?? '',
+            postal_code: s.postal_code ?? '',
+            latitude: latStr,
+            longitude: lngStr,
+          }
           const radius = typeof s.delivery_radius_km === 'number' && !isNaN(s.delivery_radius_km) ? s.delivery_radius_km : 5
           setDeliveryRadiusKm(radius)
         }
@@ -441,14 +463,24 @@ function StoreSettingsContent() {
             setDeliveryRadiusKm(data.delivery_radius_km)
           }
           if (data.address) {
-            if (data.address.full_address != null) setFullAddress(data.address.full_address)
-            if (data.address.landmark != null) setAddressLandmark(data.address.landmark)
-            if (data.address.city != null) setStoreAddress(data.address.city)
-            if (data.address.state != null) setAddressState(data.address.state)
-            if (data.address.postal_code != null) setAddressPostalCode(data.address.postal_code)
-            if (data.address.latitude != null) setLatitude(String(data.address.latitude))
-            if (data.address.longitude != null) setLongitude(String(data.address.longitude))
-            if (data.address.full_address != null) setAddressSearchQuery(data.address.full_address)
+            const addr = data.address
+            if (addr.full_address != null) setFullAddress(addr.full_address)
+            if (addr.landmark != null) setAddressLandmark(addr.landmark)
+            if (addr.city != null) setStoreAddress(addr.city)
+            if (addr.state != null) setAddressState(addr.state)
+            if (addr.postal_code != null) setAddressPostalCode(addr.postal_code)
+            if (addr.latitude != null) setLatitude(String(addr.latitude))
+            if (addr.longitude != null) setLongitude(String(addr.longitude))
+            if (addr.full_address != null) setAddressSearchQuery(addr.full_address)
+            initialAddressRef.current = {
+              full_address: addr.full_address ?? '',
+              landmark: addr.landmark ?? '',
+              city: addr.city ?? '',
+              state: addr.state ?? '',
+              postal_code: addr.postal_code ?? '',
+              latitude: addr.latitude != null ? String(addr.latitude) : '',
+              longitude: addr.longitude != null ? String(addr.longitude) : '',
+            }
           }
         }
       } catch {
@@ -457,6 +489,21 @@ function StoreSettingsContent() {
     }
     load()
   }, [storeId])
+
+  // Address tab: enable Save only when address or coordinates have changed from initial
+  const hasAddressChanges = useMemo(() => {
+    const init = initialAddressRef.current
+    if (!init) return false
+    return (
+      (fullAddress || '').trim() !== (init.full_address || '').trim() ||
+      (addressLandmark || '').trim() !== (init.landmark || '').trim() ||
+      (storeAddress || '').trim() !== (init.city || '').trim() ||
+      (addressState || '').trim() !== (init.state || '').trim() ||
+      (addressPostalCode || '').trim() !== (init.postal_code || '').trim() ||
+      (latitude || '').trim() !== (init.latitude || '').trim() ||
+      (longitude || '').trim() !== (init.longitude || '').trim()
+    )
+  }, [fullAddress, addressLandmark, storeAddress, addressState, addressPostalCode, latitude, longitude])
 
   // Address search: click outside to close results
   useEffect(() => {
@@ -1014,6 +1061,15 @@ function StoreSettingsContent() {
         }
         toast.success('✅ Address saved successfully!')
         if (store) setStore({ ...store, full_address: fullAddress, landmark: addressLandmark, city: storeAddress, state: addressState, postal_code: addressPostalCode, latitude: latNum, longitude: lngNum })
+        initialAddressRef.current = {
+          full_address: fullAddress.trim(),
+          landmark: addressLandmark.trim(),
+          city: storeAddress.trim(),
+          state: addressState.trim(),
+          postal_code: addressPostalCode.trim(),
+          latitude: latitude,
+          longitude: longitude,
+        }
         return
       }
       await new Promise(resolve => setTimeout(resolve, 800))
@@ -2363,7 +2419,12 @@ function StoreSettingsContent() {
 
                 {/* Plans Comparison - Premium SaaS-style */}
                 <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 shadow-sm">
-                  <h3 className="text-lg sm:text-xl font-bold text-gray-900 mb-4 sm:mb-6">Available Plans</h3>
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-4 sm:mb-6">
+                    <h3 className="text-lg sm:text-xl font-bold text-gray-900">Available Plans</h3>
+                    <a href="/refund-policy" className="text-sm text-indigo-600 hover:text-indigo-700 font-medium underline underline-offset-2">
+                      View refund policy
+                    </a>
+                  </div>
                   {loadingPlans ? (
                     <div className="text-center py-8">
                       <div className="animate-spin rounded-full h-8 w-8 border-2 border-orange-500 border-t-transparent mx-auto"></div>
@@ -2917,7 +2978,7 @@ function StoreSettingsContent() {
                     <h3 className="text-lg font-bold text-gray-900">Change Address</h3>
                     <button
                       onClick={handleSaveSettings}
-                      disabled={isSaving}
+                      disabled={isSaving || !hasAddressChanges}
                       className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-all font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                     >
                       <Save size={16} />
@@ -2927,6 +2988,33 @@ function StoreSettingsContent() {
                   <p className="text-sm text-gray-600 mb-4">Update your store address. Search or click on the map to set location. Existing address is shown below.</p>
                   <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                     <div className="space-y-4">
+                      <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                        <div className="text-sm font-semibold text-gray-800 mb-2">GPS Coordinates</div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <div className="text-xs text-gray-600 mb-1">Latitude</div>
+                            <input
+                              type="number"
+                              step="any"
+                              value={latitude}
+                              onChange={(e) => setLatitude(e.target.value)}
+                              className="font-mono w-full text-sm bg-white p-2 rounded-lg border border-gray-300"
+                              placeholder="e.g. 22.5726"
+                            />
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-600 mb-1">Longitude</div>
+                            <input
+                              type="number"
+                              step="any"
+                              value={longitude}
+                              onChange={(e) => setLongitude(e.target.value)}
+                              className="font-mono w-full text-sm bg-white p-2 rounded-lg border border-gray-300"
+                              placeholder="e.g. 88.3639"
+                            />
+                          </div>
+                        </div>
+                      </div>
                       <div ref={addressSearchRef} className="relative">
                         <label className="block text-sm font-medium text-gray-700 mb-1">Search Location</label>
                         <div className="flex gap-2">
@@ -3012,7 +3100,7 @@ function StoreSettingsContent() {
                           />
                         </div>
                       </div>
-                      <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                      {/* <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
                         <div className="text-sm font-semibold text-gray-800 mb-2">GPS Coordinates</div>
                         <div className="grid grid-cols-2 gap-3">
                           <div>
@@ -3038,7 +3126,7 @@ function StoreSettingsContent() {
                             />
                           </div>
                         </div>
-                      </div>
+                      </div> */}
                     </div>
                     <div className="min-h-[280px] h-[280px] sm:h-[360px] xl:min-h-0 xl:h-[360px]">
                       <div className="h-full rounded-lg overflow-hidden border border-gray-300 bg-gray-50">

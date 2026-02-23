@@ -252,7 +252,7 @@ export default function ProfilePage() {
   } | null>(null);
   const [agreementLoading, setAgreementLoading] = useState(false);
   const bannerInputRef = useRef<HTMLInputElement>(null);
-  const adsInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
 
   /* ===== GET STORE ID ===== */
   useEffect(() => {
@@ -264,22 +264,59 @@ export default function ProfilePage() {
     setStoreId(id);
   }, []);
 
-  /* ===== CONVERT R2 URLs TO SIGNED URLs ===== */
+  /* ===== CONVERT R2 URLs TO SIGNED URLs (so banner/gallery load from onboarding or dashboard) ===== */
   const convertR2UrlToSigned = async (url: string | null | undefined): Promise<string | null> => {
-    if (!url) return null;
-    // If already a signed URL (has query params with X-Amz-*), return as-is
-    if (url.includes('X-Amz-') || url.includes('X-Amz-Algorithm')) return url;
-    // If it's an R2 URL (r2.cloudflarestorage.com), convert to signed URL
-    if (url.includes('r2.cloudflarestorage.com') || url.includes('merchant-assets/')) {
+    if (!url || typeof url !== 'string') return null;
+    const u = url.trim();
+    if (!u) return null;
+    // Already a valid signed URL (avoid re-requesting; note: may be expired, we still try to refresh below if it looks like R2)
+    if (u.includes('X-Amz-') && u.includes('r2.cloudflarestorage.com')) {
       try {
-        const res = await fetch(`/api/images/signed-url?url=${encodeURIComponent(url)}`);
+        const res = await fetch(`/api/images/signed-url?url=${encodeURIComponent(u)}`);
+        const data = await res.json();
+        if (res.ok && data.url) return data.url;
+      } catch (err) {
+        console.error('Failed to refresh signed URL:', err);
+      }
+      return u;
+    }
+    // Proxy URL (stored from onboarding or dashboard): extract key and get fresh signed URL
+    if (u.includes('/api/attachments/proxy') && u.includes('key=')) {
+      try {
+        const parsed = new URL(u, 'https://dummy');
+        const key = parsed.searchParams.get('key');
+        if (key) {
+          const res = await fetch(`/api/images/signed-url?key=${encodeURIComponent(decodeURIComponent(key))}`);
+          const data = await res.json();
+          if (res.ok && data.url) return data.url;
+        }
+      } catch (err) {
+        console.error('Failed to get signed URL from proxy:', err);
+      }
+      return u;
+    }
+    // Raw R2 key (path with no protocol, e.g. docs/merchants/... or merchants/...)
+    if (!u.includes('://')) {
+      try {
+        const res = await fetch(`/api/images/signed-url?key=${encodeURIComponent(u)}`);
+        const data = await res.json();
+        if (res.ok && data.url) return data.url;
+      } catch (err) {
+        console.error('Failed to get signed URL for key:', err);
+      }
+      return u;
+    }
+    // Full R2 or merchant-assets URL
+    if (u.includes('r2.cloudflarestorage.com') || u.includes('merchant-assets/') || u.includes('merchants/') || u.includes('docs/')) {
+      try {
+        const res = await fetch(`/api/images/signed-url?url=${encodeURIComponent(u)}`);
         const data = await res.json();
         if (res.ok && data.url) return data.url;
       } catch (err) {
         console.error('Failed to get signed URL:', err);
       }
     }
-    return url; // Return original if conversion fails
+    return u;
   };
 
   /* ===== FETCH AREA MANAGER (via API to bypass RLS / auth issues) ===== */
@@ -388,13 +425,11 @@ export default function ProfilePage() {
           console.log('Store loaded with area_manager_id:', (store as any).area_manager_id);
           // Convert R2 URLs to signed URLs for images
           const bannerUrl = await convertR2UrlToSigned(store.banner_url);
-          const adsImages = store.ads_images ? await Promise.all(store.ads_images.map(convertR2UrlToSigned)) : null;
           const galleryImages = store.gallery_images ? await Promise.all(store.gallery_images.map(convertR2UrlToSigned)) : null;
           const logoUrl = await convertR2UrlToSigned(store.logo_url);
           const updatedStore = {
             ...store,
             banner_url: bannerUrl || store.banner_url,
-            ads_images: adsImages?.filter(Boolean) as string[] || store.ads_images,
             gallery_images: galleryImages?.filter(Boolean) as string[] || store.gallery_images,
             logo_url: logoUrl || store.logo_url,
           };
@@ -588,11 +623,14 @@ export default function ProfilePage() {
       throw new Error(data?.error || data?.details || "Upload failed");
     }
     const data = await res.json();
+    // Store proxy URL (no expiry) so image loads in profile same as onboarding uploads
+    const key = data?.key ?? data?.path;
+    if (key && typeof key === "string") return `/api/attachments/proxy?key=${encodeURIComponent(key)}`;
     return data?.url ?? null;
   };
 
   /* ===== UPDATE STORE MEDIA VIA API (bypasses RLS, uses service role on server) ===== */
-  const updateStoreMedia = async (updates: { banner_url?: string; logo_url?: string; ads_images?: string[]; gallery_images?: string[] }): Promise<boolean> => {
+  const updateStoreMedia = async (updates: { banner_url?: string; logo_url?: string; gallery_images?: string[] }): Promise<boolean> => {
     if (!storeId) return false;
     const res = await fetch("/api/merchant/store-profile", {
       method: "PATCH",
@@ -607,7 +645,7 @@ export default function ProfilePage() {
   };
 
   /* ===== IMAGE UPLOAD HANDLERS ===== */
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'banner' | 'ads' | 'logo' | 'gallery') => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'banner' | 'logo' | 'gallery') => {
     const files = Array.from(e.target.files || []);
     if (!files.length || !storeId) return;
 
@@ -640,15 +678,6 @@ export default function ProfilePage() {
         setStore(r => r ? { ...r, gallery_images: newGallery } : r);
         setEditData(r => r ? { ...r, gallery_images: newGallery } : r);
         toast.success("Gallery images updated!");
-      } else if (type === 'ads') {
-        const urls = await Promise.all(files.map((file, i) => uploadFileToR2(file, "ads", `ads_${Date.now()}_${i}.${file.name.split(".").pop() || "jpg"}`)));
-        const validUrls = urls.filter(Boolean) as string[];
-        const currentAds = store?.ads_images || [];
-        const newAds = [...currentAds, ...validUrls].slice(0, 5);
-        await updateStoreMedia({ ads_images: newAds });
-        setStore(r => r ? { ...r, ads_images: newAds } : r);
-        setEditData(r => r ? { ...r, ads_images: newAds } : r);
-        toast.success("Gallery images updated!");
       }
 
       setUploadingImages([]);
@@ -659,17 +688,17 @@ export default function ProfilePage() {
     }
   };
 
-  /* ===== REMOVE AD IMAGE ===== */
-  const handleRemoveAdImage = async (index: number) => {
-    if (!storeId || !store?.ads_images) return;
+  /* ===== REMOVE GALLERY IMAGE ===== */
+  const handleRemoveGalleryImage = async (index: number) => {
+    if (!storeId || !store?.gallery_images) return;
 
-    const newAds = [...store.ads_images];
-    newAds.splice(index, 1);
+    const newGallery = [...store.gallery_images];
+    newGallery.splice(index, 1);
 
     try {
-      await updateStoreMedia({ ads_images: newAds });
-      setStore(r => r ? { ...r, ads_images: newAds } : r);
-      setEditData(r => r ? { ...r, ads_images: newAds } : r);
+      await updateStoreMedia({ gallery_images: newGallery });
+      setStore(r => r ? { ...r, gallery_images: newGallery } : r);
+      setEditData(r => r ? { ...r, gallery_images: newGallery } : r);
       toast.success("Image removed!");
     } catch (error) {
       toast.error("Failed to remove image");
@@ -1615,12 +1644,12 @@ export default function ProfilePage() {
                         )}
                       </div>
 
-                      {/* ADS IMAGES CARD */}
+                      {/* GALLERY IMAGES CARD - loads from gallery_images column */}
                       <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-lg p-4 border border-green-100">
                         <div className="flex items-center justify-between mb-3">
                           <div>
                             <h3 className="text-sm font-semibold text-gray-900 mb-1">
-                              Gallery Images ({store.ads_images?.length || 0}/5)
+                              Gallery Images ({store.gallery_images?.length || 0}/5)
                             </h3>
                             <p className="text-xs text-gray-600">
                               Upload up to 5 promotional images
@@ -1629,28 +1658,27 @@ export default function ProfilePage() {
                           <button
                             type="button"
                             className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium"
-                            onClick={() => adsInputRef.current?.click()}
-                            disabled={(store.ads_images?.length || 0) >= 5}
+                            onClick={() => galleryInputRef.current?.click()}
+                            disabled={(store.gallery_images?.length || 0) >= 5}
                           >
                             <Upload size={12} />
-                            Upload Ads
+                            Upload
                           </button>
                           <input
                             type="file"
                             accept="image/*"
                             multiple
-                            ref={adsInputRef}
+                            ref={galleryInputRef}
                             style={{ display: "none" }}
-                            onChange={(e) => handleImageUpload(e, 'ads')}
+                            onChange={(e) => handleImageUpload(e, 'gallery')}
                           />
                         </div>
                         
-                        {/* ADS IMAGES GRID - 5 fixed boxes */}
                         <div className="grid grid-cols-5 gap-2 mt-3">
                           {Array.from({ length: 5 }).map((_: unknown, index: number) => {
-                            const ads = store.ads_images || [];
-                            const img = ads[index];
-                            const uploadingIndex = index - ads.length;
+                            const gallery = store.gallery_images || [];
+                            const img = gallery[index];
+                            const uploadingIndex = index - gallery.length;
                             const isUploading = uploadingIndex >= 0 && uploadingIndex < uploadingImages.length;
                             const uploadingPreview = isUploading ? uploadingImages[uploadingIndex] : null;
                             return (
@@ -1667,7 +1695,7 @@ export default function ProfilePage() {
                                     />
                                     <button
                                       type="button"
-                                      onClick={() => handleRemoveAdImage(index)}
+                                      onClick={() => handleRemoveGalleryImage(index)}
                                       className="absolute top-1 right-1 bg-red-500 hover:bg-red-600 text-white w-5 h-5 rounded-full flex items-center justify-center text-sm opacity-0 group-hover:opacity-100 transition-opacity"
                                     >
                                       ×

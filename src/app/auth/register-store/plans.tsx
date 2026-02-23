@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import { ChevronLeft, Check, Info, Loader2, CheckCircle, Handshake } from "lucide-react";
+import Link from "next/link";
+import { ChevronLeft, Check, Info, Loader2, CheckCircle, Handshake, FileText } from "lucide-react";
 
 export interface OnboardingPlan {
   id: string;
@@ -316,7 +317,7 @@ export default function OnboardingPlansPage({
         )}
 
         {/* Commission Information Box */}
-        <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 sm:p-4 mb-6 flex items-start gap-2 sm:gap-3">
+        <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 sm:p-4 mb-4 flex items-start gap-2 sm:gap-3">
           <Handshake className="w-4 h-4 sm:w-5 sm:h-5 text-indigo-600 shrink-0 mt-0.5" />
           <div className="flex-1">
             <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
@@ -324,6 +325,16 @@ export default function OnboardingPlansPage({
             </p>
           </div>
         </div>
+
+        <p className="text-center text-xs sm:text-sm text-slate-600 mb-6">
+          <Link
+            href="/refund-policy"
+            className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-700 font-medium underline underline-offset-2"
+          >
+            <FileText size={14} />
+            View refund policy
+          </Link>
+        </p>
       </div>
 
       {/* Navigation - Bottom (padding so taskbar doesn't overlap) */}

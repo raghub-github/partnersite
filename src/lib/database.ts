@@ -209,7 +209,7 @@ export const updateStoreInfo = async (storeId: string, updates: Partial<Merchant
       'onboarding_completed_at', 'is_active', 'is_accepting_orders', 'is_available', 'last_activity_at',
       'deleted_at', 'deleted_by', 'delist_reason', 'delisted_at', 'created_by', 'updated_by',
       'store_type', 'operational_status', 'parent_merchant_id', 'am_name', 'am_mobile', 'am_email', 'owner_name',
-      'gst_number', 'pan_number', 'aadhar_number', 'fssai_number', 'bank_account_holder', 'bank_account_number', 'bank_ifsc', 'bank_name', 'ads_images'
+      'gst_number', 'pan_number', 'aadhar_number', 'fssai_number', 'bank_account_holder', 'bank_account_number', 'bank_ifsc', 'bank_name'
     ];
     const sanitized: Record<string, any> = {};
     const updatesObj = updates as Record<string, any>;
@@ -1058,14 +1058,14 @@ export const getStoreImageCount = async (storeId: string): Promise<{ itemImages:
 
     if (storeError || !storeData) return { itemImages: 0, categoryImages: 0, total: 0 };
 
-    const [itemsRes, categoriesRes] = await Promise.all([
-      supabase.from('merchant_menu_items').select('id').eq('store_id', storeData.id).not('item_image_url', 'is', null),
-      supabase.from('merchant_menu_categories').select('id').eq('store_id', storeData.id).not('category_image_url', 'is', null),
-    ]);
+    const { data: itemsData } = await supabase
+      .from('merchant_menu_items')
+      .select('id')
+      .eq('store_id', storeData.id)
+      .not('item_image_url', 'is', null);
 
-    const itemImages = itemsRes.data?.length ?? 0;
-    const categoryImages = categoriesRes.data?.length ?? 0;
-    return { itemImages, categoryImages, total: itemImages + categoryImages };
+    const itemImages = itemsData?.length ?? 0;
+    return { itemImages, categoryImages: 0, total: itemImages };
   } catch (error: any) {
     console.error('Error getting store image count:', error.message);
     return { itemImages: 0, categoryImages: 0, total: 0 };

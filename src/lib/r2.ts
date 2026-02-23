@@ -2,7 +2,7 @@
 
 // Only import once at the top
 
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } from '@aws-sdk/client-s3';
 
 
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -205,6 +205,54 @@ export async function deleteFromR2(key: string): Promise<void> {
     console.error('[R2][ERROR] Delete failed', err);
     throw err;
   }
+}
+
+/**
+ * List object keys under a prefix (e.g. docs/merchants/GMMP1005/stores/GMMC1017/onboarding/menu/images/).
+ */
+export async function listR2KeysByPrefix(prefix: string, maxKeys = 1000): Promise<string[]> {
+  const s3 = getS3Client();
+  const bucketName = getBucketName();
+  const normalizedPrefix = prefix.trim() ? (prefix.endsWith('/') ? prefix : `${prefix}/`) : prefix;
+  const keys: string[] = [];
+  let continuationToken: string | undefined;
+  do {
+    const command = new ListObjectsV2Command({
+      Bucket: bucketName,
+      Prefix: normalizedPrefix,
+      MaxKeys: Math.min(maxKeys - keys.length, 1000),
+      ContinuationToken: continuationToken,
+    });
+    const response = await s3.send(command);
+    const contents = response.Contents || [];
+    for (const obj of contents) {
+      if (obj.Key) keys.push(obj.Key);
+    }
+    continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
+  } while (continuationToken && keys.length < maxKeys);
+  return keys;
+}
+
+/**
+ * Delete all objects under a prefix. Use to clean up old onboarding menu files when replacing from dashboard.
+ */
+export async function deleteFromR2ByPrefix(prefix: string): Promise<number> {
+  const keys = await listR2KeysByPrefix(prefix);
+  if (keys.length === 0) return 0;
+  const s3 = getS3Client();
+  const bucketName = getBucketName();
+  const BATCH = 1000;
+  let deleted = 0;
+  for (let i = 0; i < keys.length; i += BATCH) {
+    const chunk = keys.slice(i, i + BATCH);
+    const command = new DeleteObjectsCommand({
+      Bucket: bucketName,
+      Delete: { Objects: chunk.map((Key) => ({ Key })), Quiet: true },
+    });
+    await s3.send(command);
+    deleted += chunk.length;
+  }
+  return deleted;
 }
 
 export async function getR2SignedUrl(key: string, expiresInSeconds = 3600): Promise<string> {

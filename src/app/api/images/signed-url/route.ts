@@ -14,7 +14,7 @@ const s3Client = new S3Client({
 /**
  * GET /api/images/signed-url?key=merchant-assets/GMMC1002/banners/banners_123.png
  * Generates a signed URL for an R2 object key (valid for 7 days).
- * Use this when displaying images stored in merchant_stores (banner_url, ads_images, etc.).
+ * Use this when displaying images stored in merchant_stores (banner_url, gallery_images, etc.).
  */
 export async function GET(req: NextRequest) {
   try {
@@ -30,20 +30,30 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'R2_BUCKET_NAME not configured' }, { status: 500 });
     }
 
-    let objectKey = key || '';
+    let objectKey = key ? decodeURIComponent(key) : '';
 
     // If URL provided, extract key from it
     if (!objectKey && url) {
       try {
-        const urlObj = new URL(url);
-        objectKey = urlObj.pathname.replace(/^\/+/, '');
-        // If it's an R2 endpoint URL, extract the path after the bucket/domain
-        if (url.includes('r2.cloudflarestorage.com')) {
+        // Proxy URL: /api/attachments/proxy?key=... (key is the full R2 key, e.g. docs/merchants/...)
+        if (url.includes('attachments/proxy') && url.includes('key=')) {
+          const urlObj = new URL(url, 'https://dummy');
+          const keyParam = urlObj.searchParams.get('key');
+          if (keyParam) objectKey = decodeURIComponent(keyParam);
+        }
+        if (!objectKey) {
+          const urlObj = new URL(url);
           objectKey = urlObj.pathname.replace(/^\/+/, '');
+          if (url.includes('r2.cloudflarestorage.com')) {
+            objectKey = urlObj.pathname.replace(/^\/+/, '');
+          }
+        }
+        if (!objectKey) {
+          const match = url.match(/(?:docs\/merchants|merchant-assets|merchants)\/.+$/);
+          if (match) objectKey = match[0];
         }
       } catch {
-        // If URL parsing fails, try to extract key manually
-        const match = url.match(/(?:merchant-assets|merchants)\/.+$/);
+        const match = url.match(/(?:docs\/merchants|merchant-assets|merchants)\/.+$/);
         if (match) objectKey = match[0];
       }
     }

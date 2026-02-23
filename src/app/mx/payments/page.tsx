@@ -186,7 +186,7 @@ function PaymentsContent() {
   const [bankProofUploading, setBankProofUploading] = useState(false)
   const [addBankSubmitting, setAddBankSubmitting] = useState(false)
 
-  const [payoutQuote, setPayoutQuote] = useState<{ requested_amount: number; commission_percentage: number; commission_amount: number; tds_amount: number; tax_amount: number; net_payout_amount: number } | null>(null)
+  const [payoutQuote, setPayoutQuote] = useState<{ requested_amount: number; commission_percentage: number; commission_amount: number; gst_on_commission_percent: number; gst_on_commission: number; tds_amount: number; tax_amount: number; net_payout_amount: number } | null>(null)
   const [payoutQuoteLoading, setPayoutQuoteLoading] = useState(false)
 
   const [expandedLedgerId, setExpandedLedgerId] = useState<number | null>(null)
@@ -253,6 +253,8 @@ function PaymentsContent() {
             requested_amount: data.requested_amount ?? amount,
             commission_percentage: data.commission_percentage ?? 0,
             commission_amount: data.commission_amount ?? 0,
+            gst_on_commission_percent: data.gst_on_commission_percent ?? 18,
+            gst_on_commission: data.gst_on_commission ?? 0,
             tds_amount: data.tds_amount ?? 0,
             tax_amount: data.tax_amount ?? 0,
             net_payout_amount: data.net_payout_amount ?? amount,
@@ -283,6 +285,15 @@ function PaymentsContent() {
     const amount = parseFloat(withdrawalAmount)
     if (!storeId || isNaN(amount) || amount < 100) {
       toast.error('Enter a valid amount (min ₹100)')
+      return
+    }
+    const available = wallet?.available_balance ?? 0
+    if (available < 100) {
+      toast.error('Available balance is below the minimum withdrawal (₹100).')
+      return
+    }
+    if (amount > available) {
+      toast.error('Requested amount exceeds your available balance.')
       return
     }
     const bankId = withdrawBankId === '' ? null : Number(withdrawBankId)
@@ -468,10 +479,19 @@ function PaymentsContent() {
           <div className="max-w-6xl mx-auto space-y-6">
             {/* Header */}
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <MobileHamburgerButton />
                 <div>
-                  <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Payments & Ledger</h1>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Payments & Ledger</h1>
+                    <a
+                      href="/refund-policy"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-sm font-medium hover:bg-indigo-100 transition-colors"
+                    >
+                      <FileText size={14} />
+                      View refund policy
+                    </a>
+                  </div>
                   <p className="text-sm text-gray-500 mt-0.5">Wallet balance and full transaction history</p>
                 </div>
               </div>
@@ -871,6 +891,31 @@ function PaymentsContent() {
                                             )}
                                             <div className="flex justify-between"><dt className="text-slate-500">Amount</dt><dd>₹{payoutDetailsCache[row.reference_id]?.payout?.amount?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) ?? '—'}</dd></div>
                                             <div className="flex justify-between"><dt className="text-slate-500">Net payout</dt><dd className="font-medium">₹{payoutDetailsCache[row.reference_id]?.payout?.net_payout_amount?.toLocaleString('en-IN', { minimumFractionDigits: 2 }) ?? '—'}</dd></div>
+                                            {payoutDetailsCache[row.reference_id]?.payout?.status === 'COMPLETED' && storeId && (
+                                              <div className="pt-2 mt-2 border-t border-slate-100">
+                                                <dt className="text-slate-500 text-xs mb-1">Invoice</dt>
+                                                <dd className="flex gap-2 flex-wrap">
+                                                  <a
+                                                    href={`/api/merchant/invoice/${row.reference_id}?storeId=${encodeURIComponent(storeId)}&format=pdf`}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700"
+                                                  >
+                                                    <FileText size={14} />
+                                                    PDF
+                                                  </a>
+                                                  <a
+                                                    href={`/api/merchant/invoice/${row.reference_id}?storeId=${encodeURIComponent(storeId)}&format=csv`}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700"
+                                                  >
+                                                    <FileText size={14} />
+                                                    CSV
+                                                  </a>
+                                                </dd>
+                                              </div>
+                                            )}
                                           </dl>
                                         </div>
                                         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
@@ -1054,7 +1099,7 @@ function PaymentsContent() {
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2">
                       <p className="text-sm font-medium text-slate-700">Withdrawal calculation</p>
                       <div className="flex justify-between text-sm text-slate-600">
-                        <span>Requested amount</span>
+                        <span>Requested amount (gross)</span>
                         <span className="tabular-nums">₹{payoutQuote.requested_amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                       </div>
                       <div className="flex justify-between text-sm text-slate-600">
@@ -1062,12 +1107,16 @@ function PaymentsContent() {
                         <span className="tabular-nums text-amber-600">−₹{(payoutQuote.commission_amount ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                       </div>
                       <div className="flex justify-between text-sm text-slate-600">
+                        <span>GST on Commission ({payoutQuote.gst_on_commission_percent ?? 18}%)</span>
+                        <span className="tabular-nums text-amber-600">−₹{(payoutQuote.gst_on_commission ?? payoutQuote.tax_amount ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+                      <div className="flex justify-between text-sm text-slate-600">
                         <span>TDS</span>
                         <span className="tabular-nums">{(payoutQuote.tds_amount ?? 0) > 0 ? `−₹${(payoutQuote.tds_amount ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}</span>
                       </div>
                       <div className="flex justify-between text-sm text-slate-600">
-                        <span>Tax / GST</span>
-                        <span className="tabular-nums">{(payoutQuote.tax_amount ?? 0) > 0 ? `−₹${(payoutQuote.tax_amount ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}</span>
+                        <span>TCS</span>
+                        <span className="tabular-nums">—</span>
                       </div>
                       <div className="flex justify-between text-sm font-semibold text-slate-800 pt-2 border-t border-slate-200">
                         <span>You receive (net payout)</span>
@@ -1126,7 +1175,15 @@ function PaymentsContent() {
                 </button>
                 <button
                   onClick={handleWithdrawal}
-                  disabled={isWithdrawing || !withdrawalAmount || parseFloat(withdrawalAmount) < 100 || (withdrawBankId !== '' && !bankAccounts.some((a) => a.id === withdrawBankId && !a.is_disabled)) || (bankAccounts.filter((a) => !a.is_disabled).length === 0)}
+                  disabled={
+                    isWithdrawing
+                    || !withdrawalAmount
+                    || parseFloat(withdrawalAmount) < 100
+                    || (wallet?.available_balance ?? 0) < 100
+                    || parseFloat(withdrawalAmount) > (wallet?.available_balance ?? 0)
+                    || (withdrawBankId !== '' && !bankAccounts.some((a) => a.id === withdrawBankId && !a.is_disabled))
+                    || (bankAccounts.filter((a) => !a.is_disabled).length === 0)
+                  }
                   className="flex-1 py-2.5 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 font-medium disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {isWithdrawing ? (

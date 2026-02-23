@@ -46,27 +46,18 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Store not found or access denied' }, { status: 404 })
     }
 
-    const [itemsRes, categoriesRes] = await Promise.all([
-      supabase
-        .from('merchant_menu_items')
-        .select('id', { count: 'exact', head: true })
-        .eq('store_id', store.id)
-        .not('item_image_url', 'is', null),
-      supabase
-        .from('merchant_menu_categories')
-        .select('id', { count: 'exact', head: true })
-        .eq('store_id', store.id)
-        .not('category_image_url', 'is', null),
-    ])
+    const { count: itemImages } = await supabase
+      .from('merchant_menu_items')
+      .select('id', { count: 'exact', head: true })
+      .eq('store_id', store.id)
+      .not('item_image_url', 'is', null)
 
-    const itemImages = itemsRes.count ?? 0
-    const categoryImages = categoriesRes.count ?? 0
-    const totalUsed = itemImages + categoryImages
+    const totalUsed = itemImages ?? 0
 
     return NextResponse.json({
       totalUsed,
-      itemImages,
-      categoryImages,
+      itemImages: totalUsed,
+      categoryImages: 0,
     })
   } catch (e: unknown) {
     console.error('[store-image-count]', e)

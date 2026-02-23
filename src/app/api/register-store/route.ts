@@ -44,6 +44,11 @@ export async function POST(req: NextRequest) {
         }
   // Import R2 helpers
   const { uploadToR2, deleteFromR2, extractR2KeyFromUrl, toStoredDocumentUrl, toStoredDocumentUrlSigned } = await import('@/lib/r2');
+  // Store proxy URLs (not signed URLs) for banner/gallery so they load in profile regardless of when uploaded
+  const toStoredMediaUrl = (value: string | null | undefined): string | null => {
+    if (!value || typeof value !== 'string') return null;
+    return toStoredDocumentUrl(value) ?? value;
+  };
   // Define document types and folders
   const docFolders = {
     PAN: 'PAN',
@@ -184,15 +189,11 @@ export async function POST(req: NextRequest) {
 
     // 2. Insert or update draft store (one row per child store)
     const draftStoreDbId = step1?.__draftStoreDbId ? Number(step1.__draftStoreDbId) : null;
-    const resolvedMedia = await Promise.all([
-      toStoredDocumentUrlSigned(logoUrl),
-      toStoredDocumentUrlSigned(bannerUrl),
-      ...(Array.isArray(galleryUrls) ? galleryUrls.map((u: string) => toStoredDocumentUrlSigned(u)) : []),
-    ]);
-    const logoUrlStored = resolvedMedia[0] || logoUrl || null;
-    const bannerUrlStored = resolvedMedia[1] || bannerUrl || null;
+    // Store proxy URLs (stable, no expiry) so banner/gallery load in merchant profile from onboarding or dashboard
+    const logoUrlStored = toStoredMediaUrl(logoUrl) || logoUrl || null;
+    const bannerUrlStored = toStoredMediaUrl(bannerUrl) || bannerUrl || null;
     const galleryUrlsStored = Array.isArray(galleryUrls)
-      ? resolvedMedia.slice(2).filter((u): u is string => !!u)
+      ? galleryUrls.map((u: string) => toStoredMediaUrl(u)).filter((u): u is string => !!u)
       : galleryUrls;
     const storePayload = {
       parent_id: parentId,

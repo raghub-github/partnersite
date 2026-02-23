@@ -1419,10 +1419,13 @@ export async function PUT(req: NextRequest) {
 
     if (stepStore?.storeDbId && mergedFormData?.step5) {
       const s5 = mergedFormData.step5 || {};
-      const logoUrlStored = (await toStoredDocumentUrlSigned(s5.logo_url)) || s5.logo_url || null;
-      const bannerUrlStored = (await toStoredDocumentUrlSigned(s5.banner_url)) || s5.banner_url || null;
+      // Store proxy URLs (stable, no expiry) so banner/gallery load in merchant profile
+      const { toStoredDocumentUrl } = await import('@/lib/r2');
+      const toStoredMediaUrl = (v: string | null | undefined): string | null => (v && toStoredDocumentUrl(v)) || (v && typeof v === 'string' ? v : null) || null;
+      const logoUrlStored = toStoredMediaUrl(s5.logo_url) || s5.logo_url || null;
+      const bannerUrlStored = toStoredMediaUrl(s5.banner_url) || s5.banner_url || null;
       const galleryUrlsStored = Array.isArray(s5.gallery_image_urls)
-        ? (await Promise.all(s5.gallery_image_urls.map((u: string) => toStoredDocumentUrlSigned(u)))).filter((u: string | null | undefined): u is string => !!u)
+        ? s5.gallery_image_urls.map((u: string) => toStoredMediaUrl(u)).filter((u: string | null | undefined): u is string => !!u)
         : null;
       await db
         .from("merchant_stores")

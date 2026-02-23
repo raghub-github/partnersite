@@ -621,7 +621,7 @@ export default function AgreementContractPage({
                 <header className="border-b border-slate-200 pb-4 mb-2 bg-slate-50/80 -mx-2.5 sm:-mx-3 md:-mx-4 px-2.5 sm:px-3 md:px-4 pt-3 rounded-t-lg sm:rounded-t-xl">
                   <div className="flex items-center gap-3 mb-3">
                     <img src={displayLogoUrl} alt="GatiMitra" className="h-9 sm:h-10 w-auto object-contain" />
-                    <span className="text-sm sm:text-base font-semibold text-slate-800">GatiMitra</span>
+                    {/* <span className="text-sm sm:text-base font-semibold text-slate-800">GatiMitra</span> */}
                   </div>
                   <h2 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wide mb-2">
                     Restaurant Partner Enrolment Form (&quot;Form&quot;) for Food Ordering and Delivery Services

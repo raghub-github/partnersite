@@ -5,7 +5,7 @@ const safeNumberInput = (val: number | null | undefined) => (typeof val === 'num
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import dynamic from 'next/dynamic';
 import axios from 'axios';
-import { Loader2, Menu, X, HelpCircle } from 'lucide-react';
+import { Loader2, Menu, X, HelpCircle, Package, Mail, Wallet, CheckCircle2 } from 'lucide-react';
 import MerchantHelpTicket from '@/components/MerchantHelpTicket';
 import { createClient } from '@/lib/supabase/client';
 import { useSearchParams } from 'next/navigation';
@@ -1561,6 +1561,7 @@ const StoreRegistrationForm = () => {
 
   const prevStep = async () => {
     const currentStep = step;
+    setActionLoading(true);
     try {
       // Persist current step to DB before navigating back (blocking so edits are saved)
       await saveStepData(currentStep, false, undefined, true);
@@ -1568,6 +1569,8 @@ const StoreRegistrationForm = () => {
     } catch (saveErr: any) {
       console.error('Failed to save step data when going back:', saveErr);
       setStep((prev) => prev - 1);
+    } finally {
+      setActionLoading(false);
     }
   };
 
@@ -2316,10 +2319,90 @@ const StoreRegistrationForm = () => {
         ref={mainScrollRef}
         className={`flex-1 min-h-0 min-w-0 pb-24 sm:pb-28 overflow-y-auto overflow-x-hidden overscroll-contain hide-scrollbar ${step >= 7 && step <= 9 ? "pt-0 px-2 sm:px-4 md:px-6" : "p-2 sm:p-3 md:px-5"}`}
       >
-        {/* Step 1: Basic Store Information */}
+        {/* Step 1: Intro sections + Basic Store Information */}
         {step === 1 && (
           <div className="min-h-full flex items-start justify-center">
-            <div className="w-full max-w-2xl space-y-4">
+            <div className="w-full max-w-2xl space-y-6">
+              {/* Section 1: Why partner with GatiMitra */}
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="p-6 sm:p-8">
+                  <h2 className="text-xl sm:text-2xl font-bold text-slate-900 text-center">
+                    Why should you partner with GatiMitra?
+                  </h2>
+                  <div className="mt-4 h-px bg-slate-200 max-w-24 mx-auto" aria-hidden />
+                  <div className="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-6 sm:gap-8">
+                    <div className="flex flex-col items-center text-center">
+                      <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center mb-4">
+                        <Package className="w-6 h-6 text-blue-600" />
+                      </div>
+                      <h3 className="font-semibold text-slate-900 mb-2">Reliable Delivery Support</h3>
+                      <p className="text-sm text-slate-600 leading-relaxed">
+                        Focus on cooking while we handle delivery operations. Our delivery network ensures smooth pickups and doorstep delivery so your orders reach customers safely and on time.
+                      </p>
+                    </div>
+                    <div className="flex flex-col items-center text-center">
+                      <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center mb-4">
+                        <Mail className="w-6 h-6 text-emerald-600" />
+                      </div>
+                      <h3 className="font-semibold text-slate-900 mb-2">Dedicated Onboarding & Merchant Support</h3>
+                      <p className="text-sm text-slate-600 leading-relaxed mb-2">
+                        We don&apos;t leave you alone after signup. Our team helps you at every step — onboarding, menu setup, operations, and issue resolution.
+                      </p>
+                      <a href="mailto:support@gatimitra.com" className="text-sm font-medium text-blue-600 hover:underline">support@gatimitra.com</a>
+                      <p className="text-xs text-slate-500 mt-1">Response time: within 2–3 hours</p>
+                    </div>
+                    <div className="flex flex-col items-center text-center">
+                      <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center mb-4">
+                        <Wallet className="w-6 h-6 text-amber-600" />
+                      </div>
+                      <h3 className="font-semibold text-slate-900 mb-2">Fast & Transparent Payouts</h3>
+                      <p className="text-sm text-slate-600 leading-relaxed">
+                        Get paid regularly with secure and transparent settlements. GatiMitra provides payouts twice every week (Tuesday & Friday) directly to your bank account.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Section 2: Get started – documents ready (no apply/refer links) */}
+              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="p-6 sm:p-8">
+                  <h2 className="text-lg sm:text-xl font-bold text-slate-900">
+                    Get started: It only takes 10 minutes
+                  </h2>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Please keep these documents and details ready for a smooth sign-up.
+                  </p>
+                  <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <ul className="space-y-3">
+                      <li className="flex items-start gap-3">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                        <span className="text-sm text-slate-700">PAN card</span>
+                      </li>
+                      <li className="flex items-start gap-3">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                        <span className="text-sm text-slate-700">FSSAI license</span>
+                      </li>
+                      <li className="flex items-start gap-3">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                        <span className="text-sm text-slate-700">Bank account details</span>
+                      </li>
+                    </ul>
+                    <ul className="space-y-3">
+                      <li className="flex items-start gap-3">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                        <span className="text-sm text-slate-700">GST number, if applicable</span>
+                      </li>
+                      <li className="flex items-start gap-3">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                        <span className="text-sm text-slate-700">Menu and profile food image</span>
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 1 form: Basic Store Information */}
               <div className="bg-white rounded-xl shadow-sm border border-slate-200">
                 <div className="p-4 sm:p-5">
                   <div className="flex items-center gap-2 mb-4">
@@ -3119,6 +3202,7 @@ const StoreRegistrationForm = () => {
               onStoreHoursSave={(hours) => saveStoreHoursProgress(hours)}
               onStoreFeaturesSave={saveStoreFeaturesProgress}
               onBack={async () => {
+                setActionLoading(true);
                 try {
                   await saveProgress({ currentStep: 5, nextStep: 4, markStepComplete: false, formDataPatch: getStepPatch(5) });
                   setStep(4);
@@ -3174,6 +3258,8 @@ const StoreRegistrationForm = () => {
                 } catch (err) {
                   console.error('Failed to save step 5 data:', err);
                   setStep(4);
+                } finally {
+                  setActionLoading(false);
                 }
               }}
               actionLoading={actionLoading}
@@ -3205,22 +3291,27 @@ const StoreRegistrationForm = () => {
               }}
               parentInfo={parentInfo}
               onBack={async () => {
+                setActionLoading(true);
                 try {
                   await saveProgress({ currentStep: 6, nextStep: 5, markStepComplete: false, formDataPatch: getStepPatch(6) });
                   setStep(5);
                 } catch (err) {
                   console.error('Failed to save step 6 data:', err);
-                  // Still navigate back even if save fails
                   setStep(5);
+                } finally {
+                  setActionLoading(false);
                 }
               }}
               onContinueToPlans={async () => {
+                setActionLoading(true);
                 try {
                   await saveProgress({ currentStep: 6, nextStep: 7, markStepComplete: true, formDataPatch: getStepPatch(6) });
                   setStep(7);
                 } catch (err) {
                   console.error('Failed to save step 6 data:', err);
                   alert('Failed to save your progress. Please try again.');
+                } finally {
+                  setActionLoading(false);
                 }
               }}
               actionLoading={actionLoading}
@@ -3237,22 +3328,27 @@ const StoreRegistrationForm = () => {
               parentInfo={parentInfo}
               step1={formData}
               onBack={async () => {
+                setActionLoading(true);
                 try {
                   await saveProgress({ currentStep: 7, nextStep: 6, markStepComplete: false, formDataPatch: { step7: { selectedPlanId: selectedPlanId || 'FREE' } } });
                   setStep(6);
                 } catch (err) {
                   console.error('Failed to save step 7 data:', err);
-                  // Still navigate back even if save fails
                   setStep(6);
+                } finally {
+                  setActionLoading(false);
                 }
               }}
               onContinue={async () => {
+                setActionLoading(true);
                 try {
                   await saveProgress({ currentStep: 7, nextStep: 8, markStepComplete: true, formDataPatch: { step7: { selectedPlanId: selectedPlanId || 'FREE' } } });
                   setStep(8);
                 } catch (err) {
                   console.error('Failed to save step 7 data:', err);
                   alert('Failed to save your progress. Please try again.');
+                } finally {
+                  setActionLoading(false);
                 }
               }}
               actionLoading={actionLoading}
@@ -3271,16 +3367,19 @@ const StoreRegistrationForm = () => {
               termsContent={agreementTemplate?.content_markdown || MERCHANT_PARTNERSHIP_TERMS}
               logoUrl={typeof process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL === "string" && process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL ? process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL : "/logo.png"}
               onBack={async () => {
+                setActionLoading(true);
                 try {
                   await saveProgress({ currentStep: 8, nextStep: 7, markStepComplete: false, formDataPatch: {} });
                   setStep(7);
                 } catch (err) {
                   console.error('Failed to save step 8 data:', err);
-                  // Still navigate back even if save fails
                   setStep(7);
+                } finally {
+                  setActionLoading(false);
                 }
               }}
               onContinue={async (text) => {
+                setActionLoading(true);
                 try {
                   await saveProgress({ currentStep: 8, nextStep: 9, markStepComplete: true, formDataPatch: {} });
                   setContractTextForSignature(text);
@@ -3288,6 +3387,8 @@ const StoreRegistrationForm = () => {
                 } catch (err) {
                   console.error('Failed to save step 8 data:', err);
                   alert('Failed to save your progress. Please try again.');
+                } finally {
+                  setActionLoading(false);
                 }
               }}
               actionLoading={actionLoading}
@@ -3321,13 +3422,15 @@ const StoreRegistrationForm = () => {
               contractTextForPdf={contractTextForSignature}
               logoUrl={typeof process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL === "string" && process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL ? process.env.NEXT_PUBLIC_PLATFORM_LOGO_URL : "/logo.png"}
               onBack={async () => {
+                setActionLoading(true);
                 try {
                   await saveProgress({ currentStep: 9, nextStep: 8, markStepComplete: false, formDataPatch: {} });
                   setStep(8);
                 } catch (err) {
                   console.error('Failed to save step 9 data:', err);
-                  // Still navigate back even if save fails
                   setStep(8);
+                } finally {
+                  setActionLoading(false);
                 }
               }}
               actionLoading={actionLoading}

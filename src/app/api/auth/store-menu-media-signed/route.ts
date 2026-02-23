@@ -68,7 +68,7 @@ export async function GET(req: NextRequest) {
 
     const { data: menuMedia } = await db
       .from("merchant_store_media_files")
-      .select("public_url, r2_key, source_entity, verification_status, created_at, uploaded_by")
+      .select("public_url, r2_key, source_entity, verification_status, created_at, uploaded_by, original_file_name")
       .eq("store_id", storeId)
       .eq("media_scope", "MENU_REFERENCE")
       .eq("is_active", true);
@@ -78,6 +78,8 @@ export async function GET(req: NextRequest) {
         success: true,
         menuSpreadsheetUrl: null,
         menuImageUrls: [],
+        menuSpreadsheetFileName: null,
+        menuImageFileNames: [],
         menuSpreadsheetVerificationStatus: null,
         menuImageVerificationStatuses: [],
         menuSpreadsheetUploadedAt: null,
@@ -91,11 +93,15 @@ export async function GET(req: NextRequest) {
 
     const menuSpreadsheetUrl = toProxyUrl(rawSheet);
     const menuImageUrls = rawImages.map((u) => toProxyUrl(u)).filter((u): u is string => !!u);
+    const menuSpreadsheetFileName = (sheetRow as { original_file_name?: string })?.original_file_name ?? null;
+    const menuImageFileNames = imageRows.map((r: { original_file_name?: string }) => r.original_file_name ?? "Menu image");
 
     return NextResponse.json({
       success: true,
       menuSpreadsheetUrl: menuSpreadsheetUrl ?? null,
       menuImageUrls: menuImageUrls.filter((u): u is string => !!u),
+      menuSpreadsheetFileName,
+      menuImageFileNames,
       menuSpreadsheetVerificationStatus: (sheetRow as { verification_status?: string })?.verification_status ?? null,
       menuImageVerificationStatuses: imageRows.map((r: { verification_status?: string }) => r.verification_status ?? "PENDING"),
       menuSpreadsheetUploadedAt: (sheetRow as { created_at?: string })?.created_at ?? null,

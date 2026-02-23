@@ -67,7 +67,6 @@ export interface MerchantStore {
   bank_account_number?: string;
   bank_ifsc?: string;
   bank_name?: string;
-  ads_images?: string[];
   opening_time?: string;
   closing_time?: string;
 }

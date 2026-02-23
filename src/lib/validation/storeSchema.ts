@@ -8,7 +8,7 @@ export const storeSchema = z.object({
   store_email: z.string().email('Invalid email'),
   store_phones: z.array(z.string()).min(1, 'At least one phone required'),
   store_banner_url: z.string().url('Banner image required'),
-  ads_images: z.array(z.string().url()).max(5),
+  gallery_images: z.array(z.string().url()).max(10).optional(),
   full_address: z.string().min(5),
   city: z.string().min(2),
   state: z.string().min(2),

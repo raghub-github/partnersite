@@ -10,11 +10,11 @@ function getSupabase() {
   });
 }
 
-const ALLOWED_MEDIA_KEYS = ['banner_url', 'logo_url', 'ads_images', 'gallery_images'] as const;
+const ALLOWED_MEDIA_KEYS = ['banner_url', 'logo_url', 'gallery_images'] as const;
 
 /**
  * PATCH /api/merchant/store-profile
- * Body: { storeId: string, banner_url?: string, logo_url?: string, ads_images?: string[], gallery_images?: string[] }
+ * Body: { storeId: string, banner_url?: string, logo_url?: string, gallery_images?: string[] }
  * Updates only media fields on merchant_stores using service role (bypasses RLS).
  * Used after R2 upload so the UI can persist and display image URLs.
  */
@@ -32,11 +32,8 @@ export async function PATCH(req: NextRequest) {
         const val = body[key];
         if (key === 'banner_url' || key === 'logo_url') {
           if (val === null || val === undefined || typeof val === 'string') updates[key] = val ?? null;
-        } else if (key === 'ads_images') {
-          if (Array.isArray(val)) updates[key] = val.slice(0, 5);
-          else if (val === null || val === undefined) updates[key] = null;
         } else {
-          if (Array.isArray(val)) updates[key] = val;
+          if (Array.isArray(val)) updates[key] = val.slice(0, 10);
           else if (val === null || val === undefined) updates[key] = null;
         }
       }

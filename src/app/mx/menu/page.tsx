@@ -1,5 +1,23 @@
 "use client";
 
+// Default placeholder for menu items when no image is set (restaurant-style)
+const ITEM_PLACEHOLDER_SVG = "data:image/svg+xml," + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><rect width="64" height="64" fill="#f3f4f6"/><path d="M32 18c-5 0-9 4-9 9s4 9 9 9 9-4 9-9-4-9-9-9zm0 14c-2.8 0-5-2.2-5-5s2.2-5 5-5 5 2.2 5 5-2.2 5-5 5z" fill="#d1d5db"/><path d="M20 38l4 12h16l4-12H20z" fill="#9ca3af"/><ellipse cx="32" cy="44" rx="12" ry="3" fill="#e5e7eb"/></svg>'
+);
+
+// Suggested category names for type-ahead (max 30 chars per name)
+const CATEGORY_SUGGESTIONS = [
+  "North Indian", "South Indian", "Mughlai", "Punjabi", "Rajasthani", "Gujarati", "Maharashtrian", "Bengali", "Bihari", "Awadhi", "Kashmiri", "Hyderabadi",
+  "Chinese", "Indo-Chinese", "Thai", "Asian", "Japanese", "Korean", "Vietnamese", "Italian", "Mexican", "American", "Mediterranean", "Lebanese", "Turkish", "Arabian", "Continental", "European",
+  "Fast Food", "Street Food", "Cafe", "Bakery", "Desserts", "Ice Cream", "Beverages", "Juices", "Smoothies", "Shake & Thick Shakes", "Tea", "Coffee",
+  "Pizza", "Burger", "Sandwich", "Wraps & Rolls", "Frankie", "Kathi Roll", "Momos", "Noodles", "Pasta", "Biryani", "Pulao", "Kebab", "Tandoor", "Grill", "BBQ",
+  "Seafood", "Fish & Chips", "Chicken Special", "Mutton Dishes", "Egg Dishes", "Pure Veg", "Jain Food", "Healthy Food", "Salads", "Diet Food", "Protein Meals",
+  "Home Style Food", "Thali", "Mini Meals", "Combo Meals", "Lunch Box", "Dinner Specials", "Breakfast", "Brunch", "Snacks", "Chaat", "Panipuri", "Sweets", "Mithai", "Halwa", "Lassi", "Kulfi", "Falooda",
+  "Waffles", "Pancakes", "Donuts", "Brownies", "Cakes", "Pastries", "Cupcakes", "Chocolate Special", "Frozen Desserts", "Mocktails", "Soft Drinks", "Energy Drinks", "Milkshakes", "Fruit Bowls",
+  "Organic Food", "Vegan", "Gluten Free", "Regional Indian", "Coastal Food", "Andhra Cuisine", "Chettinad", "Malabar", "Kerala Food", "Tamil Cuisine", "Telangana Cuisine", "Street Chinese", "Fusion Food",
+  "Cloud Kitchen", "Family Restaurant", "Fine Dining", "Quick Bites", "Budget Meals", "Late Night Delivery", "Takeaway Only", "Bulk Orders", "Party Orders", "Catering",
+].map(n => n.length > 30 ? n.slice(0, 30) : n);
+
 // Helper to generate menu item id like GMI1001, GMI1002, ...
 function generateMenuItemId() {
   if (typeof window !== 'undefined') {
@@ -89,7 +107,7 @@ import React, { useState, useEffect, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'next/navigation'
 import { Toaster, toast } from 'sonner'
-import { Plus, Edit2, Trash2, X, Upload, Package, ChevronDown, ChevronUp, Image as ImageIcon, Info, Search, FileText } from 'lucide-react'
+import { Plus, Edit2, Trash2, X, Upload, Package, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Image as ImageIcon, Info, Search, FileText } from 'lucide-react'
 import { MXLayoutWhite } from '@/components/MXLayoutWhite'
 import { MobileHamburgerButton } from '@/components/MobileHamburgerButton'
 import { 
@@ -119,8 +137,6 @@ interface MenuCategory {
   id: number;
   store_id: number;
   category_name: string;
-  category_description?: string;
-  category_image_url?: string;
   is_active?: boolean;
   created_at?: string;
   updated_at?: string;
@@ -960,16 +976,12 @@ function MenuContent() {
   const [categoryModalMode, setCategoryModalMode] = useState<'add' | 'edit'>('add');
   const [categoryForm, setCategoryForm] = useState<Partial<MenuCategory>>({ 
     category_name: '', 
-    category_description: '', 
-    category_image_url: '',
     is_active: true,
   });
-  const [categoryImageFile, setCategoryImageFile] = useState<File | null>(null);
-  const [categoryImagePreview, setCategoryImagePreview] = useState<string>('');
-  const [categoryImageUploading, setCategoryImageUploading] = useState(false);
-  const [categoryImageValidationError, setCategoryImageValidationError] = useState('');
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [categoryError, setCategoryError] = useState<string | null>(null);
+  const [categorySuggestionsOpen, setCategorySuggestionsOpen] = useState(false);
+  const categoryScrollRef = React.useRef<HTMLDivElement>(null);
 
   const searchParams = useSearchParams();
   const [store, setStore] = useState<MerchantStore | null>(null);
@@ -997,7 +1009,7 @@ function MenuContent() {
     base_price: '',
     selling_price: '',
     discount_percentage: '0',
-    tax_percentage: '0',
+    tax_percentage: '5',
     in_stock: true,
     available_quantity: '',
     low_stock_threshold: '',
@@ -1026,7 +1038,7 @@ function MenuContent() {
     base_price: '',
     selling_price: '',
     discount_percentage: '0',
-    tax_percentage: '0',
+    tax_percentage: '5',
     in_stock: true,
     available_quantity: '',
     low_stock_threshold: '',
@@ -1035,7 +1047,7 @@ function MenuContent() {
     has_variants: false,
     is_popular: false,
     is_recommended: false,
-    preparation_time_minutes: 15,
+    preparation_time_minutes: 25,
     serves: 1,
     is_active: true,
     allergens: '',
@@ -1077,6 +1089,8 @@ function MenuContent() {
 
   const [existingMenuSpreadsheetUrl, setExistingMenuSpreadsheetUrl] = useState<string | null>(null);
   const [existingMenuImageUrls, setExistingMenuImageUrls] = useState<string[]>([]);
+  const [existingMenuSpreadsheetFileName, setExistingMenuSpreadsheetFileName] = useState<string | null>(null);
+  const [existingMenuImageFileNames, setExistingMenuImageFileNames] = useState<string[]>([]);
   const [menuSpreadsheetVerificationStatus, setMenuSpreadsheetVerificationStatus] = useState<string | null>(null);
   const [menuImageVerificationStatuses, setMenuImageVerificationStatuses] = useState<string[]>([]);
   const [menuUploadMode, setMenuUploadMode] = useState<'csv' | 'image' | null>(null);
@@ -1109,6 +1123,8 @@ function MenuContent() {
         const menuData = await menuRes.json();
         setExistingMenuSpreadsheetUrl(menuData.menuSpreadsheetUrl ?? null);
         setExistingMenuImageUrls(Array.isArray(menuData.menuImageUrls) ? menuData.menuImageUrls : []);
+        setExistingMenuSpreadsheetFileName(menuData.menuSpreadsheetFileName ?? null);
+        setExistingMenuImageFileNames(Array.isArray(menuData.menuImageFileNames) ? menuData.menuImageFileNames : []);
         setMenuSpreadsheetVerificationStatus(menuData.menuSpreadsheetVerificationStatus ?? null);
         setMenuImageVerificationStatuses(Array.isArray(menuData.menuImageVerificationStatuses) ? menuData.menuImageVerificationStatuses : []);
       }
@@ -1256,6 +1272,10 @@ function MenuContent() {
               const menuData = await menuRes.json();
               setExistingMenuSpreadsheetUrl(menuData.menuSpreadsheetUrl ?? null);
               setExistingMenuImageUrls(Array.isArray(menuData.menuImageUrls) ? menuData.menuImageUrls : []);
+              setExistingMenuSpreadsheetFileName(menuData.menuSpreadsheetFileName ?? null);
+              setExistingMenuImageFileNames(Array.isArray(menuData.menuImageFileNames) ? menuData.menuImageFileNames : []);
+              setMenuSpreadsheetVerificationStatus(menuData.menuSpreadsheetVerificationStatus ?? null);
+              setMenuImageVerificationStatuses(Array.isArray(menuData.menuImageVerificationStatuses) ? menuData.menuImageVerificationStatuses : []);
             }
           } catch {
             // keep defaults
@@ -1274,39 +1294,23 @@ function MenuContent() {
   // Add or Edit category
   const handleSaveCategory = async () => {
     setCategoryError(null);
-    if (!categoryForm.category_name?.trim()) {
+    const name = categoryForm.category_name?.trim() ?? '';
+    if (!name) {
       setCategoryError('Category name is required');
+      return;
+    }
+    if (name.length > 30) {
+      setCategoryError('Category name must not exceed 30 characters');
       return;
     }
     if (categoryModalMode === 'add' && planLimits?.maxMenuCategories != null && categories.length >= planLimits.maxMenuCategories) {
       setCategoryError(`Category limit reached (${planLimits.maxMenuCategories}). Upgrade your plan to add more.`);
       return;
     }
-    if (categoryImageValidationError) return;
-    const currentImageUsed = storeImageCount?.totalUsed ?? imageUploadStatus?.totalUsed ?? 0;
-    if (categoryImageFile && planLimits && (!planLimits.imageUploadAllowed || (planLimits.maxImageUploads != null && currentImageUsed >= planLimits.maxImageUploads && !categoryForm.category_image_url))) {
-      setCategoryError(planLimits.imageUploadAllowed ? 'Image limit reached. Upgrade your plan to add more images.' : 'Image uploads are not included in your current plan.');
-      return;
-    }
     setCategoryLoading(true);
     try {
-      let imageUrl = categoryForm.category_image_url || '';
-      if (categoryImageFile) {
-        setCategoryImageUploading(true);
-        const formData = new FormData();
-        formData.append('file', categoryImageFile);
-        formData.append('parent', 'categories');
-        const uploadRes = await fetch('/api/upload/r2', { method: 'POST', body: formData });
-        if (uploadRes.ok) {
-          const data = await uploadRes.json();
-          imageUrl = data.key || data.url || '';
-        }
-        setCategoryImageUploading(false);
-      }
       const payload = {
-        category_name: categoryForm.category_name.trim(),
-        category_description: categoryForm.category_description || null,
-        category_image_url: imageUrl || null,
+        category_name: name,
         is_active: categoryForm.is_active ?? true,
       };
       if (categoryModalMode === 'add') {
@@ -1317,12 +1321,8 @@ function MenuContent() {
         if (updated) setCategories((prev) => prev.map((cat) => cat.id === editingCategoryId ? updated : cat));
       }
       setShowCategoryModal(false);
-      setCategoryForm({ category_name: '', category_description: '', category_image_url: '', is_active: true });
-      setCategoryImageFile(null);
-      setCategoryImagePreview('');
-      setCategoryImageValidationError('');
+      setCategoryForm({ category_name: '', is_active: true });
       setEditingCategoryId(null);
-      await refetchImageCount();
     } catch (e) {
       setCategoryError('Error saving category');
     }
@@ -1533,7 +1533,7 @@ function MenuContent() {
           base_price: '',
           selling_price: '',
           discount_percentage: '0',
-          tax_percentage: '0',
+          tax_percentage: '5',
           in_stock: true,
           available_quantity: '',
           low_stock_threshold: '',
@@ -1701,7 +1701,7 @@ function MenuContent() {
         base_price: '',
         selling_price: '',
         discount_percentage: '0',
-        tax_percentage: '0',
+        tax_percentage: '5',
         in_stock: true,
         available_quantity: '',
         low_stock_threshold: '',
@@ -1840,7 +1840,7 @@ function MenuContent() {
       base_price: item.base_price?.toString() || '',
       selling_price: item.selling_price?.toString() || '',
       discount_percentage: item.discount_percentage?.toString() || '0',
-      tax_percentage: item.tax_percentage?.toString() || '0',
+      tax_percentage: item.tax_percentage?.toString() ?? '5',
       in_stock: item.in_stock ?? true,
       available_quantity: item.available_quantity?.toString() || '',
       low_stock_threshold: item.low_stock_threshold?.toString() || '',
@@ -2237,12 +2237,8 @@ function MenuContent() {
                 setCategoryModalMode('add');
                 setCategoryForm({
                   category_name: '',
-                  category_description: '',
-                  category_image_url: '',
                   is_active: true,
                 });
-                setCategoryImageFile(null);
-                setCategoryImagePreview('');
                 setShowCategoryModal(true);
               }}
               disabled={!canAddCategory}
@@ -2316,38 +2312,53 @@ function MenuContent() {
           </div>
         </div>
 
-        {/* Menu file (CSV or image) – hidden by default; show when "Menu file" button clicked */}
+        {/* Menu file (CSV or image) – card shown when "Menu file" button clicked; clear Close button */}
         {showMenuFileSection && (
-        <div ref={menuFileSectionRef} className="mx-3 sm:mx-4 mb-3 p-4 bg-amber-50/80 border border-amber-200 rounded-xl">
-          <h3 className="text-sm font-bold text-gray-900 mb-2 flex items-center gap-2">
-            <FileText size={18} className="text-amber-600" />
-            Menu file (CSV or image)
-          </h3>
-          <p className="text-xs text-gray-600 mb-3">
-            Upload a CSV or menu card image. This replaces any file uploaded during onboarding. Our team will add items from it (pending until then).
-          </p>
+        <div ref={menuFileSectionRef} className="mx-3 sm:mx-4 mb-3 rounded-2xl border border-amber-200/90 bg-gradient-to-br from-amber-50/95 to-orange-50/80 shadow-sm overflow-hidden">
+          <div className="flex items-start justify-between gap-3 p-4 sm:p-5">
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+                <span className="flex items-center justify-center w-9 h-9 rounded-xl bg-amber-100 text-amber-700">
+                  <FileText size={20} />
+                </span>
+                Menu file (CSV or image)
+              </h3>
+              <p className="text-sm text-gray-600 mt-1.5">
+                Upload a CSV or menu card image. This replaces any file uploaded during onboarding. Our team will add items from it (pending until then).
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowMenuFileSection(false)}
+              aria-label="Close menu file section"
+              className="flex-shrink-0 p-2 rounded-xl text-gray-500 hover:text-gray-700 hover:bg-white/80 border border-transparent hover:border-gray-200 transition-colors"
+            >
+              <X size={20} strokeWidth={2} />
+            </button>
+          </div>
+          <div className="px-4 sm:px-5 pb-4 sm:pb-5 pt-0">
           {(existingMenuSpreadsheetUrl || existingMenuImageUrls.length > 0) && (
-            <div className="mb-3">
-              <p className="text-xs font-medium text-gray-700 mb-1">Current file from onboarding:</p>
+            <div className="mb-4 p-3 rounded-xl bg-white/70 border border-amber-100">
+              <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">Current file from onboarding</p>
               <div className="flex flex-wrap gap-2 items-center">
                 {existingMenuSpreadsheetUrl && (
                   <span className="inline-flex items-center gap-2 flex-wrap">
                     <a
-                      href={existingMenuSpreadsheetUrl}
+                      href={existingMenuSpreadsheetUrl.startsWith('http') ? existingMenuSpreadsheetUrl : (typeof window !== 'undefined' ? window.location.origin : '') + existingMenuSpreadsheetUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white border border-amber-200 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white border border-amber-200 text-sm font-medium text-amber-800 hover:bg-amber-50 hover:border-amber-300 transition-colors shadow-sm"
                     >
-                      <FileText size={14} />
-                      View spreadsheet
+                      <FileText size={16} />
+                      {existingMenuSpreadsheetFileName || 'View spreadsheet'}
                     </a>
                     {menuSpreadsheetVerificationStatus === 'PENDING' && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
                         Pending verification
                       </span>
                     )}
                     {menuSpreadsheetVerificationStatus === 'VERIFIED' && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 border border-green-200">
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-green-100 text-green-800 border border-green-200">
                         Verified
                       </span>
                     )}
@@ -2356,21 +2367,21 @@ function MenuContent() {
                 {existingMenuImageUrls.map((url, i) => (
                   <span key={i} className="inline-flex items-center gap-2">
                     <a
-                      href={url}
+                      href={url.startsWith('http') ? url : (typeof window !== 'undefined' ? window.location.origin : '') + url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white border border-amber-200 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white border border-amber-200 text-sm font-medium text-amber-800 hover:bg-amber-50 hover:border-amber-300 transition-colors shadow-sm"
                     >
-                      <ImageIcon size={14} />
-                      Image {i + 1}
+                      <ImageIcon size={16} />
+                      {existingMenuImageFileNames[i] || `Image ${i + 1}`}
                     </a>
                     {menuImageVerificationStatuses[i] === 'PENDING' && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
                         Pending
                       </span>
                     )}
                     {menuImageVerificationStatuses[i] === 'VERIFIED' && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 border border-green-200">
+                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-green-100 text-green-800 border border-green-200">
                         Verified
                       </span>
                     )}
@@ -2384,22 +2395,22 @@ function MenuContent() {
               <button
                 type="button"
                 onClick={() => { setMenuUploadMode('csv'); setMenuFile(null); setCsvValidationError(''); setMenuReplaceError(''); }}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium ${menuUploadMode === 'csv' ? 'bg-amber-600 text-white' : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'}`}
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${menuUploadMode === 'csv' ? 'bg-amber-600 text-white shadow-sm' : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'}`}
               >
                 Upload CSV
               </button>
               <button
                 type="button"
                 onClick={() => { setMenuUploadMode('image'); setMenuFile(null); setMenuReplaceError(''); }}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium ${menuUploadMode === 'image' ? 'bg-amber-600 text-white' : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'}`}
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${menuUploadMode === 'image' ? 'bg-amber-600 text-white shadow-sm' : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'}`}
               >
                 Upload image
               </button>
             </div>
             {menuUploadMode && (
               <>
-                <label className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer">
-                  <Upload size={16} />
+                <label className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer transition-colors">
+                  <Upload size={18} />
                   {menuFile ? menuFile.name : 'Choose file'}
                   <input
                     type="file"
@@ -2417,7 +2428,7 @@ function MenuContent() {
                   type="button"
                   onClick={handleMenuFileUpload}
                   disabled={!menuFile || menuUploading}
-                  className="px-4 py-1.5 rounded-lg bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                  className="px-4 py-2 rounded-xl bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm transition-colors"
                 >
                   {menuUploading ? (
                     <>
@@ -2432,21 +2443,13 @@ function MenuContent() {
             )}
           </div>
           {menuUploadMode === 'csv' && (
-            <p className="text-[11px] text-gray-500 mt-2">
+            <p className="text-xs text-gray-500 mt-3">
               CSV format: header row with at least <strong>item_name</strong> (or name) and <strong>price</strong> (or base_price / selling_price). Min {MENU_CSV_MIN_ROWS} row(s), max {MENU_CSV_MAX_ROWS} rows.
             </p>
           )}
           {(csvValidationError || menuReplaceError) && (
-            <p className="text-xs text-red-600 mt-2">{csvValidationError || menuReplaceError}</p>
+            <p className="text-sm text-red-600 mt-2" role="alert">{csvValidationError || menuReplaceError}</p>
           )}
-          <div className="mt-2 pt-2 border-t border-amber-200">
-            <button
-              type="button"
-              onClick={() => setShowMenuFileSection(false)}
-              className="text-xs text-gray-500 hover:text-gray-700"
-            >
-              Hide this section
-            </button>
           </div>
         </div>
         )}
@@ -2462,29 +2465,50 @@ function MenuContent() {
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
-          <div className="flex-1 min-w-0 order-1 sm:order-2 flex items-center gap-1.5 overflow-hidden">
+          <div className="flex-1 min-w-0 order-1 sm:order-2 flex items-center gap-1 overflow-hidden">
             <button
               onClick={() => setSelectedCategoryId(null)}
               className={`flex-shrink-0 px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap ${selectedCategoryId === null ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-200'}`}
             >
               All Categories
             </button>
-            <div className="relative flex-1 min-w-0 flex items-center overflow-hidden">
-              <div className="flex-1 min-w-0 overflow-x-auto overflow-y-hidden scrollbar-hide scroll-smooth touch-pan-x py-0.5">
+            <div className="flex-1 min-w-0 flex items-center gap-0.5 overflow-hidden">
+              {categories.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => categoryScrollRef.current?.scrollBy({ left: -200, behavior: 'smooth' })}
+                  className="flex-shrink-0 p-1.5 rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                  aria-label="Previous categories"
+                >
+                  <ChevronLeft size={18} />
+                </button>
+              )}
+              <div
+                ref={categoryScrollRef}
+                className="flex-1 min-w-0 overflow-x-auto overflow-y-hidden scrollbar-hide scroll-smooth touch-pan-x py-0.5"
+              >
                 <div className="flex items-center gap-1.5 flex-nowrap">
                   {categories.map((category) => (
                     <button
                       key={category.id}
                       onClick={() => setSelectedCategoryId(category.id)}
-                      className={`flex-shrink-0 px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap ${selectedCategoryId === category.id ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+                      className={`flex-shrink-0 px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap max-w-[140px] truncate ${selectedCategoryId === category.id ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+                      title={category.category_name}
                     >
                       {category.category_name}
                     </button>
                   ))}
                 </div>
               </div>
-              {categories.length > 5 && (
-                <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-6 bg-gradient-to-l from-white to-transparent sm:w-8" aria-hidden />
+              {categories.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => categoryScrollRef.current?.scrollBy({ left: 200, behavior: 'smooth' })}
+                  className="flex-shrink-0 p-1.5 rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                  aria-label="Next categories"
+                >
+                  <ChevronRight size={18} />
+                </button>
               )}
             </div>
           </div>
@@ -2516,12 +2540,12 @@ function MenuContent() {
               return (
                 <div key={item.item_id} className="bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all overflow-hidden">
                   <div className="flex p-2.5 h-full gap-2.5">
-                    <div className="w-14 h-14 flex-shrink-0">
+                    <div className="w-14 h-14 flex-shrink-0 rounded-lg border border-gray-200 overflow-hidden bg-gray-100">
                       <R2Image
                         src={item.item_image_url}
                         alt={item.item_name}
-                        className="w-full h-full object-cover rounded-lg border border-gray-200"
-                        fallbackSrc="/placeholder.png"
+                        className="w-full h-full object-cover"
+                        fallbackSrc={ITEM_PLACEHOLDER_SVG}
                       />
                     </div>
                     <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -2648,7 +2672,7 @@ function MenuContent() {
             setAddForm({
               item_name: '', item_description: '', item_image_url: '', image: null,
               food_type: '', spice_level: '', cuisine_type: '', base_price: '', selling_price: '',
-              discount_percentage: '0', tax_percentage: '0', in_stock: true, available_quantity: '',
+              discount_percentage: '0', tax_percentage: '5', in_stock: true, available_quantity: '',
               low_stock_threshold: '', has_customizations: false, has_addons: false, has_variants: false,
               is_popular: false, is_recommended: false, preparation_time_minutes: 15, serves: 1,
               is_active: true, allergens: '', category_id: null, customizations: [], variants: [],
@@ -2690,7 +2714,7 @@ function MenuContent() {
                   base_price: '',
                   selling_price: '',
                   discount_percentage: '0',
-                  tax_percentage: '0',
+                  tax_percentage: '5',
                   in_stock: true,
                   available_quantity: '',
                   low_stock_threshold: '',
@@ -2755,7 +2779,7 @@ function MenuContent() {
                   base_price: '',
                   selling_price: '',
                   discount_percentage: '0',
-                  tax_percentage: '0',
+                  tax_percentage: '5',
                   in_stock: true,
                   available_quantity: '',
                   low_stock_threshold: '',
@@ -2983,10 +3007,7 @@ function MenuContent() {
           className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-md"
           onClick={() => {
             setShowCategoryModal(false);
-            setCategoryForm({ category_name: '', category_description: '', category_image_url: '', is_active: true });
-            setCategoryImageFile(null);
-            setCategoryImagePreview('');
-            setCategoryImageValidationError('');
+            setCategoryForm({ category_name: '', is_active: true });
             setEditingCategoryId(null);
           }}
         >
@@ -2999,10 +3020,7 @@ function MenuContent() {
                 <button
                   onClick={() => {
                     setShowCategoryModal(false);
-                    setCategoryForm({ category_name: '', category_description: '', category_image_url: '', is_active: true });
-                    setCategoryImageFile(null);
-                    setCategoryImagePreview('');
-                    setCategoryImageValidationError('');
+                    setCategoryForm({ category_name: '', is_active: true });
                     setEditingCategoryId(null);
                   }}
                   className="p-2 hover:bg-gray-100 rounded-lg"
@@ -3012,95 +3030,62 @@ function MenuContent() {
                 </button>
               </div>
               <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Category Name *</label>
+                <div className="relative">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Category Name * (max 30 characters)</label>
                   <input
                     type="text"
+                    maxLength={30}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:border-orange-400 focus:ring-1 focus:ring-orange-100"
-                    value={categoryForm.category_name}
-                    onChange={(e) => setCategoryForm({ ...categoryForm, category_name: e.target.value })}
-                    placeholder="Enter category name"
+                    value={categoryForm.category_name ?? ''}
+                    onChange={(e) => {
+                      const v = e.target.value.slice(0, 30);
+                      setCategoryForm({ ...categoryForm, category_name: v });
+                      setCategorySuggestionsOpen(true);
+                    }}
+                    onFocus={() => setCategorySuggestionsOpen(true)}
+                    onBlur={() => setTimeout(() => setCategorySuggestionsOpen(false), 180)}
+                    placeholder="Start typing for suggestions..."
                   />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Description (Optional)</label>
-                  <textarea
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:border-orange-400 focus:ring-1 focus:ring-orange-100"
-                    value={categoryForm.category_description || ''}
-                    onChange={(e) => setCategoryForm({ ...categoryForm, category_description: e.target.value })}
-                    placeholder="Enter category description"
-                    rows={2}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Category Image (Optional)
-                    {imageLimit != null && <span className="text-gray-500 font-normal ml-1">— {imageUsed}/{imageLimit} used</span>}
-                  </label>
-                  {!imageUploadAllowed ? (
-                    <div className="flex items-center gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm">
-                      <ImageIcon size={18} className="flex-shrink-0" />
-                      <span>Image uploads are not included in your current plan. Upgrade to add category images.</span>
-                    </div>
-                  ) : imageLimitReached && !categoryForm.category_image_url && !categoryImageFile ? (
-                    <div className="flex items-center gap-2 p-3 rounded-lg bg-gray-100 border border-gray-200 text-gray-600 text-sm">
-                      <ImageIcon size={18} className="flex-shrink-0" />
-                      <span>Image limit reached ({imageUsed}/{imageLimit}). Subscribe to add more images.</span>
-                    </div>
-                  ) : (
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-3">
-                        <div className="w-16 h-16 border border-gray-200 rounded-lg overflow-hidden bg-gray-50 flex items-center justify-center flex-shrink-0">
-                          {categoryImagePreview ? (
-                            categoryImagePreview.startsWith('data:') || categoryImagePreview.startsWith('blob:') ? (
-                              <img src={categoryImagePreview} alt="Preview" className="w-full h-full object-cover" />
-                            ) : (
-                              <R2Image src={categoryImagePreview} alt="Preview" className="w-full h-full object-cover" />
-                            )
-                          ) : categoryForm.category_image_url ? (
-                            <R2Image src={categoryForm.category_image_url} alt="Category" className="w-full h-full object-cover" />
-                          ) : (
-                            <ImageIcon className="w-6 h-6 text-gray-400" />
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <input
-                            type="file"
-                            accept="image/png,image/jpeg,image/jpg"
-                            className="hidden"
-                            onChange={async (e) => {
-                              const file = e.target.files?.[0];
-                              e.target.value = '';
-                              if (!file) return;
-                              setCategoryImageValidationError('');
-                              const result = await validateMenuItemImage(file);
-                              if (!result.valid) {
-                                setCategoryImageValidationError(result.error);
-                                setCategoryImageFile(null);
-                                setCategoryImagePreview('');
-                                return;
-                              }
-                              setCategoryImageFile(file);
-                              setCategoryImagePreview(URL.createObjectURL(file));
-                            }}
-                            id="category-image-input"
-                            disabled={imageLimitReached && !categoryForm.category_image_url}
-                          />
-                          <label
-                            htmlFor="category-image-input"
-                            className={`flex items-center justify-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium ${imageLimitReached && !categoryForm.category_image_url ? 'border-gray-200 bg-gray-100 text-gray-500 cursor-not-allowed' : 'border-gray-300 hover:bg-gray-50 cursor-pointer text-gray-700'}`}
-                          >
-                            <Upload size={16} />
-                            Choose from browser
-                          </label>
-                          {categoryImageFile && (
-                            <p className="text-xs text-gray-500 mt-1 truncate">{categoryImageFile.name}</p>
-                          )}
-                        </div>
-                      </div>
-                      {categoryImageValidationError && (
-                        <p className="text-sm text-red-600 mt-1" role="alert">{categoryImageValidationError}</p>
-                      )}
+                  {(categoryForm.category_name?.length ?? 0) > 0 && (
+                    <span className="absolute right-3 top-9 text-xs text-gray-400">{(categoryForm.category_name?.length ?? 0)}/30</span>
+                  )}
+                  {categorySuggestionsOpen && (
+                    <div className="absolute z-10 left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg py-1">
+                      {(() => {
+                        const q = (categoryForm.category_name ?? '').toLowerCase().trim();
+                        const matched = q.length === 0
+                          ? CATEGORY_SUGGESTIONS.slice(0, 12)
+                          : CATEGORY_SUGGESTIONS.filter(c => c.toLowerCase().includes(q)).slice(0, 12);
+                        const exactMatch = q && CATEGORY_SUGGESTIONS.some(c => c.toLowerCase() === q);
+                        return (
+                          <>
+                            {matched.map((s) => (
+                              <button
+                                key={s}
+                                type="button"
+                                className="w-full text-left px-3 py-2 text-sm text-gray-800 hover:bg-orange-50"
+                                onMouseDown={(e) => { e.preventDefault(); setCategoryForm({ ...categoryForm, category_name: s }); setCategorySuggestionsOpen(false); }}
+                              >
+                                {s}
+                              </button>
+                            ))}
+                            {q && !exactMatch && (
+                              <div className="border-t border-gray-100 mt-1 pt-1">
+                                <button
+                                  type="button"
+                                  className="w-full text-left px-3 py-2 text-sm text-orange-600 font-medium hover:bg-orange-50"
+                                  onMouseDown={(e) => { e.preventDefault(); setCategorySuggestionsOpen(false); }}
+                                >
+                                  Add &quot;{categoryForm.category_name}&quot; as custom category
+                                </button>
+                              </div>
+                            )}
+                            {matched.length === 0 && !q && (
+                              <p className="px-3 py-2 text-sm text-gray-500">Start typing to see suggestions</p>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>
@@ -3120,10 +3105,7 @@ function MenuContent() {
                 <button
                   onClick={() => {
                     setShowCategoryModal(false);
-                    setCategoryForm({ category_name: '', category_description: '', category_image_url: '', is_active: true });
-                    setCategoryImageFile(null);
-                    setCategoryImagePreview('');
-                    setCategoryImageValidationError('');
+                    setCategoryForm({ category_name: '', is_active: true });
                     setEditingCategoryId(null);
                   }}
                   className="flex-1 px-4 py-2.5 rounded-lg font-bold text-gray-600 bg-white border border-gray-200 hover:bg-gray-100 transition-all"
@@ -3134,9 +3116,9 @@ function MenuContent() {
                 <button
                   onClick={handleSaveCategory}
                   className="flex-1 px-4 py-2.5 rounded-lg font-bold text-white bg-orange-500 hover:bg-orange-600 transition-all"
-                  disabled={categoryLoading || categoryImageUploading || !!categoryImageValidationError}
+                  disabled={categoryLoading}
                 >
-                  {categoryLoading || categoryImageUploading ? 'Saving...' : (categoryModalMode === 'add' ? 'Add Category' : 'Save Changes')}
+                  {categoryLoading ? 'Saving...' : (categoryModalMode === 'add' ? 'Add Category' : 'Save Changes')}
                 </button>
               </div>
               {categoryModalMode === 'edit' && editingCategoryId && (

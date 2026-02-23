@@ -77,17 +77,20 @@ export async function GET(req: NextRequest) {
     }
 
     const commissionAmount = Math.round((amount * (commissionPercentage / 100)) * 100) / 100;
-    const tdsAmount = 0; // TDS not yet applied in payout flow; reserved for future use
-    const taxAmount = 0; // Tax/GST on payout not yet applied; reserved for future use
-    const netPayoutAmount = Math.round((amount - commissionAmount - tdsAmount - taxAmount) * 100) / 100;
+    const GST_ON_COMMISSION_PERCENT = 18;
+    const gstOnCommission = Math.round((commissionAmount * GST_ON_COMMISSION_PERCENT) / 100 * 100) / 100;
+    const tdsAmount = 0; // TDS reserved for future use
+    const netPayoutAmount = Math.round((amount - commissionAmount - gstOnCommission - tdsAmount) * 100) / 100;
 
     return NextResponse.json({
       success: true,
       requested_amount: amount,
       commission_percentage: commissionPercentage,
       commission_amount: commissionAmount,
+      gst_on_commission_percent: GST_ON_COMMISSION_PERCENT,
+      gst_on_commission: gstOnCommission,
       tds_amount: tdsAmount,
-      tax_amount: taxAmount,
+      tax_amount: gstOnCommission,
       net_payout_amount: netPayoutAmount,
     });
   } catch (e) {

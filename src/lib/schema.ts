@@ -10,7 +10,6 @@ export const merchant_store = pgTable('merchant_stores', {
   store_banner_url: text('store_banner_url'),
   banner_url: text('banner_url'),
   logo_url: text('logo_url'),
-  ads_images: text('ads_images').array(),
   gallery_images: text('gallery_images').array(),
   full_address: text('full_address').notNull(),
   city: text('city').notNull(),

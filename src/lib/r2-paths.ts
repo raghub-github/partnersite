@@ -1,24 +1,15 @@
 /**
- * R2 folder structure: merchant → parent (with logo) → child → docs, menu, agreements.
- * Keeps the bucket easy to manage and scale.
+ * R2 folder structure: docs/merchants/{merchant_code}/stores/{store_code}/...
+ * Uses merchant code (e.g. GMMP1005) and store code (e.g. GMMC1017) for a consistent main route.
  *
  * Structure (docs bucket):
  *
- *   merchants/
- *     {parent_id}/                          e.g. 41 or GMMP1001 (parent merchant)
- *       logo/                               parent's logo
- *       assets/                             other parent assets (optional)
- *       draft/                              onboarding in progress (no child store yet)
- *         onboarding/
- *           documents/                      PAN, Aadhaar, FSSAI, GST, bank proof
- *           menu/images/
- *           menu/csv/
- *           store-media/
- *           store-media/gallery/
- *           bank/
- *           agreements/
- *       stores/                             child stores under this parent
- *         {child_store_code}/               e.g. GMMC1011
+ *   docs/
+ *     merchants/
+ *       {parent_merchant_id}/               e.g. GMMP1005 (always use code, not numeric id)
+ *         logo/                             parent's logo
+ *         assets/                           other parent assets (optional)
+ *         draft/                            onboarding in progress (no child store yet)
  *           onboarding/
  *             documents/
  *             menu/images/
@@ -27,12 +18,23 @@
  *             store-media/gallery/
  *             bank/
  *             agreements/
- *           menu/                           post-onboarding menu item images / CSV
- *           assets/                         post-onboarding store assets (logo, banner, gallery)
- *           offers/
+ *         stores/
+ *           {child_store_code}/             e.g. GMMC1017
+ *             onboarding/
+ *               documents/
+ *               menu/images/
+ *               menu/csv/
+ *               store-media/
+ *               store-media/gallery/
+ *               bank/
+ *               agreements/
+ *             menu/                         post-onboarding menu item images / CSV
+ *             assets/                       post-onboarding store assets
+ *             offers/
  */
 
-export const R2_MERCHANT_PREFIX = 'merchants';
+export const R2_DOCS_PREFIX = 'docs';
+export const R2_MERCHANT_PREFIX = `${R2_DOCS_PREFIX}/merchants`;
 
 export const R2_ONBOARDING = {
   DOCUMENTS: 'documents',
@@ -44,9 +46,9 @@ export const R2_ONBOARDING = {
   AGREEMENTS: 'agreements',
 } as const;
 
-/** Parent root: "merchants/{parentId}" */
-export function getParentRoot(parentId: string): string {
-  const id = (parentId && String(parentId).trim()) || 'unknown';
+/** Parent root: "docs/merchants/{parentMerchantCode}" — use merchant code (e.g. GMMP1005), not numeric id. */
+export function getParentRoot(parentMerchantCode: string): string {
+  const id = (parentMerchantCode && String(parentMerchantCode).trim()) || 'unknown';
   return `${R2_MERCHANT_PREFIX}/${id}`;
 }
 

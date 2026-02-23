@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { createClient } from "@supabase/supabase-js";
 import { validateMerchantFromSession } from "@/lib/auth/validate-merchant";
-import { getMerchantMenuPath } from "@/lib/r2-paths";
-import { uploadToR2, deleteFromR2, toStoredDocumentUrl } from "@/lib/r2";
+import { getMerchantMenuPath, getOnboardingR2Path } from "@/lib/r2-paths";
+import { uploadToR2, deleteFromR2, deleteFromR2ByPrefix, toStoredDocumentUrl } from "@/lib/r2";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -84,12 +84,13 @@ export async function POST(req: NextRequest) {
     }
     const { data: parent } = await db
       .from("merchant_parents")
-      .select("id")
+      .select("id, parent_merchant_id")
       .eq("id", store.parent_id)
       .maybeSingle();
     if (!parent || parent.id !== validation.merchantParentId) {
       return NextResponse.json({ error: "Store not accessible" }, { status: 403 });
     }
+    const parentMerchantCode = (parent as { parent_merchant_id?: string }).parent_merchant_id || String(store.parent_id);
 
     if (menuUploadMode === "CSV") {
       const text = await file.text();
@@ -99,7 +100,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const menuPath = getMerchantMenuPath(store.store_id, String(store.parent_id));
+    const menuPath = getMerchantMenuPath(store.store_id, parentMerchantCode);
     const isImage = menuUploadMode === "IMAGE";
     const ext = isImage
       ? (file.name.split(".").pop()?.toLowerCase() || "jpg")
@@ -114,6 +115,16 @@ export async function POST(req: NextRequest) {
       .eq("media_scope", "MENU_REFERENCE");
 
     const keysToDelete: string[] = (existingRows || []).map((r: { r2_key: string }) => r.r2_key).filter(Boolean);
+
+    // Remove old onboarding menu objects from R2 (so previous menu image/CSV from onboarding is removed)
+    const onboardingMenuImagesPrefix = getOnboardingR2Path(parentMerchantCode, store.store_id, "MENU_IMAGES");
+    const onboardingMenuCsvPrefix = getOnboardingR2Path(parentMerchantCode, store.store_id, "MENU_CSV");
+    try {
+      await deleteFromR2ByPrefix(onboardingMenuImagesPrefix);
+      await deleteFromR2ByPrefix(onboardingMenuCsvPrefix);
+    } catch (e) {
+      console.warn("[menu-upload] R2 delete-by-prefix (onboarding menu) failed:", e);
+    }
 
     await uploadToR2(file, r2Key);
 

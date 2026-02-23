@@ -202,7 +202,6 @@ export interface MerchantStore {
   bank_account_number?: string;
   bank_ifsc?: string;
   bank_name?: string;
-  ads_images?: string[];
 }
 export interface OrderStats {
   total_orders: number;
