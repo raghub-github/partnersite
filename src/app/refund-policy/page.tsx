@@ -1,7 +1,8 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   FileText,
   Shield,
@@ -16,10 +17,20 @@ import {
 } from 'lucide-react';
 
 export default function RefundPolicyPage() {
+  const router = useRouter();
+
+  // If user has store context (e.g. from dashboard), show refund policy with sidebar on same app shell
+  useEffect(() => {
+    const storeId = typeof window !== 'undefined' ? localStorage.getItem('selectedStoreId') : null;
+    if (storeId) {
+      router.replace(`/mx/refund-policy?storeId=${encodeURIComponent(storeId)}`);
+    }
+  }, [router]);
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 via-white to-orange-50/30">
-      {/* Header */}
-      <header className="sticky top-0 z-10 border-b border-slate-200/80 bg-white/95 backdrop-blur-sm shadow-sm">
+      {/* Header - sticky so it stays visible when scrolling */}
+      <header className="sticky top-0 z-[100] border-b border-slate-200/80 bg-white shadow-sm">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
           <Link
             href="#"

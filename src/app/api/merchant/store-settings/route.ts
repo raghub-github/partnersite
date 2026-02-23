@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
     if (internalId === null) return NextResponse.json({ error: 'Store not found' }, { status: 404 });
 
     const [settingsResult, storeResult] = await Promise.all([
-      db.from('merchant_store_settings').select('self_delivery, platform_delivery, delivery_priority').eq('store_id', internalId).maybeSingle(),
+      db.from('merchant_store_settings').select('self_delivery, platform_delivery, delivery_priority, auto_accept_orders, settings_metadata').eq('store_id', internalId).maybeSingle(),
       db.from('merchant_stores').select('delivery_radius_km, full_address, landmark, city, state, postal_code, latitude, longitude').eq('store_id', storeId).maybeSingle(),
     ]);
 
@@ -50,6 +50,12 @@ export async function GET(req: NextRequest) {
     const deliveryRadiusKm = storeData?.delivery_radius_km != null && !Number.isNaN(Number(storeData.delivery_radius_km))
       ? Number(storeData.delivery_radius_km)
       : undefined;
+
+    const metadata = settingsData?.settings_metadata as Record<string, unknown> | null | undefined;
+    const preparationBufferMinutes =
+      typeof metadata?.preparation_buffer_minutes === 'number' && !Number.isNaN(metadata.preparation_buffer_minutes)
+        ? Number(metadata.preparation_buffer_minutes)
+        : undefined;
 
     const address =
       storeData &&
@@ -75,6 +81,8 @@ export async function GET(req: NextRequest) {
       self_delivery: settingsData?.self_delivery ?? false,
       platform_delivery: settingsData?.platform_delivery ?? true,
       delivery_priority: settingsData?.delivery_priority ?? (settingsData?.self_delivery ? 'SELF' : 'GATIMITRA'),
+      auto_accept_orders: settingsData?.auto_accept_orders ?? false,
+      ...(preparationBufferMinutes !== undefined && { preparation_buffer_minutes: preparationBufferMinutes }),
       ...(deliveryRadiusKm !== undefined && { delivery_radius_km: deliveryRadiusKm }),
       ...(address && { address }),
     });
@@ -86,8 +94,7 @@ export async function GET(req: NextRequest) {
 
 /**
  * PATCH /api/merchant/store-settings
- * Body: { storeId, self_delivery?, platform_delivery?, delivery_radius_km?, address?: { full_address?, landmark?, city?, state?, postal_code?, latitude?, longitude? } }
- * Upserts merchant_store_settings (delivery mode). Updates merchant_stores for delivery_radius_km and address when provided.
+ * Body: { storeId, self_delivery?, platform_delivery?, delivery_radius_km?, address?: {...}, auto_accept_orders?, preparation_buffer_minutes? }
  */
 export async function PATCH(req: NextRequest) {
   try {
@@ -105,6 +112,12 @@ export async function PATCH(req: NextRequest) {
       ? body.delivery_radius_km
       : undefined;
     const addressPayload = body?.address && typeof body.address === 'object' ? body.address : undefined;
+    const auto_accept_orders = typeof body.auto_accept_orders === 'boolean' ? body.auto_accept_orders : undefined;
+    const preparation_buffer_minutes =
+      typeof body.preparation_buffer_minutes === 'number' && !Number.isNaN(body.preparation_buffer_minutes) && body.preparation_buffer_minutes >= 0 && body.preparation_buffer_minutes <= 120
+        ? body.preparation_buffer_minutes
+        : undefined;
+
     const hasDeliveryPayload = self_delivery !== undefined || platform_delivery !== undefined || delivery_radius_km !== undefined;
     const hasAddressPayload =
       addressPayload &&
@@ -115,14 +128,16 @@ export async function PATCH(req: NextRequest) {
         addressPayload.postal_code !== undefined ||
         addressPayload.latitude !== undefined ||
         addressPayload.longitude !== undefined);
-    if (!hasDeliveryPayload && !hasAddressPayload) {
+    const hasOperationsPayload = auto_accept_orders !== undefined || preparation_buffer_minutes !== undefined;
+
+    if (!hasDeliveryPayload && !hasAddressPayload && !hasOperationsPayload) {
       return NextResponse.json({ success: true });
     }
 
-    if (hasDeliveryPayload) {
+    if (hasDeliveryPayload || hasOperationsPayload) {
       const { data: existing } = await db
         .from('merchant_store_settings')
-        .select('id')
+        .select('id, settings_metadata')
         .eq('store_id', internalId)
         .maybeSingle();
 
@@ -132,6 +147,11 @@ export async function PATCH(req: NextRequest) {
       };
       if (self_delivery !== undefined) payload.self_delivery = self_delivery;
       if (platform_delivery !== undefined) payload.platform_delivery = platform_delivery;
+      if (auto_accept_orders !== undefined) payload.auto_accept_orders = auto_accept_orders;
+      if (preparation_buffer_minutes !== undefined) {
+        const currentMeta = (existing?.settings_metadata as Record<string, unknown>) || {};
+        payload.settings_metadata = { ...currentMeta, preparation_buffer_minutes };
+      }
 
       if (existing?.id != null) {
         const { error: updateErr } = await db

@@ -462,6 +462,12 @@ function StoreSettingsContent() {
           if (typeof data.delivery_radius_km === 'number' && !isNaN(data.delivery_radius_km)) {
             setDeliveryRadiusKm(data.delivery_radius_km)
           }
+          if (typeof data.auto_accept_orders === 'boolean') {
+            setAutoAcceptOrders(data.auto_accept_orders)
+          }
+          if (typeof data.preparation_buffer_minutes === 'number' && !isNaN(data.preparation_buffer_minutes)) {
+            setPreparationBufferMinutes(data.preparation_buffer_minutes)
+          }
           if (data.address) {
             const addr = data.address
             if (addr.full_address != null) setFullAddress(addr.full_address)
@@ -1005,10 +1011,6 @@ function StoreSettingsContent() {
   }
 
   const handleSaveSettings = async () => {
-    if (activeTab !== 'delivery' && activeTab !== 'address' && (!phone || !latitude || !longitude)) {
-      toast.error('⚠️ Please fill in all required fields')
-      return
-    }
     if (activeTab === 'address' && (!fullAddress?.trim() || !storeAddress?.trim() || !addressState?.trim() || !addressPostalCode?.trim())) {
       toast.error('⚠️ Please fill in full address, city, state and postal code')
       return
@@ -1016,6 +1018,24 @@ function StoreSettingsContent() {
 
     setIsSaving(true)
     try {
+      if (activeTab === 'operations' && storeId) {
+        const res = await fetch('/api/merchant/store-settings', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            storeId,
+            auto_accept_orders: autoAcceptOrders,
+            preparation_buffer_minutes: typeof preparationBufferMinutes === 'number' && !isNaN(preparationBufferMinutes) ? preparationBufferMinutes : 15,
+          }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          toast.error(data.error || '❌ Failed to save store operations')
+          return
+        }
+        toast.success('✅ Store operations saved successfully!')
+        return
+      }
       if (activeTab === 'delivery' && storeId) {
         const res = await fetch('/api/merchant/store-settings', {
           method: 'PATCH',

@@ -28,7 +28,7 @@ export default function MXRefundPolicyPage() {
     >
       <div className="min-h-screen bg-gradient-to-b from-slate-50 via-white to-orange-50/30">
         {/* In-layout header: Back + title — no full-page wrapper so sidebar stays */}
-        <div className="sticky top-0 z-20 border-b border-slate-200/80 bg-white shadow-sm">
+        <div className="sticky top-0 z-[100] border-b border-slate-200/80 bg-white shadow-sm">
           <div className="max-w-4xl mx-auto px-4 sm:px-6 py-3 sm:py-4">
             <div className="flex items-center gap-3">
               <MobileHamburgerButton />
