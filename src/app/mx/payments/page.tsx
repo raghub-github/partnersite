@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { MXLayoutWhite } from '@/components/MXLayoutWhite'
 import { fetchRestaurantById, fetchRestaurantByName } from '@/lib/database'
@@ -484,13 +485,13 @@ function PaymentsContent() {
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Payments & Ledger</h1>
-                    <a
-                      href="/refund-policy"
+                    <Link
+                      href={storeId ? `/mx/refund-policy?storeId=${encodeURIComponent(storeId)}` : '/mx/refund-policy'}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 text-sm font-medium hover:bg-indigo-100 transition-colors"
                     >
                       <FileText size={14} />
                       View refund policy
-                    </a>
+                    </Link>
                   </div>
                   <p className="text-sm text-gray-500 mt-0.5">Wallet balance and full transaction history</p>
                 </div>

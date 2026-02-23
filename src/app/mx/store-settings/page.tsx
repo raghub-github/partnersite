@@ -3,6 +3,7 @@
 import React, { useState, useEffect, Suspense, useRef, useCallback, useMemo } from 'react'
 import dynamicImport from 'next/dynamic'
 import { createPortal } from 'react-dom'
+import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { MXLayoutWhite } from '@/components/MXLayoutWhite'
 import { supabase } from '@/lib/supabase';
@@ -2441,9 +2442,9 @@ function StoreSettingsContent() {
                 <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 shadow-sm">
                   <div className="flex flex-wrap items-center justify-between gap-2 mb-4 sm:mb-6">
                     <h3 className="text-lg sm:text-xl font-bold text-gray-900">Available Plans</h3>
-                    <a href="/refund-policy" className="text-sm text-indigo-600 hover:text-indigo-700 font-medium underline underline-offset-2">
+                    <Link href={storeId ? `/mx/refund-policy?storeId=${encodeURIComponent(storeId)}` : '/mx/refund-policy'} className="text-sm text-indigo-600 hover:text-indigo-700 font-medium underline underline-offset-2">
                       View refund policy
-                    </a>
+                    </Link>
                   </div>
                   {loadingPlans ? (
                     <div className="text-center py-8">

@@ -35,30 +35,30 @@ export function FAQSection() {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
 
   return (
-    <section className="space-y-5">
-      <div className="flex items-center gap-2">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-sm">
-          <HelpCircle className="h-5 w-5" aria-hidden />
+    <section className="space-y-6 sm:space-y-8">
+      <div className="flex items-center gap-3">
+        <div className="flex h-10 w-10 sm:h-11 sm:w-11 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-md">
+          <HelpCircle className="h-5 w-5 sm:h-6 sm:w-6" aria-hidden />
         </div>
         <div>
-          <h2 className="text-lg font-bold text-slate-800 sm:text-xl">
+          <h2 className="text-xl font-bold text-slate-900 sm:text-2xl tracking-tight">
             Frequently asked questions
           </h2>
-          <p className="text-xs text-slate-600">
+          <p className="text-sm text-slate-600 mt-0.5">
             Quick answers to common questions
           </p>
         </div>
       </div>
-      <div className="space-y-3">
+      <div className="space-y-4">
         {FAQ_ITEMS.map((item, index) => {
           const isOpen = openIndex === index;
           return (
             <div
               key={item.question}
-              className={`overflow-hidden rounded-2xl border bg-white shadow-sm transition-all duration-200 ${
+              className={`overflow-hidden rounded-2xl border-2 bg-white shadow-sm transition-all duration-200 ${
                 isOpen
-                  ? 'border-slate-200/90 shadow-md'
-                  : 'border-slate-200/80 hover:shadow-md'
+                  ? 'border-slate-300 shadow-md'
+                  : 'border-slate-200/90 hover:shadow-md hover:border-slate-200'
               }`}
             >
               <button

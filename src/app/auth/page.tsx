@@ -6,87 +6,107 @@ import { WhyChooseUsSection } from '@/components/onboarding/WhyChooseUsSection';
 import { NeededDocumentsSection } from '@/components/onboarding/NeededDocumentsSection';
 import { FAQSection } from '@/components/onboarding/FAQSection';
 
+const HERO_BG_IMAGE =
+  'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=1920&q=80';
+
 export default function AuthHome() {
   const scrollToContent = () => {
     document.getElementById('below-fold')?.scrollIntoView({ behavior: 'smooth' });
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50/50">
-      {/* Header */}
-      <header className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-slate-200/80 bg-white/90 backdrop-blur-sm">
+    <div className="min-h-screen bg-slate-50">
+      {/* Header – blends with hero: semi-transparent dark + blur */}
+      <header className="sticky top-0 z-30 flex items-center justify-between px-4 sm:px-6 lg:px-8 py-3 border-b border-white/10 bg-slate-900/70 backdrop-blur-md shadow-[0_1px_0_0_rgba(255,255,255,0.08)]">
         <div className="flex items-center gap-2">
-          <img src="/logo.png" alt="GatiMitra" className="h-8 w-auto object-contain" />
+          <img src="/logo.png" alt="GatiMitra" className="h-9 w-auto object-contain sm:h-10" />
         </div>
-        <span className="text-xs font-medium uppercase tracking-wider text-slate-500">
+        <span className="text-xs font-semibold uppercase tracking-widest text-white/90">
           Partner Portal
         </span>
       </header>
 
-      {/* First screen: hero block – full viewport, centered, wider text + scroll hint */}
-      <section className="min-h-[calc(100vh-4rem)] flex flex-col items-center px-4 sm:px-6 py-8 sm:py-10">
-        {/* Centered content – more width for text */}
-        <div className="flex-1 flex flex-col items-center justify-center w-full max-w-2xl mx-auto text-center">
-          {/* Logo */}
-          <div className="inline-flex h-20 w-24 items-center justify-center rounded-2xl bg-white shadow-lg ring-1 ring-slate-200/60 mb-6 px-5 py-3">
-            <img src="/logo.png" alt="GatiMitra" className="h-12 sm:h-14 w-auto object-contain" />
-          </div>
-          <p className="text-base font-medium text-slate-500 tracking-wide mb-2">GatiMitra</p>
-          <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-slate-900 tracking-tight mb-4 max-w-xl mx-auto">
-            Welcome to GatiMitra
-          </h1>
-          <p className="text-base sm:text-lg text-slate-600 mb-2 max-w-md mx-auto leading-relaxed">
-            Manage your store and grow your business
-          </p>
-          <p className="text-sm sm:text-base text-slate-500 mb-10 max-w-md mx-auto">
-            Join thousands of restaurant partners
-          </p>
+      {/* Hero – full-width background image + overlay + glass content */}
+      <section
+        className="relative min-h-[calc(100vh-4rem)] flex flex-col items-center justify-center px-4 sm:px-6 py-12 sm:py-16 overflow-hidden"
+        style={{
+          backgroundImage: `url(${HERO_BG_IMAGE})`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          backgroundRepeat: 'no-repeat',
+        }}
+      >
+        {/* Overlay: gradient + slight darkening for readability */}
+        <div
+          className="absolute inset-0 bg-gradient-to-b from-slate-900/70 via-slate-900/60 to-slate-900/80"
+          aria-hidden
+        />
+        <div className="absolute inset-0 backdrop-blur-[2px]" aria-hidden />
 
-          {/* Buttons – wider */}
-          <div className="w-full max-w-md space-y-4 mb-10">
-            <Link
-              href="/auth/register"
-              className="flex w-full items-center justify-between gap-3 rounded-xl bg-blue-600 px-6 py-4 text-base font-semibold text-white shadow-md transition-all duration-200 hover:bg-blue-700 hover:shadow-lg hover:-translate-y-0.5 focus:outline-none active:translate-y-0"
-            >
-              <span className="flex items-center gap-2.5">
-                <Store className="h-5 w-5" />
-                Join GatiMitra as a merchant
-              </span>
-              <ArrowRight className="h-5 w-5 opacity-80" />
-            </Link>
-            <Link
-              href="/auth/login"
-              className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-6 py-4 text-base font-semibold text-slate-700 shadow-sm transition-all duration-200 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 hover:shadow focus:outline-none active:translate-y-0"
-            >
-              <span className="flex items-center gap-2.5">
-                <ChefHat className="h-5 w-5 text-blue-600" />
-                Sign in to your partner account
-              </span>
-              <ArrowRight className="h-5 w-5 text-slate-400" />
-            </Link>
-          </div>
+        {/* Centered container – glassmorphism card */}
+        <div className="relative z-10 w-full max-w-xl mx-auto">
+          <div className="rounded-3xl border border-white/20 bg-white/10 p-6 sm:p-8 md:p-10 shadow-2xl shadow-slate-900/20 backdrop-blur-xl">
+            {/* Logo – larger size, solid background for clear visibility */}
+            <div className="flex justify-center mb-6">
+              <div className="inline-flex h-20 w-28 sm:h-24 sm:w-32 items-center justify-center rounded-xl bg-white shadow-xl ring-2 ring-white/50 px-4 py-3">
+                <img src="/logo.png" alt="GatiMitra" className="h-12 w-auto object-contain sm:h-14" />
+              </div>
+            </div>
+            <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-white text-center tracking-tight mb-3 drop-shadow-sm">
+              Welcome to GatiMitra
+            </h1>
+            <p className="text-base sm:text-lg text-white/95 text-center mb-1 max-w-md mx-auto leading-relaxed">
+              Manage your store and grow your business
+            </p>
+            <p className="text-sm sm:text-base text-white/80 text-center mb-8 max-w-md mx-auto">
+              Join thousands of restaurant partners
+            </p>
 
-          {/* For Restaurants – wider, more prominent */}
-          <p className="text-base sm:text-lg font-semibold text-slate-700 max-w-lg mx-auto leading-snug">
-            For Restaurants – Start deliveries through GatiMitra
-          </p>
+            {/* CTAs – elevated, full-width on mobile */}
+            <div className="w-full space-y-4 mb-8">
+              <Link
+                href="/auth/register"
+                className="flex w-full items-center justify-between gap-3 rounded-xl bg-blue-600 px-6 py-4 text-base font-semibold text-white shadow-lg shadow-blue-600/30 transition-all duration-300 hover:bg-blue-500 hover:shadow-xl hover:shadow-blue-500/35 hover:-translate-y-1 focus:outline-none focus:ring-2 focus:ring-white/50 focus:ring-offset-2 focus:ring-offset-transparent active:translate-y-0"
+              >
+                <span className="flex items-center gap-2.5">
+                  <Store className="h-5 w-5" />
+                  Join GatiMitra as a merchant
+                </span>
+                <ArrowRight className="h-5 w-5 opacity-90" />
+              </Link>
+              <Link
+                href="/auth/login"
+                className="flex w-full items-center justify-between gap-3 rounded-xl border-2 border-white/40 bg-white/15 px-6 py-4 text-base font-semibold text-white shadow-lg backdrop-blur-sm transition-all duration-300 hover:bg-white/25 hover:border-white/60 hover:shadow-xl hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-white/50 focus:ring-offset-2 focus:ring-offset-transparent active:translate-y-0"
+              >
+                <span className="flex items-center gap-2.5">
+                  <ChefHat className="h-5 w-5 text-amber-200" />
+                  Sign in to your partner account
+                </span>
+                <ArrowRight className="h-5 w-5 text-white/80" />
+              </Link>
+            </div>
+
+            <p className="text-center text-sm sm:text-base font-semibold text-white/95">
+              For Restaurants – Start deliveries through GatiMitra
+            </p>
+          </div>
         </div>
 
-        {/* Scroll hint – animated */}
+        {/* Scroll hint */}
         <button
           type="button"
           onClick={scrollToContent}
-          className="flex flex-col items-center gap-1 text-slate-500 hover:text-slate-700 transition-colors pb-4 sm:pb-6 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 rounded-lg"
+          className="relative z-10 flex flex-col items-center gap-1 text-white/80 hover:text-white transition-colors mt-6 sm:mt-8 pb-4 sm:pb-6 focus:outline-none focus:ring-2 focus:ring-white/50 focus:ring-offset-2 focus:ring-offset-transparent rounded-lg"
           aria-label="Scroll to see more"
         >
-          <span className="text-xs font-medium uppercase tracking-widest">Scroll to explore</span>
+          <span className="text-xs font-semibold uppercase tracking-widest">Scroll to explore</span>
           <ChevronDown className="h-8 w-8 animate-bounce" aria-hidden />
         </button>
       </section>
 
-      {/* Below the fold: scroll to see Why choose, Documents, FAQ */}
-      <main id="below-fold" className="px-[5vw] py-12 pb-16">
-        <div className="w-full max-w-6xl mx-auto space-y-12 text-left">
+      {/* Below the fold */}
+      <main id="below-fold" className="px-4 sm:px-6 lg:px-8 py-14 sm:py-16 pb-20">
+        <div className="w-full max-w-6xl mx-auto space-y-16 sm:space-y-20 text-left">
           <WhyChooseUsSection />
           <NeededDocumentsSection />
           <FAQSection />
