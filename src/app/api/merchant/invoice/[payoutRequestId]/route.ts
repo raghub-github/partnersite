@@ -110,7 +110,7 @@ export async function GET(
 
     if (format === 'pdf') {
       const pdfBuffer = generateWithdrawalInvoicePdf(invoice, items);
-      return new NextResponse(pdfBuffer, {
+      return new NextResponse(Buffer.from(pdfBuffer), {
         status: 200,
         headers: {
           'Content-Type': 'application/pdf',

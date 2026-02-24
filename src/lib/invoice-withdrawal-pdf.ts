@@ -21,7 +21,7 @@ export function generateWithdrawalInvoicePdf(
   items: WithdrawalInvoiceItemRow[]
 ): Uint8Array {
   const doc = new jsPDF({ format: 'a4', unit: 'mm' });
-  const pageW = doc.getPageWidth();
+  const pageW = 210; // A4 width in mm
   let y = 18;
 
   doc.setFontSize(18);
@@ -151,5 +151,5 @@ export function generateWithdrawalInvoicePdf(
     y
   );
 
-  return doc.output('arraybuffer') as ArrayBuffer;
+  return new Uint8Array(doc.output('arraybuffer'));
 }
