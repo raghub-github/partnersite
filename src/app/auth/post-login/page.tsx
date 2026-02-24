@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Store, Loader2, User, Building2, ChevronRight, LogOut } from "lucide-react";
 import Link from "next/link";
@@ -33,49 +33,46 @@ type ResolveData = {
 
 export default function PostLoginPage() {
   const router = useRouter();
-  const [status, setStatus] = useState<"loading" | "home">("loading");
+  const [status, setStatus] = useState<"loading" | "home" | "retry">("loading");
   const [data, setData] = useState<ResolveData | null>(null);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  const resolveSession = useCallback(async () => {
+    setStatus("loading");
+    try {
+      const res = await fetch("/api/auth/resolve-session", { credentials: "include" });
+      const result: ResolveData & { code?: string; error?: string } = await res.json();
 
-    async function run() {
-      try {
-        const res = await fetch("/api/auth/resolve-session");
-        const result: ResolveData = await res.json();
-
-        if (cancelled) return;
-        if (!res.ok || !result.success) {
-          // Session expired, invalid, or API error: clear and redirect to login (no error page)
-          try {
-            await fetch("/api/auth/logout", { method: "POST" });
-          } catch {
-            // ignore
-          }
-          window.location.href = "/auth/login";
+      if (!res.ok || !result.success) {
+        if (res.status === 503 || result.code === "SERVICE_UNAVAILABLE") {
+          setStatus("retry");
           return;
         }
-
-        setData(result);
-        setStatus("home");
-      } catch {
-        if (!cancelled) {
-          // Network or other error: redirect to login so user can try again
-          try {
-            await fetch("/api/auth/logout", { method: "POST" });
-          } catch {
-            // ignore
-          }
-          window.location.href = "/auth/login";
+        try {
+          await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+        } catch {
+          // ignore
         }
+        const code = result.code;
+        const errMsg = result.error;
+        const query = code === "MERCHANT_NOT_FOUND" && errMsg
+          ? `?error=${encodeURIComponent(errMsg)}`
+          : "";
+        window.location.href = `/auth/login${query}`;
+        return;
       }
-    }
 
-    run();
-    return () => { cancelled = true; };
-  }, [router]);
+      setData(result);
+      setStatus("home");
+    } catch {
+      setStatus("retry");
+    }
+  }, []);
+
+  useEffect(() => {
+    resolveSession();
+  }, [resolveSession]);
 
   const goToDashboard = (storeId: string) => {
     if (typeof localStorage !== "undefined") {
@@ -116,6 +113,26 @@ export default function PostLoginPage() {
             <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
           </div>
           <p className="text-sm font-medium text-slate-700">Loading your account...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (status === "retry") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50 px-4">
+        <div className="text-center space-y-6 max-w-sm">
+          <div className="inline-flex p-4 rounded-full bg-amber-100">
+            <Store className="w-10 h-10 text-amber-600" />
+          </div>
+          <p className="text-sm font-medium text-slate-700">Service temporarily unavailable. Please check your connection and try again.</p>
+          <button
+            type="button"
+            onClick={() => resolveSession()}
+            className="px-4 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700"
+          >
+            Try again
+          </button>
         </div>
       </div>
     );

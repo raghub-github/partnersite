@@ -205,22 +205,34 @@ export async function validateMerchantForLogin(email: string): Promise<MerchantV
 }
 
 /**
- * Validate merchant from session user: by email, then phone, then supabase_user_id.
- * Use this after Google (email), phone OTP (phone or id), or password login.
+ * Validate merchant from session user. Tries email, then supabase_user_id, then phone
+ * so we match whether the user signed up with Google (email), phone OTP, or has a linked account.
  */
 export async function validateMerchantFromSession(user: {
   id: string;
   email?: string | null;
   phone?: string | null;
 }): Promise<MerchantValidationResult> {
+  const tried: string[] = [];
+
   if (user.email?.trim()) {
-    return validateMerchantForLogin(user.email);
-  }
-  if (user.phone?.trim()) {
-    return validateMerchantByPhone(user.phone);
+    const byEmail = await validateMerchantForLogin(user.email);
+    if (byEmail.isValid) return byEmail;
+    tried.push("email");
   }
   if (user.id?.trim()) {
-    return validateMerchantBySupabaseUserId(user.id);
+    const byId = await validateMerchantBySupabaseUserId(user.id);
+    if (byId.isValid) return byId;
+    tried.push("supabase_user_id");
   }
-  return { isValid: false, error: "Unable to identify user. Please try again." };
+  if (user.phone?.trim()) {
+    const byPhone = await validateMerchantByPhone(user.phone);
+    if (byPhone.isValid) return byPhone;
+    tried.push("phone");
+  }
+
+  return {
+    isValid: false,
+    error: "No merchant account found for this login. Please register first.",
+  };
 }

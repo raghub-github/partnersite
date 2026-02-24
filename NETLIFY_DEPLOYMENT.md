@@ -99,15 +99,13 @@ Here's a checklist of all variables you need to add:
 
 ## Google login redirecting to localhost or 403 resolve-session in production
 
-If after Google sign-in users are sent to `http://localhost:3000`, or if `GET /api/auth/resolve-session` returns 403 on new devices:
+If after Google sign-in users are sent to `http://localhost:3000`, or if `GET /api/auth/resolve-session` returns 403:
 
-1. **Set `NEXT_PUBLIC_APP_URL`** in Netlify (and redeploy) to your production URL, e.g. `https://your-app.netlify.app`.
+1. **Set `NEXT_PUBLIC_APP_URL`** (and redeploy) to your production URL, e.g. `https://partner.gatimitra.com` or your Netlify URL.
 2. **Supabase Dashboard** → Authentication → URL Configuration:
-   - **Site URL (critical)**: Set to your **production** URL (e.g. `https://partner.gatimitra.com` or `https://your-app.netlify.app`). Do **not** leave this as `http://localhost:3000` for production; it causes cookie/redirect issues and 403s on new devices.
-   - **Redirect URLs**: Add both:
-     - `https://your-app.netlify.app/api/auth/callback` (or your production domain, e.g. `https://partner.gatimitra.com/api/auth/callback`)
-     - `http://localhost:3000/api/auth/callback` (for local dev)
-   - You can also keep `/auth/callback` entries for backward compatibility; the app will forward to the API.
+   - **Site URL**: Set to your primary app URL (e.g. `https://partner.gatimitra.com`). Do **not** use localhost for production.
+   - **Redirect URLs**: Must include your production callback and localhost (e.g. `https://partner.gatimitra.com/auth/callback`, `http://localhost:3000/auth/callback`).
+   - For full auth setup and multiple apps on one project, see **`docs/AUTH-SUPABASE-CONFIG.md`**.
 
 ## Troubleshooting
 

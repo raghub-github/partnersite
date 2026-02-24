@@ -25,7 +25,9 @@ export async function GET(request: NextRequest) {
       userError = result.error ?? null;
       if (!userError && user) break;
       if (userError && isInvalidRefreshToken(userError)) break;
-      if (userError && isNetworkOrTransientError(userError) && attempt < maxGetUserAttempts) {
+      // Fail fast on network/connect timeout — no point retrying when Supabase is unreachable
+      if (userError && isNetworkOrTransientError(userError)) break;
+      if (userError && attempt < maxGetUserAttempts) {
         await new Promise((r) => setTimeout(r, retryDelaysMs[attempt - 1] ?? 1000));
         continue;
       }

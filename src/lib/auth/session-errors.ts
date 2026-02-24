@@ -28,7 +28,10 @@ export function isNetworkOrTransientError(err: unknown): boolean {
     msg.includes("etimedout") ||
     msg.includes("econnreset") ||
     msg.includes("econnrefused") ||
-    msg.includes("connect timeout")
+    msg.includes("connect timeout") ||
+    msg.includes("timeout") ||
+    msg.includes("abort") ||
+    msg.includes("the operation was aborted")
   )
     return true;
   let current: unknown = err;

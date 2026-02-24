@@ -1,27 +1,38 @@
 /**
- * Utility to clear all Supabase authentication storage
- * This helps resolve PKCE code verifier issues
+ * Utility to clear Supabase authentication storage.
+ * Use clearSupabaseClientSession() on login page load to avoid stale sessions conflicting with OAuth.
  */
+
+/** Clear only Supabase client keys (sb-*) so auth_redirect and other app state are preserved. */
+export function clearSupabaseClientSession() {
+  if (typeof window === 'undefined') return;
+  try {
+    ['localStorage', 'sessionStorage'].forEach((storeName) => {
+      const store = storeName === 'localStorage' ? localStorage : sessionStorage;
+      Object.keys(store).forEach((key) => {
+        if (key.startsWith('sb-')) store.removeItem(key);
+      });
+    });
+  } catch (error) {
+    console.error('[clear-auth-storage] Error clearing Supabase session:', error);
+  }
+}
 
 export function clearAuthStorage() {
   if (typeof window === 'undefined') return;
 
   try {
-    // Clear localStorage
     Object.keys(localStorage).forEach(key => {
       if (key.startsWith('sb-') || key.includes('supabase') || key.includes('auth')) {
         localStorage.removeItem(key);
       }
     });
 
-    // Clear sessionStorage
     Object.keys(sessionStorage).forEach(key => {
       if (key.startsWith('sb-') || key.includes('supabase') || key.includes('auth')) {
         sessionStorage.removeItem(key);
       }
     });
-
-    console.log('[clear-auth-storage] Cleared all auth storage');
   } catch (error) {
     console.error('[clear-auth-storage] Error clearing storage:', error);
   }

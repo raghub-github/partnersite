@@ -3,9 +3,10 @@
 import { useState, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { signInWithGoogle, requestPhoneOTP, verifyPhoneOTP } from '@/lib/auth/supabase-client';
+import { clearSupabaseClientSession } from '@/lib/auth/clear-auth-storage';
 import { ENABLE_PHONE_OTP_LOGIN } from '@/lib/auth/phone-otp-config';
 import { LoginCard } from './components/LoginCard';
 import { LoginToggle, type LoginTab } from './components/LoginToggle';
@@ -20,7 +21,20 @@ function normalizePhone(input: string): string {
   return ten.length === 10 ? `+91${ten}` : '';
 }
 
+function messageFromReason(reason: string | null): string {
+  if (!reason?.trim()) return '';
+  switch (reason.trim().toLowerCase()) {
+    case 'session_invalid':
+      return 'Your session expired or was invalid. Please sign in again.';
+    case 'session_expired':
+      return 'Your session has expired. Please sign in again.';
+    default:
+      return '';
+  }
+}
+
 function LoginPageContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const [tab, setTab] = useState<LoginTab>('google');
   const [phone, setPhone] = useState('');
@@ -33,13 +47,27 @@ function LoginPageContent() {
 
   const registered = searchParams?.get('registered');
   const queryError = searchParams?.get('error');
+  const reason = searchParams?.get('reason');
   const redirectTo = searchParams?.get('redirect');
+  const oauthCode = searchParams?.get('code');
 
   useEffect(() => {
     if (typeof window !== 'undefined' && redirectTo) {
       sessionStorage.setItem('auth_redirect', redirectTo);
     }
   }, [redirectTo]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    clearSupabaseClientSession();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !oauthCode) return;
+    const callbackUrl = new URL('/auth/callback', window.location.origin);
+    searchParams?.forEach((value, key) => callbackUrl.searchParams.set(key, value));
+    router.replace(callbackUrl.pathname + '?' + callbackUrl.searchParams.toString());
+  }, [oauthCode, router, searchParams]);
 
   const normalizeLoginError = (raw: string) => {
     const message = (raw || '').trim();
@@ -58,9 +86,15 @@ function LoginPageContent() {
   }, [registered]);
 
   useEffect(() => {
-    const normalized = normalizeLoginError(queryError || '');
-    if (normalized) setError(normalized);
-  }, [queryError]);
+    const fromError = normalizeLoginError(queryError || '');
+    if (fromError) {
+      setError(fromError);
+      return;
+    }
+    const fromReason = messageFromReason(reason || null);
+    if (fromReason) setError(fromReason);
+    else setError('');
+  }, [queryError, reason]);
 
   useEffect(() => {
     if (resendCooldown > 0) {
@@ -72,6 +106,7 @@ function LoginPageContent() {
   const setSessionAndRedirect = async (access_token: string, refresh_token: string) => {
     const res = await fetch('/api/auth/set-cookie', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ access_token, refresh_token }),
     });
