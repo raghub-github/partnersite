@@ -23,6 +23,11 @@ export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const response = NextResponse.next();
 
+  // Let these API routes always run; they handle their own auth/errors
+  if (pathname === "/api/auth/resolve-session" || pathname === "/api/auth/merchant-session") {
+    return response;
+  }
+
   const oauthCode = request.nextUrl.searchParams.get("code");
   if (oauthCode && pathname !== "/auth/callback" && pathname !== "/api/auth/callback") {
     const callbackUrl = new URL("/auth/callback", request.url);

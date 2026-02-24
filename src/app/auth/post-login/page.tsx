@@ -42,7 +42,17 @@ export default function PostLoginPage() {
     setStatus("loading");
     try {
       const res = await fetch("/api/auth/resolve-session", { credentials: "include" });
-      const result: ResolveData & { code?: string; error?: string } = await res.json();
+      if (res.status === 404) {
+        setStatus("retry");
+        return;
+      }
+      let result: ResolveData & { code?: string; error?: string };
+      try {
+        result = await res.json();
+      } catch {
+        setStatus("retry");
+        return;
+      }
 
       if (!res.ok || !result.success) {
         if (res.status === 503 || result.code === "SERVICE_UNAVAILABLE") {
