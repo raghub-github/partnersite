@@ -5,8 +5,15 @@
  * OAuth redirect uses the current origin (window.location.origin) so:
  * - On localhost you are redirected back to localhost after Google sign-in.
  * - On your production domain you are redirected back to that domain.
- * In Supabase Dashboard > Authentication > URL Configuration, add both:
- * - Redirect URLs: https://yourdomain.com/auth/callback and http://localhost:3000/auth/callback
+ *
+ * We use the server-side callback (/api/auth/callback) so the session is exchanged and cookies
+ * are set on the server in one response (reliable on new devices and production).
+ *
+ * In Supabase Dashboard > Authentication > URL Configuration:
+ * - Redirect URLs: add https://partner.gatimitra.com/api/auth/callback and http://localhost:3000/api/auth/callback
+ *   (you can also keep /auth/callback for backward compatibility; the page will forward to the API).
+ * - Site URL: set to your PRODUCTION URL in production (e.g. https://partner.gatimitra.com), not localhost.
+ *   Otherwise cookie domain and redirect defaults can cause 403/session issues in production.
  */
 
 import { createClient } from "@/lib/supabase/client";
@@ -42,7 +49,7 @@ export async function signInWithGoogle(redirectTo?: string): Promise<AuthRespons
     }
     const supabase = createClient();
     const baseUrl = getAuthRedirectBaseUrl();
-    const redirectUrl = redirectTo || `${baseUrl}/auth/callback`;
+    const redirectUrl = redirectTo || `${baseUrl}/api/auth/callback`;
     if (typeof window !== "undefined") {
       const existing = sessionStorage.getItem("auth_redirect");
       if (!existing) sessionStorage.setItem("auth_redirect", "/auth/post-login");

@@ -113,28 +113,13 @@ function AuthCallbackContent() {
 
       const code = searchParams?.get("code");
       if (code) {
-        const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
-        if (exchangeError) {
-          router.push(`/auth/login?error=${encodeURIComponent(exchangeError.message)}`);
-          return;
-        }
-        if (data?.session) {
-          const result = await setCookieAndRedirect(
-            data.session.access_token,
-            data.session.refresh_token,
-            next
-          );
-          if (!result.ok) {
-            await supabase.auth.signOut();
-            router.push(`/auth/login?error=${encodeURIComponent(result.error)}`);
-            return;
-          }
-          if (typeof window !== "undefined") {
-            sessionStorage.removeItem("auth_redirect");
-            window.location.href = next.startsWith("/") ? next : `/${next.replace(/^\//, "")}`;
-          }
-          return;
-        }
+        // Prefer server-side exchange: redirect to API so cookies are set on the redirect response
+        // (avoids client exchange + set-cookie race and ensures cookies work on new devices/production)
+        const apiCallback = new URL("/api/auth/callback", window.location.origin);
+        apiCallback.searchParams.set("code", code);
+        apiCallback.searchParams.set("next", next);
+        window.location.href = apiCallback.toString();
+        return;
       }
 
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
