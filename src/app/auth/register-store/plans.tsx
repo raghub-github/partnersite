@@ -4,6 +4,9 @@ import { useState, useCallback, useEffect } from "react";
 import Link from "next/link";
 import { ChevronLeft, Check, Info, Loader2, CheckCircle, Handshake, FileText } from "lucide-react";
 
+const POLL_INTERVAL_MS = 3000;
+const POLL_MAX_ATTEMPTS = 100; // ~5 min
+
 export interface OnboardingPlan {
   id: string;
   name: string;
@@ -71,8 +74,53 @@ export default function OnboardingPlansPage({
   const [paymentError, setPaymentError] = useState("");
   const [paymentStatusLoading, setPaymentStatusLoading] = useState(true);
   const [alreadyPaid, setAlreadyPaid] = useState(false);
+  const [pendingOrderId, setPendingOrderId] = useState<string | null>(null);
   const plans = DEFAULT_PLANS;
   const canContinue = !!selectedPlanId;
+
+  // Poll payment status by orderId when user may have paid but closed/refreshed (or webhook captured)
+  const checkOrderStatus = useCallback(async (orderId: string): Promise<boolean> => {
+    const res = await fetch(`/api/onboarding/payment-status?orderId=${encodeURIComponent(orderId)}`);
+    const data = await res.json();
+    return !!(data.success && data.alreadyPaid);
+  }, []);
+
+  useEffect(() => {
+    if (!pendingOrderId || alreadyPaid) return;
+    let attempts = 0;
+    const t = setInterval(async () => {
+      attempts++;
+      if (attempts > POLL_MAX_ATTEMPTS) {
+        clearInterval(t);
+        setPendingOrderId(null);
+        return;
+      }
+      const captured = await checkOrderStatus(pendingOrderId);
+      if (captured) {
+        clearInterval(t);
+        setPendingOrderId(null);
+        setAlreadyPaid(true);
+        onContinue();
+      }
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(t);
+  }, [pendingOrderId, alreadyPaid, checkOrderStatus, onContinue]);
+
+  // When user returns to tab, check pending order once
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible" || !pendingOrderId || alreadyPaid) return;
+      checkOrderStatus(pendingOrderId).then((captured) => {
+        if (captured) {
+          setPendingOrderId(null);
+          setAlreadyPaid(true);
+          onContinue();
+        }
+      });
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [pendingOrderId, alreadyPaid, checkOrderStatus, onContinue]);
 
   // Check if this store has already completed onboarding payment (e.g. after logout or navigating back)
   useEffect(() => {
@@ -165,9 +213,11 @@ export default function OnboardingPlansPage({
         setPaymentError(orderData.error || "Could not create order.");
         return;
       }
+      setPendingOrderId(orderData.orderId);
       await loadRazorpayScript();
       if (!window.Razorpay) {
         setPaymentError("Payment gateway could not be loaded. Try again or contact support.");
+        setPendingOrderId(null);
         return;
       }
       const rzp = new window.Razorpay({
@@ -190,6 +240,7 @@ export default function OnboardingPlansPage({
             });
             const verifyData = await verifyRes.json();
             if (verifyData.success) {
+              setPendingOrderId(null);
               setAlreadyPaid(true);
               onContinue();
             } else {
@@ -198,6 +249,9 @@ export default function OnboardingPlansPage({
           } finally {
             setPaying(false);
           }
+        },
+        modal: {
+          ondismiss: () => setPaying(false),
         },
       });
       rzp.open();

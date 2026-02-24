@@ -122,6 +122,7 @@ function StoreSettingsContent() {
   const [paymentHistory, setPaymentHistory] = useState<any[]>([])
   const [loadingPlans, setLoadingPlans] = useState(false)
   const [upgradingPlanId, setUpgradingPlanId] = useState<number | null>(null)
+  const [pendingSubscriptionOrderId, setPendingSubscriptionOrderId] = useState<string | null>(null)
   const [onboardingPayments, setOnboardingPayments] = useState<any[]>([])
   const [autoRenew, setAutoRenew] = useState(false)
   const [showAutoRenewConfirm, setShowAutoRenewConfirm] = useState(false)
@@ -1208,6 +1209,62 @@ function StoreSettingsContent() {
     }
   };
 
+  // Poll subscription order status when user may have paid but closed tab (or webhook completed)
+  const SUB_POLL_INTERVAL_MS = 3000;
+  const SUB_POLL_MAX = 100;
+  useEffect(() => {
+    if (!pendingSubscriptionOrderId) return;
+    let attempts = 0;
+    const t = setInterval(async () => {
+      attempts++;
+      if (attempts > SUB_POLL_MAX) {
+        clearInterval(t);
+        setPendingSubscriptionOrderId(null);
+        return;
+      }
+      try {
+        const res = await fetch(
+          `/api/merchant/subscription/order-status?orderId=${encodeURIComponent(pendingSubscriptionOrderId)}`
+        );
+        const data = await res.json();
+        if (data.success && data.captured) {
+          clearInterval(t);
+          setPendingSubscriptionOrderId(null);
+          toast.success('Payment confirmed. Your subscription is active.');
+          await reloadSubscriptionData();
+        }
+      } catch {
+        // ignore
+      }
+    }, SUB_POLL_INTERVAL_MS);
+    return () => clearInterval(t);
+  }, [pendingSubscriptionOrderId]);
+
+  useEffect(() => {
+    if (!pendingSubscriptionOrderId || document.visibilityState !== 'visible') return;
+    const check = async () => {
+      try {
+        const res = await fetch(
+          `/api/merchant/subscription/order-status?orderId=${encodeURIComponent(pendingSubscriptionOrderId)}`
+        );
+        const data = await res.json();
+        if (data.success && data.captured) {
+          setPendingSubscriptionOrderId(null);
+          toast.success('Payment confirmed. Your subscription is active.');
+          await reloadSubscriptionData();
+        }
+      } catch {
+        // ignore
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible' || !pendingSubscriptionOrderId) return;
+      check();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [pendingSubscriptionOrderId]);
+
   const handleUpgradePlan = async (planId: number) => {
     if (!storeId) return;
     
@@ -1321,6 +1378,7 @@ function StoreSettingsContent() {
       const clearProcessing = () => {
         setUpgradingPlanId((current) => (current === planId ? null : current));
       };
+      setPendingSubscriptionOrderId(orderData.orderId);
 
       // Open Razorpay checkout
       const rzp = new (window as any).Razorpay({
@@ -1363,6 +1421,7 @@ function StoreSettingsContent() {
             }
 
             if (verifyRes.ok && verifyData.success) {
+              setPendingSubscriptionOrderId(null);
               toast.success(isUpgrade ? '🎉 Upgrade successful! Your new plan is active.' : '🎉 Payment successful! Subscription activated.');
               await reloadSubscriptionData();
             } else {
@@ -1390,8 +1449,11 @@ function StoreSettingsContent() {
 
       rzp.open();
 
-      // Safety: clear "Processing..." after 60s if modal was closed without firing events
-      setTimeout(clearProcessing, 60000);
+      // Safety: clear "Processing..." and pending order after 5 min if modal was closed without events
+      setTimeout(() => {
+        clearProcessing();
+        setPendingSubscriptionOrderId((id) => (id === orderData.orderId ? null : id));
+      }, 300000);
     } catch (error) {
       console.error('Error initiating payment:', error);
       toast.error('Failed to initiate payment');

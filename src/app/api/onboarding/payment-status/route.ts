@@ -11,11 +11,9 @@ function getSupabaseAdmin() {
 }
 
 /**
- * GET /api/onboarding/payment-status?merchantParentId=123&merchantStoreId=GMMC1001
- * Returns whether this store has already completed onboarding payment (status = captured).
- * Payment is checked by store_id only (merchant_store_id in merchant_onboarding_payments).
- * If no payment exists for this store_id → alreadyPaid: false (user must pay).
- * Parent_id is not used for payment status; each store has its own payment record.
+ * GET /api/onboarding/payment-status
+ * - ?orderId=order_xxx → status for this Razorpay order (for polling after payment; e.g. page refresh). Returns status, alreadyPaid, capturedAt.
+ * - ?merchantParentId=123&merchantStoreId=GMMC1001 → whether this store has completed onboarding payment (by store).
  */
 export async function GET(request: NextRequest) {
   try {
@@ -25,12 +23,40 @@ export async function GET(request: NextRequest) {
         { status: 500 }
       );
     }
+    const orderId = request.nextUrl.searchParams.get("orderId");
+    const db = getSupabaseAdmin();
+
+    // By orderId: for polling when user may have paid but page was closed/refreshed
+    if (orderId?.trim()) {
+      const { data: row, error } = await db
+        .from("merchant_onboarding_payments")
+        .select("id, status, captured_at")
+        .eq("razorpay_order_id", orderId.trim())
+        .maybeSingle();
+      if (error) {
+        console.error("[onboarding/payment-status] Error:", error);
+        return NextResponse.json(
+          { success: false, error: "Failed to check payment status" },
+          { status: 500 }
+        );
+      }
+      const captured = row?.status === "captured";
+      return NextResponse.json({
+        success: true,
+        orderId: orderId.trim(),
+        status: row?.status ?? "unknown",
+        alreadyPaid: captured,
+        capturedAt: row?.captured_at ?? null,
+        checkedBy: "order_id",
+      });
+    }
+
     const merchantParentId = request.nextUrl.searchParams.get("merchantParentId");
     const merchantStoreId = request.nextUrl.searchParams.get("merchantStoreId"); // Store public ID (e.g., GMMC1001)
 
     if (!merchantParentId) {
       return NextResponse.json(
-        { success: false, error: "merchantParentId is required" },
+        { success: false, error: "merchantParentId or orderId is required" },
         { status: 400 }
       );
     }
@@ -41,8 +67,6 @@ export async function GET(request: NextRequest) {
         { status: 400 }
       );
     }
-
-    const db = getSupabaseAdmin();
 
     // Payment status is checked by store_id only (merchant_store_id in merchant_onboarding_payments).
     if (!merchantStoreId || !merchantStoreId.trim()) {
