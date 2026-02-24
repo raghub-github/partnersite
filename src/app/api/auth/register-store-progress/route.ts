@@ -65,8 +65,19 @@ function toMenuProxyUrl(storedUrlOrKey: string | null | undefined): string | nul
 
 function toEnumStoreType(raw: string | undefined): string | null {
   if (!raw) return null;
-  const normalized = raw.toUpperCase();
-  return normalized === "OTHERS" ? "OTHERS" : normalized;
+  const normalized = raw.toUpperCase().replace(/\s+/g, "_");
+  const allowed: Record<string, string> = {
+    RESTAURANT: "RESTAURANT",
+    CAFE: "CAFE",
+    BAKERY: "BAKERY",
+    CLOUD_KITCHEN: "CLOUD_KITCHEN",
+    GROCERY: "GROCERY",
+    PHARMA: "PHARMA",
+    STATIONERY: "STATIONERY",
+    ELECTRONICS_ECOMMERCE: "ELECTRONICS_ECOMMERCE",
+    OTHERS: "OTHERS",
+  };
+  return allowed[normalized] ?? normalized;
 }
 
 type ProgressFlags = {
@@ -204,11 +215,9 @@ async function insertStoreAfterStep1(
     return null;
   }
 
-  const ownerFullName =
-    typeof step1.owner_full_name === "string" && step1.owner_full_name.trim()
-      ? step1.owner_full_name.trim()
-      : "Store Owner";
-
+  // Schema alignment: merchant_stores has status store_status ('ACTIVE'|'INACTIVE'), not 'DRAFT'.
+  // Use INACTIVE for new draft stores; approval_status can be 'DRAFT'.
+  // Omit owner_full_name if your table does not have that column (add it back if your migration has it).
   const payload: any = {
     store_id: generatedStoreId,
     parent_id: parentId,
@@ -216,9 +225,9 @@ async function insertStoreAfterStep1(
     store_display_name: step1.store_display_name || null,
     store_description: step1.store_description || null,
     store_type: toEnumStoreType(step1.store_type) || "RESTAURANT",
+    custom_store_type: step1.custom_store_type && String(step1.custom_store_type).trim() ? String(step1.custom_store_type).trim() : null,
     store_email: step1.store_email || "",
     store_phones: Array.isArray(step1.store_phones) ? step1.store_phones : [],
-    owner_full_name: ownerFullName,
     full_address: "Pending",
     city: "Pending",
     state: "Pending",
@@ -227,7 +236,7 @@ async function insertStoreAfterStep1(
     current_onboarding_step: 1,
     onboarding_completed: false,
     approval_status: "DRAFT",
-    status: "DRAFT",
+    status: "INACTIVE",
     is_active: false,
     is_accepting_orders: false,
     is_available: false,
@@ -238,7 +247,6 @@ async function insertStoreAfterStep1(
     parent_id: payload.parent_id,
     store_name: payload.store_name,
     store_type: payload.store_type,
-    has_owner_full_name: !!payload.owner_full_name,
     has_store_email: !!payload.store_email,
   });
 
@@ -921,7 +929,10 @@ export async function PUT(req: NextRequest) {
             stepStore = { storeDbId: inserted.storeDbId, storePublicId: inserted.storePublicId };
           } else {
             console.error("[register-store-progress] insertStoreAfterStep1 returned null - store NOT created in DB!");
-            stepStore = { storeDbId: 0, storePublicId: storeIdToUse };
+            return NextResponse.json(
+              { success: false, error: "Failed to create store. Please check required fields and try again." },
+              { status: 500 }
+            );
           }
         } catch (error) {
           console.error("Failed to ensure store row:", error);
@@ -929,40 +940,28 @@ export async function PUT(req: NextRequest) {
             stepStore = { storeDbId: 0, storePublicId: String(existingPublicId) };
         }
       } else if (stepStore.storeDbId > 0 && storeExistsInDb && mergedFormData?.step1) {
-        // If store already exists but step1 data is being updated, update the store row with step1 data only
+        // If store already exists but step1 data is being updated, update the store row with step1 data only.
         try {
-          // Extract only step1 fields (exclude step2 location fields)
-          const step1 = {
-            store_name: mergedFormData.step1.store_name,
-            owner_full_name: mergedFormData.step1.owner_full_name,
-            store_display_name: mergedFormData.step1.store_display_name,
-            legal_business_name: mergedFormData.step1.legal_business_name,
-            store_type: mergedFormData.step1.store_type,
-            custom_store_type: mergedFormData.step1.custom_store_type,
-            store_email: mergedFormData.step1.store_email,
-            store_phones: mergedFormData.step1.store_phones,
-            store_description: mergedFormData.step1.store_description,
-          } as any;
+          const step1 = mergedFormData.step1 as Record<string, unknown>;
+          const updatePayload: Record<string, unknown> = {
+            store_name: step1.store_name || null,
+            store_display_name: step1.store_display_name || null,
+            store_description: step1.store_description || null,
+            store_type: toEnumStoreType(step1.store_type as string) || "RESTAURANT",
+            custom_store_type: step1.custom_store_type && String(step1.custom_store_type).trim() ? String(step1.custom_store_type).trim() : null,
+            store_email: step1.store_email || "",
+            store_phones: Array.isArray(step1.store_phones) ? step1.store_phones : [],
+            updated_at: new Date().toISOString(),
+          };
           
           console.log("[register-store-progress] Updating existing store with step1 data:", {
             storeDbId: stepStore.storeDbId,
-            step1Fields: Object.keys(step1),
+            step1Fields: Object.keys(updatePayload),
           });
           
           await db
             .from("merchant_stores")
-            .update({
-              store_name: step1.store_name || null,
-              owner_full_name: step1.owner_full_name || null,
-              store_display_name: step1.store_display_name || null,
-              legal_business_name: step1.legal_business_name || null,
-              store_description: step1.store_description || null,
-              store_type: toEnumStoreType(step1.store_type) || "RESTAURANT",
-              custom_store_type: step1.custom_store_type || null,
-              store_email: step1.store_email || "",
-              store_phones: Array.isArray(step1.store_phones) ? step1.store_phones : [],
-              updated_at: new Date().toISOString(),
-            })
+            .update(updatePayload)
             .eq("id", stepStore.storeDbId);
         } catch (updateError) {
           console.error("Failed to update store row with step1 data:", updateError);

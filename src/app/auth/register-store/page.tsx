@@ -5,7 +5,7 @@ const safeNumberInput = (val: number | null | undefined) => (typeof val === 'num
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import dynamic from 'next/dynamic';
 import axios from 'axios';
-import { Loader2, Menu, X, HelpCircle, Package, Mail, Wallet, CheckCircle2 } from 'lucide-react';
+import { Loader2, Menu, X, HelpCircle } from 'lucide-react';
 import MerchantHelpTicket from '@/components/MerchantHelpTicket';
 import { createClient } from '@/lib/supabase/client';
 import { useSearchParams } from 'next/navigation';
@@ -136,6 +136,7 @@ const StoreRegistrationForm = () => {
   const [isFetchingCurrentLocation, setIsFetchingCurrentLocation] = useState(false);
   const [locationAccuracyMeters, setLocationAccuracyMeters] = useState<number | null>(null);
   const [locationNotice, setLocationNotice] = useState<string>('');
+  const [locationInputMode, setLocationInputMode] = useState<'gps' | 'search'>('gps');
   const [storePhonesInput, setStorePhonesInput] = useState('');
   const [progressHydrated, setProgressHydrated] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -268,9 +269,15 @@ const StoreRegistrationForm = () => {
       setCurrentStoreId(saved.step_store.storePublicId);
     }
 
-    // Step 1 data
+    // Step 1 data (legal_business_name is kept in sync with store_display_name)
     if (saved.step1) {
-      setFormData((prev) => ({ ...prev, ...saved.step1 }));
+      const step1 = saved.step1 as Record<string, unknown>;
+      const displayName = (step1.store_display_name as string) ?? '';
+      setFormData((prev): FormData => ({
+        ...prev,
+        ...step1,
+        legal_business_name: displayName,
+      } as FormData));
       if (saved.step1.store_phones && Array.isArray(saved.step1.store_phones)) {
         setStorePhonesInput(saved.step1.store_phones.join(', '));
       }
@@ -470,6 +477,7 @@ const StoreRegistrationForm = () => {
               store_display_name,
               store_description,
               store_type,
+              custom_store_type,
               store_email,
               store_phones,
               full_address,
@@ -500,13 +508,16 @@ const StoreRegistrationForm = () => {
             setDraftStoreDbId(existingStore.id);
             setDraftStorePublicId(existingStore.store_id);
             
-            // Load Step 1 & 2 data
+            // Load Step 1 & 2 data (legal_business_name = store_display_name)
+            const displayName = existingStore.store_display_name ?? '';
             setFormData((prev) => ({
               ...prev,
               store_name: existingStore.store_name ?? prev.store_name,
-              store_display_name: existingStore.store_display_name ?? prev.store_display_name,
+              store_display_name: displayName,
+              legal_business_name: displayName,
               store_description: existingStore.store_description ?? prev.store_description,
               store_type: existingStore.store_type ?? prev.store_type,
+              custom_store_type: (existingStore as any).custom_store_type ?? prev.custom_store_type,
               store_email: existingStore.store_email ?? prev.store_email,
               store_phones: Array.isArray(existingStore.store_phones) ? existingStore.store_phones : prev.store_phones,
               full_address: existingStore.full_address ?? prev.full_address,
@@ -1014,6 +1025,39 @@ const StoreRegistrationForm = () => {
     reverseGeocode(formData.latitude, formData.longitude);
   };
 
+  /** When user enters GPS and hits Search: reverse geocode and fill full address, city, state, postal code. */
+  const handleGpsSearch = async () => {
+    if (formData.latitude == null || formData.longitude == null) {
+      alert('Please enter both latitude and longitude.');
+      return;
+    }
+    if (formData.latitude < -90 || formData.latitude > 90) {
+      alert('Latitude must be between -90 and 90.');
+      return;
+    }
+    if (formData.longitude < -180 || formData.longitude > 180) {
+      alert('Longitude must be between -180 and 180.');
+      return;
+    }
+    if (!mapboxToken) {
+      alert('Location search is not configured. Add NEXT_PUBLIC_MAPBOX_TOKEN to use GPS search.');
+      return;
+    }
+    setIsSearching(true);
+    try {
+      await reverseGeocode(formData.latitude, formData.longitude);
+      if (mapRef.current) {
+        mapRef.current.flyTo({
+          center: [formData.longitude, formData.latitude],
+          zoom: 16,
+          duration: 1.4,
+        });
+      }
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     if (type === 'checkbox') {
@@ -1033,6 +1077,12 @@ const StoreRegistrationForm = () => {
         ...prev, 
         [name]: value,
         custom_store_type: value === 'OTHERS' ? prev.custom_store_type : '' // Clear custom type if not OTHERS
+      }));
+    } else if (name === 'store_display_name') {
+      setFormData(prev => ({
+        ...prev,
+        store_display_name: value,
+        legal_business_name: value,
       }));
     } else {
       setFormData(prev => ({ ...prev, [name]: value }));
@@ -1267,11 +1317,14 @@ const StoreRegistrationForm = () => {
             throw new Error(progressPayload.error || 'Failed to save progress');
           }
 
-          // Update store ID from database response
+          // Update store ID from database response and persist so refresh loads same progress
           const stepStore = progressPayload?.progress?.form_data?.step_store;
           if (stepStore?.storePublicId && stepStore.storePublicId !== currentStoreId) {
             setCurrentStoreId(stepStore.storePublicId);
             setDraftStorePublicId(stepStore.storePublicId);
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('registerStoreCurrentStepStoreId', stepStore.storePublicId);
+            }
           }
           if (stepStore?.storeDbId && stepStore.storeDbId !== draftStoreDbId) {
             setDraftStoreDbId(stepStore.storeDbId);
@@ -1519,11 +1572,13 @@ const StoreRegistrationForm = () => {
             };
           }
 
-          // Save BEFORE navigating - ensure current step data is persisted
+          // Save to DB immediately, then navigate only on success
           const currentStep = step;
-          await saveStepData(currentStep, true, step3Patch, true);
-          
-          // Navigate after save completes
+          const result = await saveStepData(currentStep, true, step3Patch, true);
+          if (!result?.success) {
+            alert(result?.error || 'Data could not be saved. Please try again.');
+            return;
+          }
           setStep(prev => prev + 1);
         } catch (uploadErr: any) {
           alert(uploadErr?.message || 'Failed to upload menu file(s). Please try again.');
@@ -1531,17 +1586,19 @@ const StoreRegistrationForm = () => {
           setUploadLoading(false);
         }
       } else {
-        // For steps 1, 2, 4, 5, 6: Save BEFORE navigating to ensure edited data is persisted
+        // For steps 1, 2, 4, 5, 6: Save to DB immediately on "Save & Continue", then navigate only on success
         const currentStep = step;
         setActionLoading(true);
         try {
-          // Save current step data (blocking) before moving to next step
-          await saveStepData(currentStep, true, undefined, true);
-          // Navigate after save completes
+          const result = await saveStepData(currentStep, true, undefined, true);
+          if (!result?.success) {
+            alert(result?.error || 'Data could not be saved. Please try again.');
+            return;
+          }
           setStep(prev => prev + 1);
         } catch (saveErr: any) {
           console.error('Failed to save step data:', saveErr);
-          alert('Failed to save your progress. Please try again.');
+          alert(saveErr?.message || 'Failed to save your progress. Please try again.');
         } finally {
           setActionLoading(false);
         }
@@ -1929,7 +1986,7 @@ const StoreRegistrationForm = () => {
   };
 
   const stepLabels = [
-    'Restaurant information',
+    'Store Informations',
     'Location details',
     'Menu setup',
     'Restaurant documents',
@@ -2147,33 +2204,34 @@ const StoreRegistrationForm = () => {
 
       {/* Body: reserve space for fixed header (pt-14); sidebar fixed, main scrollable only */}
       <div className="flex-1 flex min-h-0 min-w-0 overflow-hidden pt-14">
-        {/* Sidebar - fixed position so it never scrolls; on lg+ title + parent at top, then steps + Help */}
+        {/* Sidebar - fixed position so it never scrolls; parent info + title at top, then steps + Help */}
         <aside className="fixed left-0 top-14 bottom-0 w-14 min-w-[3.5rem] sm:w-52 md:w-56 lg:w-60 flex-none bg-white border-r border-slate-200 flex flex-col py-2 sm:py-3 overflow-hidden z-20">
-          {/* Large screen only: Register New Store + Parent above step counts */}
-          <div className="hidden lg:block flex-none border-b border-slate-200 pb-2 mb-1 px-2 sm:px-3">
+          {/* Title + Parent Name & Parent ID (PID) – visible whenever sidebar shows labels (sm+) */}
+          <div className="hidden sm:block flex-none border-b border-slate-200 pb-2 mb-1 px-2 sm:px-3 space-y-2">
             <h2 className="text-sm font-bold text-slate-800 truncate">Register New Store</h2>
             {parentInfo && (
-              <p className="text-xs text-slate-600 truncate mt-0.5">
-                Parent: <span className="font-semibold text-indigo-700">{parentInfo.name}</span>
-                <span className="text-slate-500 ml-1">(PID: {parentInfo.parent_merchant_id})</span>
-              </p>
+              <div className="rounded-lg bg-slate-50 border border-slate-200 p-2 space-y-1.5">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500 font-medium">Parent Name</p>
+                  <p className="text-xs font-semibold text-slate-800 truncate mt-0.5" title={parentInfo.name ?? undefined}>
+                    {parentInfo.name ?? '—'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-slate-500 font-medium">Parent ID (PID)</p>
+                  <p className="text-xs font-mono font-bold text-indigo-700 truncate mt-0.5" title={parentInfo.parent_merchant_id ?? undefined}>
+                    {parentInfo.parent_merchant_id ?? '—'}
+                  </p>
+                </div>
+              </div>
             )}
             {(currentStoreId || draftStorePublicId) && (
-              <p className="text-xs text-slate-600 truncate mt-1.5 pt-1.5 border-t border-slate-100">
+              <p className="text-[11px] sm:text-xs text-slate-600 truncate pt-1 border-t border-slate-100">
                 <span className="font-medium text-slate-500">Store ID</span>
                 <span className="ml-1 font-mono font-semibold text-indigo-700">{currentStoreId || draftStorePublicId}</span>
               </p>
             )}
           </div>
-          {/* Store ID above steps (visible when sidebar shows labels, i.e. sm+) */}
-          {(currentStoreId || draftStorePublicId) && (
-            <div className="flex-none px-2 sm:px-3 pb-1.5 sm:pb-2 lg:hidden">
-              <p className="text-[11px] sm:text-xs text-slate-600 truncate">
-                <span className="font-medium text-slate-500">Store ID</span>
-                <span className="ml-1 font-mono font-semibold text-indigo-700">{currentStoreId || draftStorePublicId}</span>
-              </p>
-            </div>
-          )}
           <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-2 sm:px-3 space-y-0.5 hide-scrollbar">
             {stepLabels.map((label, idx) => {
               const stepNum = idx + 1;
@@ -2319,89 +2377,10 @@ const StoreRegistrationForm = () => {
         ref={mainScrollRef}
         className={`flex-1 min-h-0 min-w-0 pb-24 sm:pb-28 overflow-y-auto overflow-x-hidden overscroll-contain hide-scrollbar ${step >= 7 && step <= 9 ? "pt-0 px-2 sm:px-4 md:px-6" : "p-2 sm:p-3 md:px-5"}`}
       >
-        {/* Step 1: Intro sections + Basic Store Information */}
+        {/* Step 1: Basic Store Information - form module exactly centered with proper gap from header and bottom */}
         {step === 1 && (
-          <div className="min-h-full flex items-start justify-center">
-            <div className="w-full max-w-2xl space-y-6">
-              {/* Section 1: Why partner with GatiMitra */}
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="p-6 sm:p-8">
-                  <h2 className="text-xl sm:text-2xl font-bold text-slate-900 text-center">
-                    Why should you partner with GatiMitra?
-                  </h2>
-                  <div className="mt-4 h-px bg-slate-200 max-w-24 mx-auto" aria-hidden />
-                  <div className="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-6 sm:gap-8">
-                    <div className="flex flex-col items-center text-center">
-                      <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center mb-4">
-                        <Package className="w-6 h-6 text-blue-600" />
-                      </div>
-                      <h3 className="font-semibold text-slate-900 mb-2">Reliable Delivery Support</h3>
-                      <p className="text-sm text-slate-600 leading-relaxed">
-                        Focus on cooking while we handle delivery operations. Our delivery network ensures smooth pickups and doorstep delivery so your orders reach customers safely and on time.
-                      </p>
-                    </div>
-                    <div className="flex flex-col items-center text-center">
-                      <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center mb-4">
-                        <Mail className="w-6 h-6 text-emerald-600" />
-                      </div>
-                      <h3 className="font-semibold text-slate-900 mb-2">Dedicated Onboarding & Merchant Support</h3>
-                      <p className="text-sm text-slate-600 leading-relaxed mb-2">
-                        We don&apos;t leave you alone after signup. Our team helps you at every step — onboarding, menu setup, operations, and issue resolution.
-                      </p>
-                      <a href="mailto:support@gatimitra.com" className="text-sm font-medium text-blue-600 hover:underline">support@gatimitra.com</a>
-                      <p className="text-xs text-slate-500 mt-1">Response time: within 2–3 hours</p>
-                    </div>
-                    <div className="flex flex-col items-center text-center">
-                      <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center mb-4">
-                        <Wallet className="w-6 h-6 text-amber-600" />
-                      </div>
-                      <h3 className="font-semibold text-slate-900 mb-2">Fast & Transparent Payouts</h3>
-                      <p className="text-sm text-slate-600 leading-relaxed">
-                        Get paid regularly with secure and transparent settlements. GatiMitra provides payouts twice every week (Tuesday & Friday) directly to your bank account.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Section 2: Get started – documents ready (no apply/refer links) */}
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="p-6 sm:p-8">
-                  <h2 className="text-lg sm:text-xl font-bold text-slate-900">
-                    Get started: It only takes 10 minutes
-                  </h2>
-                  <p className="mt-2 text-sm text-slate-600">
-                    Please keep these documents and details ready for a smooth sign-up.
-                  </p>
-                  <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <ul className="space-y-3">
-                      <li className="flex items-start gap-3">
-                        <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
-                        <span className="text-sm text-slate-700">PAN card</span>
-                      </li>
-                      <li className="flex items-start gap-3">
-                        <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
-                        <span className="text-sm text-slate-700">FSSAI license</span>
-                      </li>
-                      <li className="flex items-start gap-3">
-                        <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
-                        <span className="text-sm text-slate-700">Bank account details</span>
-                      </li>
-                    </ul>
-                    <ul className="space-y-3">
-                      <li className="flex items-start gap-3">
-                        <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
-                        <span className="text-sm text-slate-700">GST number, if applicable</span>
-                      </li>
-                      <li className="flex items-start gap-3">
-                        <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
-                        <span className="text-sm text-slate-700">Menu and profile food image</span>
-                      </li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-
+          <div className="min-h-full flex items-center justify-center py-8 sm:py-12">
+            <div className="w-full max-w-2xl space-y-6 mx-auto">
               {/* Step 1 form: Basic Store Information */}
               <div className="bg-white rounded-xl shadow-sm border border-slate-200">
                 <div className="p-4 sm:p-5">
@@ -2466,9 +2445,10 @@ const StoreRegistrationForm = () => {
                         type="text"
                         name="legal_business_name"
                         value={formData.legal_business_name}
-                        onChange={handleInputChange}
-                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
-                        placeholder="Registered legal name"
+                        readOnly
+                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-slate-50 text-slate-700 cursor-not-allowed"
+                        placeholder="Same as Display Name (auto-filled)"
+                        title="Filled automatically from Display Name"
                       />
                     </div>
                   </div>
@@ -2491,6 +2471,7 @@ const StoreRegistrationForm = () => {
                         <option value="GROCERY">Grocery</option>
                         <option value="PHARMA">Pharma</option>
                         <option value="STATIONERY">Stationery</option>
+                        <option value="ELECTRONICS_ECOMMERCE">Electronics and E-commerce</option>
                         <option value="OTHERS">Others</option>
                       </select>
                     </div>
@@ -2583,67 +2564,157 @@ const StoreRegistrationForm = () => {
                     </div>
                     <h2 className="text-lg font-bold text-slate-800">Store Location</h2>
                   </div>
+
+                  {/* Toggle: GPS Coordinates (default) | Search Location */}
+                  <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-1 mb-4">
+                    <button
+                      type="button"
+                      onClick={() => setLocationInputMode('gps')}
+                      className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
+                        locationInputMode === 'gps'
+                          ? 'bg-white text-indigo-700 shadow-sm border border-slate-200'
+                          : 'text-slate-600 hover:text-slate-800'
+                      }`}
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                      </svg>
+                      GPS Coordinates
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLocationInputMode('search')}
+                      className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
+                        locationInputMode === 'search'
+                          ? 'bg-white text-indigo-700 shadow-sm border border-slate-200'
+                          : 'text-slate-600 hover:text-slate-800'
+                      }`}
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                      Search Location
+                    </button>
+                  </div>
+
                   <div className="space-y-2">
-                    <div ref={searchRef}>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Search Location *
-                      </label>
-                      <div className="relative">
-                        <div className="flex flex-col sm:flex-row gap-2">
-                          <input
-                            type="text"
-                            value={searchQuery}
-                            onChange={e => setSearchQuery(e.target.value)}
-                            placeholder="Enter address, postal code, city..."
-                            className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white min-w-0"
-                          />
-                          <button
-                            type="button"
-                            onClick={searchLocation}
-                            disabled={isSearching}
-                            className="px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 font-medium whitespace-nowrap"
-                          >
-                            {isSearching ? 'Searching...' : 'Search'}
-                          </button>
-                          {!disableCurrentLocationButton && (
+                    {/* Option 1: GPS Coordinates at top (default) – enter lat/lng, hit Search to fill address */}
+                    {locationInputMode === 'gps' && (
+                      <div className="rounded-xl border border-indigo-200 bg-gradient-to-r from-indigo-50/80 to-white p-4">
+                        <label className="block text-sm font-medium text-slate-700 mb-3">
+                          GPS Coordinates *
+                        </label>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <div className="text-xs text-slate-600 mb-1">Latitude</div>
+                            <input
+                              type="number"
+                              step="any"
+                              value={formData.latitude ?? ''}
+                              onChange={(e) =>
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  latitude: e.target.value === '' ? null : Number(e.target.value),
+                                }))
+                              }
+                              className="font-mono w-full text-sm bg-white px-3 py-2 rounded-lg border border-slate-300 text-slate-800"
+                              placeholder="e.g. 22.5726459"
+                            />
+                          </div>
+                          <div>
+                            <div className="text-xs text-slate-600 mb-1">Longitude</div>
+                            <input
+                              type="number"
+                              step="any"
+                              value={formData.longitude ?? ''}
+                              onChange={(e) =>
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  longitude: e.target.value === '' ? null : Number(e.target.value),
+                                }))
+                              }
+                              className="font-mono w-full text-sm bg-white px-3 py-2 rounded-lg border border-slate-300 text-slate-800"
+                              placeholder="e.g. 88.363895"
+                            />
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleGpsSearch}
+                          disabled={isSearching}
+                          className="mt-3 px-4 py-2.5 text-sm font-medium rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+                        >
+                          {isSearching ? 'Searching...' : 'Search'}
+                        </button>
+                        <p className="text-xs text-slate-500 mt-2">
+                          Enter latitude &amp; longitude, then click Search to auto-fill address, city, state and postal code.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Option 2: Search by address / place name */}
+                    {locationInputMode === 'search' && (
+                      <div ref={searchRef}>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">
+                          Search Location *
+                        </label>
+                        <div className="relative">
+                          <div className="flex flex-col sm:flex-row gap-2">
+                            <input
+                              type="text"
+                              value={searchQuery}
+                              onChange={e => setSearchQuery(e.target.value)}
+                              placeholder="Enter address, postal code, city..."
+                              className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white min-w-0"
+                            />
                             <button
                               type="button"
-                              onClick={handleUseCurrentLocation}
-                              disabled={isFetchingCurrentLocation}
-                              title="Use your device GPS for store location (may be approximate)"
-                              className="px-3 py-2 text-sm border border-indigo-300 text-indigo-700 rounded-lg bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed font-medium whitespace-nowrap"
+                              onClick={searchLocation}
+                              disabled={isSearching}
+                              className="px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 font-medium whitespace-nowrap"
                             >
-                              {isFetchingCurrentLocation ? 'Getting location...' : 'Use current location'}
+                              {isSearching ? 'Searching...' : 'Search'}
                             </button>
+                            {!disableCurrentLocationButton && (
+                              <button
+                                type="button"
+                                onClick={handleUseCurrentLocation}
+                                disabled={isFetchingCurrentLocation}
+                                title="Use your device GPS for store location (may be approximate)"
+                                className="px-3 py-2 text-sm border border-indigo-300 text-indigo-700 rounded-lg bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed font-medium whitespace-nowrap"
+                              >
+                                {isFetchingCurrentLocation ? 'Getting location...' : 'Use current location'}
+                              </button>
+                            )}
+                          </div>
+                          {locationNotice && (
+                            <div className="mt-2 text-xs rounded-lg px-2.5 py-1.5 border border-amber-200 bg-amber-50 text-amber-700">
+                              {locationNotice}
+                            </div>
+                          )}
+                          {searchResults.length > 0 && (
+                            <div className="absolute z-50 mt-1 w-full border border-slate-200 rounded-lg bg-white shadow-lg max-h-40 overflow-y-auto hide-scrollbar">
+                              {searchResults.map((result, idx) => (
+                                <div
+                                  key={idx}
+                                  onClick={() => {
+                                    selectLocation(result);
+                                    setSearchResults([]);
+                                  }}
+                                  className="p-3 hover:bg-indigo-50 cursor-pointer border-b border-slate-100 last:border-b-0 text-sm"
+                                >
+                                  <div className="font-medium text-slate-800">{result.text}</div>
+                                  <div className="text-xs text-slate-600 truncate mt-1">{result.place_name}</div>
+                                </div>
+                              ))}
+                            </div>
                           )}
                         </div>
-                        {locationNotice && (
-                          <div className="mt-2 text-xs rounded-lg px-2.5 py-1.5 border border-amber-200 bg-amber-50 text-amber-700">
-                            {locationNotice}
-                          </div>
-                        )}
-                        {searchResults.length > 0 && (
-                          <div className="absolute z-50 mt-1 w-full border border-slate-200 rounded-lg bg-white shadow-lg max-h-40 overflow-y-auto hide-scrollbar">
-                            {searchResults.map((result, idx) => (
-                              <div
-                                key={idx}
-                                onClick={() => {
-                                  selectLocation(result);
-                                  setSearchResults([]);
-                                }}
-                                className="p-3 hover:bg-indigo-50 cursor-pointer border-b border-slate-100 last:border-b-0 text-sm"
-                              >
-                                <div className="font-medium text-slate-800">{result.text}</div>
-                                <div className="text-xs text-slate-600 truncate mt-1">{result.place_name}</div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                        <p className="text-xs text-slate-500 mt-1">
+                          Enter exact address, postal code, or location name
+                        </p>
                       </div>
-                      <p className="text-xs text-slate-500 mt-1">
-                        Enter exact address, postal code, or location name
-                      </p>
-                    </div>
+                    )}
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">
                         Full Address *
@@ -2756,66 +2827,78 @@ const StoreRegistrationForm = () => {
                         />
                       </div>
                     </div>
-                    <div className="border border-slate-200 rounded-xl p-4 bg-gradient-to-r from-indigo-50 to-white">
-                      <div className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
-                        <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-                        </svg>
-                        GPS Coordinates
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <div className="text-xs text-slate-600 mb-2">Latitude</div>
-                          <input
-                            type="number"
-                            name="latitude"
-                            step="any"
-                            value={formData.latitude ?? ''}
-                            onChange={(e) =>
-                              setFormData((prev) => ({
-                                ...prev,
-                                latitude: e.target.value === '' ? null : Number(e.target.value),
-                              }))
-                            }
-                            className="font-mono w-full text-sm bg-white p-3 rounded-lg border border-slate-300 text-slate-800"
-                            placeholder="e.g. 22.5726459"
-                          />
-                        </div>
-                        <div>
-                          <div className="text-xs text-slate-600 mb-2">Longitude</div>
-                          <input
-                            type="number"
-                            name="longitude"
-                            step="any"
-                            value={formData.longitude ?? ''}
-                            onChange={(e) =>
-                              setFormData((prev) => ({
-                                ...prev,
-                                longitude: e.target.value === '' ? null : Number(e.target.value),
-                              }))
-                            }
-                            className="font-mono w-full text-sm bg-white p-3 rounded-lg border border-slate-300 text-slate-800"
-                            placeholder="e.g. 88.363895"
-                          />
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={applyManualCoordinates}
-                        className="mt-3 px-4 py-2 text-xs font-medium rounded-lg border border-indigo-300 text-indigo-700 hover:bg-indigo-50"
-                      >
-                        Set location from coordinates
-                      </button>
-                      {formData.latitude && formData.longitude && (
-                        <div className="mt-3 text-xs text-emerald-600 flex items-center gap-1">
-                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                    {/* When Search mode: show coordinates box so user can paste lat/lng and "Set location from coordinates". When GPS mode: show compact read-only. */}
+                    {locationInputMode === 'search' ? (
+                      <div className="border border-slate-200 rounded-xl p-4 bg-gradient-to-r from-indigo-50 to-white">
+                        <div className="text-sm font-semibold text-slate-800 mb-3 flex items-center gap-2">
+                          <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
                           </svg>
-                          Location set at coordinates
-                          {locationAccuracyMeters != null ? ` (~${locationAccuracyMeters}m accuracy)` : ''}
+                          GPS Coordinates
                         </div>
-                      )}
-                    </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <div className="text-xs text-slate-600 mb-2">Latitude</div>
+                            <input
+                              type="number"
+                              name="latitude"
+                              step="any"
+                              value={formData.latitude ?? ''}
+                              onChange={(e) =>
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  latitude: e.target.value === '' ? null : Number(e.target.value),
+                                }))
+                              }
+                              className="font-mono w-full text-sm bg-white p-3 rounded-lg border border-slate-300 text-slate-800"
+                              placeholder="e.g. 22.5726459"
+                            />
+                          </div>
+                          <div>
+                            <div className="text-xs text-slate-600 mb-2">Longitude</div>
+                            <input
+                              type="number"
+                              name="longitude"
+                              step="any"
+                              value={formData.longitude ?? ''}
+                              onChange={(e) =>
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  longitude: e.target.value === '' ? null : Number(e.target.value),
+                                }))
+                              }
+                              className="font-mono w-full text-sm bg-white p-3 rounded-lg border border-slate-300 text-slate-800"
+                              placeholder="e.g. 88.363895"
+                            />
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={applyManualCoordinates}
+                          className="mt-3 px-4 py-2 text-xs font-medium rounded-lg border border-indigo-300 text-indigo-700 hover:bg-indigo-50"
+                        >
+                          Set location from coordinates
+                        </button>
+                        {formData.latitude && formData.longitude && (
+                          <div className="mt-3 text-xs text-emerald-600 flex items-center gap-1">
+                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                            </svg>
+                            Location set at coordinates
+                            {locationAccuracyMeters != null ? ` (~${locationAccuracyMeters}m accuracy)` : ''}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      formData.latitude != null && formData.longitude != null && (
+                        <div className="text-xs text-slate-500 flex items-center gap-2">
+                          <span className="font-mono">Lat {formData.latitude}, Long {formData.longitude}</span>
+                          {locationAccuracyMeters != null && (
+                            <span className="text-emerald-600">~{locationAccuracyMeters}m accuracy</span>
+                          )}
+                        </div>
+                      )
+                    )}
                   </div>
                 </div>
               </div>

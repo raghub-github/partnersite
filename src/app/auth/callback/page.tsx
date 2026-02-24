@@ -22,6 +22,7 @@ async function setCookieAndRedirect(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const res = await fetch("/api/auth/set-cookie", {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ access_token: accessToken, refresh_token: refreshToken }),
   });
@@ -113,13 +114,30 @@ function AuthCallbackContent() {
 
       const code = searchParams?.get("code");
       if (code) {
-        // Prefer server-side exchange: redirect to API so cookies are set on the redirect response
-        // (avoids client exchange + set-cookie race and ensures cookies work on new devices/production)
-        const apiCallback = new URL("/api/auth/callback", window.location.origin);
-        apiCallback.searchParams.set("code", code);
-        apiCallback.searchParams.set("next", next);
-        window.location.href = apiCallback.toString();
-        return;
+        // Exchange must happen at the same URL that received the code (redirect_uri match).
+        // So we exchange here on the client, then set cookies via API and redirect.
+        const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+        if (exchangeError) {
+          router.push(`/auth/login?error=${encodeURIComponent(exchangeError.message)}`);
+          return;
+        }
+        if (data?.session) {
+          const result = await setCookieAndRedirect(
+            data.session.access_token,
+            data.session.refresh_token,
+            next
+          );
+          if (!result.ok) {
+            await supabase.auth.signOut();
+            router.push(`/auth/login?error=${encodeURIComponent(result.error)}`);
+            return;
+          }
+          if (typeof window !== "undefined") {
+            sessionStorage.removeItem("auth_redirect");
+            window.location.href = next.startsWith("/") ? next : `/${next.replace(/^\//, "")}`;
+          }
+          return;
+        }
       }
 
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
