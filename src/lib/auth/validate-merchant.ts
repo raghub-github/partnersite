@@ -205,22 +205,16 @@ export async function validateMerchantForLogin(email: string): Promise<MerchantV
 }
 
 /**
-<<<<<<< HEAD
  * Validate merchant from session user.
  * Identity is by merchant (merchant_parents.id), not email. We try all available
  * identifiers and accept if ANY finds a merchant — never block on email mismatch.
  * Order: supabase_user_id (most reliable for current session), then phone, then email.
-=======
- * Validate merchant from session user. Tries email, then supabase_user_id, then phone
- * so we match whether the user signed up with Google (email), phone OTP, or has a linked account.
->>>>>>> child
  */
 export async function validateMerchantFromSession(user: {
   id: string;
   email?: string | null;
   phone?: string | null;
 }): Promise<MerchantValidationResult> {
-<<<<<<< HEAD
   const results: Promise<MerchantValidationResult>[] = [];
   if (user.id?.trim()) {
     results.push(validateMerchantBySupabaseUserId(user.id));
@@ -241,28 +235,5 @@ export async function validateMerchantFromSession(user: {
   return {
     isValid: false,
     error: firstError ?? "No merchant account found for this login. Please register first.",
-=======
-  const tried: string[] = [];
-
-  if (user.email?.trim()) {
-    const byEmail = await validateMerchantForLogin(user.email);
-    if (byEmail.isValid) return byEmail;
-    tried.push("email");
-  }
-  if (user.id?.trim()) {
-    const byId = await validateMerchantBySupabaseUserId(user.id);
-    if (byId.isValid) return byId;
-    tried.push("supabase_user_id");
-  }
-  if (user.phone?.trim()) {
-    const byPhone = await validateMerchantByPhone(user.phone);
-    if (byPhone.isValid) return byPhone;
-    tried.push("phone");
-  }
-
-  return {
-    isValid: false,
-    error: "No merchant account found for this login. Please register first.",
->>>>>>> child
   };
 }
