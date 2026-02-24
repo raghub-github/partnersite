@@ -23,8 +23,14 @@ export async function GET(request: NextRequest) {
     const { data: { user }, error: userError } = await supabase.auth.getUser();
 
     if (userError || !user) {
+      // No session or invalid session: cookies missing, wrong domain, or expired
+      if (userError) {
+        console.warn("[resolve-session] getUser error (401):", userError.message);
+      } else {
+        console.warn("[resolve-session] No user in session (401)");
+      }
       return NextResponse.json(
-        { success: false, error: "Not authenticated" },
+        { success: false, error: "Not authenticated", code: "UNAUTHENTICATED" },
         { status: 401 }
       );
     }
@@ -36,8 +42,9 @@ export async function GET(request: NextRequest) {
     });
 
     if (!validation.isValid || validation.merchantParentId == null) {
+      console.warn("[resolve-session] Merchant validation failed (403):", validation.error, "user id:", user.id);
       return NextResponse.json(
-        { success: false, error: validation.error ?? "Merchant not found" },
+        { success: false, error: validation.error ?? "Merchant not found", code: "MERCHANT_NOT_FOUND" },
         { status: 403 }
       );
     }

@@ -10,11 +10,35 @@ import {
 } from "@/lib/auth/merchant-session-db";
 import { deviceIdCookie } from "@/lib/auth/auth-cookie-names";
 
+const isProduction = process.env.NODE_ENV === "production";
+
+/**
+ * Production-safe cookie options so cookies work on HTTPS and are sent on same-site requests.
+ */
+function applyCookieOptions(
+  cookieStore: Awaited<ReturnType<typeof import("next/headers").cookies>>,
+  response: NextResponse,
+  name: string,
+  value: string,
+  options: Record<string, unknown>
+): void {
+  const opts = {
+    ...options,
+    path: (options.path as string) ?? "/",
+    httpOnly: options.httpOnly !== false,
+    secure: isProduction,
+    sameSite: "lax" as const,
+  };
+  cookieStore.set(name, value, opts as Parameters<typeof cookieStore.set>[2]);
+  response.cookies.set(name, value, opts as Parameters<typeof response.cookies.set>[2]);
+}
+
 /**
  * POST /api/auth/set-cookie
  * Call after successful login. Validates merchant by id/phone/email (any match).
  * Deactivates any existing session for this device, creates new merchant_sessions row,
  * sets Supabase session and custom session cookies. Never blocks on email mismatch.
+ * Used by client callback when hash/token flow is used; primary OAuth flow uses GET /api/auth/callback.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -47,8 +71,7 @@ export async function POST(request: NextRequest) {
           },
           setAll(cookiesToSet) {
             cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, value, options);
-              response.cookies.set(name, value, options);
+              applyCookieOptions(cookieStore, response, name, value, options ?? {});
             });
           },
         },
