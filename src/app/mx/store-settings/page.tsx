@@ -2456,7 +2456,10 @@ function StoreSettingsContent() {
                       {plans.map((plan) => {
                         const isFreePlan = plan.price === 0 || plan.price === null;
                         const hasActivePaidPlan = currentPlan && currentPlan.price > 0 && currentSubscription && new Date(currentSubscription.expiry_date) > new Date();
-                        const isDisabled = isFreePlan && hasActivePaidPlan;
+                        const currentPrice = Number(currentPlan?.price ?? 0);
+                        const planPrice = Number(plan.price ?? 0);
+                        const isLowerThanCurrent = hasActivePaidPlan && plan.id !== currentPlan?.id && planPrice < currentPrice;
+                        const isDisabled = (isFreePlan && hasActivePaidPlan) || isLowerThanCurrent;
                         const planCode = (plan.plan_code || '').toUpperCase();
                         const isEnterprise = planCode === 'ENTERPRISE' || planCode === 'PRO';
                         const isPremium = planCode === 'PREMIUM' || planCode === 'GROWTH' || (plan.price > 0 && !isEnterprise);
@@ -2618,7 +2621,9 @@ function StoreSettingsContent() {
                             }`}
                             title={
                               isDisabled
-                                ? 'Active paid plan expire होने तक Free plan पर move नहीं कर सकते'
+                                ? isLowerThanCurrent
+                                  ? 'Lower plan — available after your current plan ends'
+                                  : 'Active paid plan expire होने तक Free plan पर move नहीं कर सकते'
                                 : selectedPlanId !== plan.id && currentPlan?.id !== plan.id
                                 ? 'Please select this plan first'
                                 : undefined

@@ -1,17 +1,19 @@
 /**
  * Session Management (same as main dashboard)
  * - 24h sliding window: session expires after 24h of inactivity.
- * - Activity (each request) renews the window for another 24h.
  * - 7-day cap: user must log in again at least once within 7 days of first login.
+ * - Cookie names are environment-isolated (dev vs prod) to avoid localhost/production conflicts.
  */
+
+import {
+  sessionStartCookie,
+  lastActivityCookie,
+  sessionIdCookie,
+} from "./auth-cookie-names";
 
 export const SESSION_DURATION = 24 * 60 * 60 * 1000; // 24 hours (sliding window)
 export const MAX_SESSION_DURATION = 7 * 24 * 60 * 60 * 1000; // 7 days (must re-login after)
 export const INACTIVITY_TIMEOUT = 24 * 60 * 60 * 1000; // 24 hours
-
-const SESSION_START_COOKIE = "session_start_time";
-const LAST_ACTIVITY_COOKIE = "last_activity_time";
-const SESSION_ID_COOKIE = "session_id";
 
 export interface SessionMetadata {
   sessionStartTime: number;
@@ -32,9 +34,9 @@ function generateSessionId(): string {
 
 export function getSessionMetadata(cookies: { get: (name: string) => { value: string } | undefined }): SessionMetadata | null {
   try {
-    const sessionStart = cookies.get(SESSION_START_COOKIE)?.value;
-    const lastActivity = cookies.get(LAST_ACTIVITY_COOKIE)?.value;
-    const sessionId = cookies.get(SESSION_ID_COOKIE)?.value;
+    const sessionStart = cookies.get(sessionStartCookie())?.value;
+    const lastActivity = cookies.get(lastActivityCookie())?.value;
+    const sessionId = cookies.get(sessionIdCookie())?.value;
     if (!sessionStart || !lastActivity || !sessionId) return null;
     return {
       sessionStartTime: parseInt(sessionStart, 10),
@@ -79,9 +81,9 @@ export function initializeSession(cookies: {
     sameSite: "lax" as const,
     secure: typeof process !== "undefined" && process.env?.NODE_ENV === "production",
   };
-  cookies.set(SESSION_START_COOKIE, now.toString(), cookieOptions);
-  cookies.set(LAST_ACTIVITY_COOKIE, now.toString(), cookieOptions);
-  cookies.set(SESSION_ID_COOKIE, sessionId, cookieOptions);
+  cookies.set(sessionStartCookie(), now.toString(), cookieOptions);
+  cookies.set(lastActivityCookie(), now.toString(), cookieOptions);
+  cookies.set(sessionIdCookie(), sessionId, cookieOptions);
   return { sessionStartTime: now, lastActivityTime: now, sessionId };
 }
 
@@ -101,7 +103,7 @@ export function updateActivity(
     sameSite: "lax" as const,
     secure: typeof process !== "undefined" && process.env?.NODE_ENV === "production",
   };
-  cookies.set(LAST_ACTIVITY_COOKIE, currentTime.toString(), cookieOptions);
+  cookies.set(lastActivityCookie(), currentTime.toString(), cookieOptions);
   return true;
 }
 
@@ -115,9 +117,9 @@ export function expireSession(cookies: {
     sameSite: "lax" as const,
     secure: typeof process !== "undefined" && process.env?.NODE_ENV === "production",
   };
-  cookies.set(SESSION_START_COOKIE, "", expireOptions);
-  cookies.set(LAST_ACTIVITY_COOKIE, "", expireOptions);
-  cookies.set(SESSION_ID_COOKIE, "", expireOptions);
+  cookies.set(sessionStartCookie(), "", expireOptions);
+  cookies.set(lastActivityCookie(), "", expireOptions);
+  cookies.set(sessionIdCookie(), "", expireOptions);
 }
 
 export function formatTimeRemaining(ms: number): string {

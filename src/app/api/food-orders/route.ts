@@ -68,15 +68,36 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Fetch drop_address and rider details from orders_core for each order
+    /** Normalize raw items (from orders_food or orders_core JSONB) to shape UI expects: name, quantity, price, total */
+    function normalizeOrderItems(rawItems: unknown): Array<{ name: string; quantity: number; price: number; total: number; customizations?: string[] }> {
+      if (!Array.isArray(rawItems) || rawItems.length === 0) return [];
+      return rawItems.map((it: Record<string, unknown>, idx: number) => {
+        const qty = Number(it.quantity) ?? 1;
+        const unitPrice = Number(it.price ?? it.unit_price ?? 0);
+        const total = Number(it.total ?? it.total_price ?? unitPrice * qty);
+        const name = String(it.name ?? it.item_name ?? `Item ${idx + 1}`).trim();
+        const customizations = Array.isArray(it.customizations) ? it.customizations as string[] : undefined;
+        return { name, quantity: qty, price: unitPrice, total, customizations };
+      });
+    }
+
+    // Fetch drop_address, items fallback, and rider from orders_core for each order
     const ordersWithDetails = await Promise.all(
       (ordersData || []).map(async (order: any) => {
-        // Get drop_address and formatted_order_id from orders_core
+        // Get drop_address, formatted_order_id, and items (fallback when orders_food.items is null) from orders_core
         const { data: coreData } = await db
           .from('orders_core')
-          .select('drop_address_raw, drop_address_normalized, rider_id, formatted_order_id')
+          .select('drop_address_raw, drop_address_normalized, rider_id, formatted_order_id, items')
           .eq('id', order.order_id)
           .single();
+
+        // Use orders_food.items first; fallback to orders_core.items when null/empty (all states)
+        const rawItems = (order.items != null && Array.isArray(order.items) && order.items.length > 0)
+          ? order.items
+          : (coreData?.items != null && Array.isArray(coreData.items) && coreData.items.length > 0)
+            ? coreData.items
+            : [];
+        const items = normalizeOrderItems(rawItems);
 
         // Get rider details if rider_id exists (from orders_core or orders_food)
         let riderDetails = null;
@@ -103,11 +124,11 @@ export async function GET(req: NextRequest) {
 
         return {
           ...order,
+          items,
           drop_address_raw: coreData?.drop_address_raw || null,
           drop_address_normalized: coreData?.drop_address_normalized || null,
           formatted_order_id: coreData?.formatted_order_id || order.formatted_order_id || null,
           rider_details: riderDetails,
-          // Update rider_name from rider_details if available
           rider_name: riderDetails?.name || order.rider_name,
           rider_phone: riderDetails?.mobile || order.rider_phone,
           customer_scores: customerScores,

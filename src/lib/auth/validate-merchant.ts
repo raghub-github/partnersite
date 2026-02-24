@@ -205,22 +205,35 @@ export async function validateMerchantForLogin(email: string): Promise<MerchantV
 }
 
 /**
- * Validate merchant from session user: by email, then phone, then supabase_user_id.
- * Use this after Google (email), phone OTP (phone or id), or password login.
+ * Validate merchant from session user.
+ * Identity is by merchant (merchant_parents.id), not email. We try all available
+ * identifiers and accept if ANY finds a merchant — never block on email mismatch.
+ * Order: supabase_user_id (most reliable for current session), then phone, then email.
  */
 export async function validateMerchantFromSession(user: {
   id: string;
   email?: string | null;
   phone?: string | null;
 }): Promise<MerchantValidationResult> {
-  if (user.email?.trim()) {
-    return validateMerchantForLogin(user.email);
+  const results: Promise<MerchantValidationResult>[] = [];
+  if (user.id?.trim()) {
+    results.push(validateMerchantBySupabaseUserId(user.id));
   }
   if (user.phone?.trim()) {
-    return validateMerchantByPhone(user.phone);
+    results.push(validateMerchantByPhone(user.phone));
   }
-  if (user.id?.trim()) {
-    return validateMerchantBySupabaseUserId(user.id);
+  if (user.email?.trim()) {
+    results.push(validateMerchantForLogin(user.email));
   }
-  return { isValid: false, error: "Unable to identify user. Please try again." };
+  if (results.length === 0) {
+    return { isValid: false, error: "Unable to identify user. Please try again." };
+  }
+  const settled = await Promise.all(results);
+  const valid = settled.find((r) => r.isValid);
+  if (valid) return valid;
+  const firstError = settled.find((r) => r.error)?.error;
+  return {
+    isValid: false,
+    error: firstError ?? "No merchant account found for this login. Please register first.",
+  };
 }

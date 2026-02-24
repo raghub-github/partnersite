@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { expireSession } from "@/lib/auth/session-manager";
+import {
+  sessionStartCookie,
+  lastActivityCookie,
+  sessionIdCookie,
+  deviceIdCookie,
+} from "@/lib/auth/auth-cookie-names";
 
 export async function POST(request: NextRequest) {
   const cookieStore = await cookies();
@@ -42,10 +48,16 @@ export async function POST(request: NextRequest) {
   const authCookieNames = allCookies
     .filter((c) => c.name.startsWith("sb-"))
     .map((c) => c.name);
-  const sessionNames = ["session_start_time", "last_activity_time", "session_id"];
+  const sessionNames = [
+    sessionStartCookie(),
+    lastActivityCookie(),
+    sessionIdCookie(),
+    deviceIdCookie(),
+  ];
+  const expireOpts = { maxAge: 0, expires: new Date(0), path: "/", httpOnly: false, sameSite: "lax" as const };
   [...authCookieNames, ...sessionNames].forEach((name) => {
-    cookieStore.set(name, "", { maxAge: 0, expires: new Date(0), path: "/", httpOnly: false, sameSite: "lax" });
-    response.cookies.set(name, "", { maxAge: 0, expires: new Date(0), path: "/", httpOnly: false, sameSite: "lax" });
+    cookieStore.set(name, "", expireOpts);
+    response.cookies.set(name, "", expireOpts);
   });
 
   return response;
