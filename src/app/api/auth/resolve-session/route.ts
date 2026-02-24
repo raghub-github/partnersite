@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { validateMerchantFromSession } from "@/lib/auth/validate-merchant";
+import { isNetworkOrTransientError } from "@/lib/auth/session-errors";
 import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -23,7 +24,12 @@ export async function GET(request: NextRequest) {
     const { data: { user }, error: userError } = await supabase.auth.getUser();
 
     if (userError || !user) {
-      // No session or invalid session: cookies missing, wrong domain, or expired
+      if (userError && isNetworkOrTransientError(userError)) {
+        return NextResponse.json(
+          { success: false, error: "Service temporarily unavailable", code: "SERVICE_UNAVAILABLE" },
+          { status: 503 }
+        );
+      }
       if (userError) {
         console.warn("[resolve-session] getUser error (401):", userError.message);
       } else {
@@ -149,6 +155,12 @@ export async function GET(request: NextRequest) {
     });
   } catch (e) {
     console.error("[resolve-session] Error:", e);
+    if (isNetworkOrTransientError(e)) {
+      return NextResponse.json(
+        { success: false, error: "Service temporarily unavailable", code: "SERVICE_UNAVAILABLE" },
+        { status: 503 }
+      );
+    }
     return NextResponse.json(
       { success: false, error: "An error occurred" },
       { status: 500 }

@@ -1,13 +1,17 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { createFetchWithTimeout } from "@/lib/auth/fetch-with-timeout";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
+const serverFetch = createFetchWithTimeout(12_000);
+
 export async function createServerSupabaseClient() {
   const cookieStore = await cookies();
-  
+
   return createServerClient(supabaseUrl, supabaseAnonKey, {
+    global: { fetch: serverFetch },
     cookies: {
       getAll() {
         return cookieStore.getAll();

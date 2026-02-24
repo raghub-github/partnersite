@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
+import { createSafeFetchWithTimeout } from "@/lib/auth/fetch-with-timeout";
 import {
   getSessionMetadata,
   checkSessionValidity,
@@ -9,9 +10,26 @@ import {
   initializeSession,
 } from "@/lib/auth/session-manager";
 
-export async function middleware(request: NextRequest) {
+/** Build path + search for redirect param, stripping OAuth code/state so login URL stays clean. */
+function redirectPathWithoutOAuthParams(pathname: string, search: string): string {
+  const params = new URLSearchParams(search);
+  params.delete("code");
+  params.delete("state");
+  const q = params.toString();
+  return q ? `${pathname}?${q}` : pathname;
+}
+
+export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const response = NextResponse.next();
+
+  const oauthCode = request.nextUrl.searchParams.get("code");
+  if (oauthCode && pathname !== "/auth/callback" && pathname !== "/api/auth/callback") {
+    const callbackUrl = new URL("/auth/callback", request.url);
+    request.nextUrl.searchParams.forEach((value, key) => callbackUrl.searchParams.set(key, value));
+    return NextResponse.redirect(callbackUrl);
+  }
+
   const clearSupabaseCookies = () => {
     const supabaseCookieNames = request.cookies
       .getAll()
@@ -23,19 +41,20 @@ export async function middleware(request: NextRequest) {
   };
 
   try {
+    const safeFetch = createSafeFetchWithTimeout(6_000);
+
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
+        global: { fetch: safeFetch },
         cookies: {
           getAll() {
             return request.cookies.getAll();
           },
           setAll(cookiesToSet) {
             cookiesToSet.forEach(({ name, value, options }) => {
-              // Set cookie in request for current request
               request.cookies.set(name, value);
-              // Set cookie in response for future requests
               response.cookies.set(name, value, {
                 ...options,
                 httpOnly: options.httpOnly !== false,
@@ -80,25 +99,29 @@ export async function middleware(request: NextRequest) {
 
     if (hasAuthCookie) {
       try {
-        const userResult = (await Promise.race([
-          supabase.auth.getUser(),
-          new Promise<{ data: { user: null }; error: { message: string; code: string } }>((resolve) =>
-            setTimeout(() => resolve({ data: { user: null }, error: { message: "Session check timeout", code: "TIMEOUT" } }), 3000)
-          ),
-        ])) as unknown as { data?: { user?: { id: string; email?: string } }; error?: { message?: string; code?: string } };
+        const timeoutPromise = new Promise<{ data: { user: null }; error: { message: string; code: string } }>((resolve) =>
+          setTimeout(() => resolve({ data: { user: null }, error: { message: "Session check timeout", code: "TIMEOUT" } }), 5000)
+        );
+        const userPromise = supabase.auth.getUser().then((r) => r).catch((err: unknown) => ({
+          data: { user: null },
+          error: { message: (err && typeof err === "object" && "message" in err ? String((err as { message: unknown }).message) : "fetch failed"), code: "NETWORK_ERROR" },
+        }));
+        const userResult = (await Promise.race([userPromise, timeoutPromise])) as unknown as { data?: { user?: { id: string; email?: string } }; error?: { message?: string; code?: string } };
         const user = userResult.data?.user ?? null;
         sessionError = userResult.error ?? null;
         if (user) session = { user: { id: user.id, email: user.email } };
       } catch {
         session = null;
-        sessionError = null;
+        sessionError = { message: "Session check failed", code: "NETWORK_ERROR" };
       }
     }
 
     if (sessionError) {
-      // Only log actual errors, not missing sessions for unauthenticated users
+      if (sessionError.code === "TIMEOUT" || sessionError.code === "NETWORK_ERROR") {
+        return response;
+      }
       if (sessionError.message !== 'Auth session missing!') {
-        console.log('[middleware] Session error:', sessionError);
+        console.log('[proxy] Session error:', sessionError);
       }
       const isInvalid =
         sessionError.code === "refresh_token_not_found" ||
@@ -106,16 +129,16 @@ export async function middleware(request: NextRequest) {
         sessionError.code === "invalid_refresh_token" ||
         (sessionError.message ?? "").toLowerCase().includes("invalid refresh token") ||
         (sessionError.message ?? "").toLowerCase().includes("refresh token not found");
-      
+
       if (isInvalid) {
-        console.log('[middleware] Invalid refresh token detected, clearing session');
+        console.log('[proxy] Invalid refresh token detected, clearing session');
         try {
           await supabase.auth.signOut();
         } catch (signOutError) {
-          console.log('[middleware] Error signing out:', signOutError);
+          console.log('[proxy] Error signing out:', signOutError);
         }
         clearSupabaseCookies();
-        
+
         if (pathname.startsWith("/api/")) {
           return NextResponse.json(
             { success: false, error: "Session invalid", code: "SESSION_INVALID" },
@@ -125,7 +148,7 @@ export async function middleware(request: NextRequest) {
         if (!isLoginPage && !pathname.startsWith("/auth/register")) {
           const redirectUrl = request.nextUrl.clone();
           redirectUrl.pathname = "/auth/login";
-          const fullPath = pathname + (request.nextUrl.search || "");
+          const fullPath = redirectPathWithoutOAuthParams(pathname, request.nextUrl.search || "");
           redirectUrl.searchParams.set("redirect", fullPath);
           redirectUrl.searchParams.set("reason", "session_invalid");
           return NextResponse.redirect(redirectUrl);
@@ -148,7 +171,6 @@ export async function middleware(request: NextRequest) {
       return response;
     }
 
-    // No valid session but on post-login: send to login (no error page)
     if (isPostLoginPage && !session) {
       const redirectUrl = request.nextUrl.clone();
       redirectUrl.pathname = "/auth/login";
@@ -167,7 +189,7 @@ export async function middleware(request: NextRequest) {
       }
       const redirectUrl = request.nextUrl.clone();
       redirectUrl.pathname = "/auth/login";
-      const fullPath = pathname + (request.nextUrl.search || "");
+      const fullPath = redirectPathWithoutOAuthParams(pathname, request.nextUrl.search || "");
       redirectUrl.searchParams.set("redirect", fullPath);
       return NextResponse.redirect(redirectUrl);
     }
@@ -180,7 +202,6 @@ export async function middleware(request: NextRequest) {
       const cookieWrapper = { get: (name: string) => request.cookies.get(name) };
       let metadata = getSessionMetadata(cookieWrapper);
 
-      // If user has valid Supabase session but no custom session cookies yet (e.g. came from /auth/post-login), initialize them
       if (!metadata) {
         const cookieSetter = {
           set: (name: string, value: string, options: { maxAge: number; path: string; httpOnly?: boolean; sameSite?: string; secure?: boolean }) => {
@@ -210,7 +231,7 @@ export async function middleware(request: NextRequest) {
         const redirectUrl = request.nextUrl.clone();
         redirectUrl.pathname = "/auth/login";
         redirectUrl.searchParams.set("expired", validity.reason || "unknown");
-        const fullPath = pathname + (request.nextUrl.search || "");
+        const fullPath = redirectPathWithoutOAuthParams(pathname, request.nextUrl.search || "");
         redirectUrl.searchParams.set("redirect", fullPath);
         return NextResponse.redirect(redirectUrl);
       }
@@ -226,7 +247,7 @@ export async function middleware(request: NextRequest) {
 
     return response;
   } catch (error) {
-    console.error("[middleware] Error:", error);
+    console.error("[proxy] Error:", error);
     return response;
   }
 }
