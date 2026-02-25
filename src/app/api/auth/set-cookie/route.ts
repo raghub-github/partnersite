@@ -42,6 +42,24 @@ function applyCookieOptions(
  */
 export async function POST(request: NextRequest) {
   try {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supabaseUrl?.trim() || !supabaseAnonKey?.trim()) {
+      console.error("[set-cookie] Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
+      return NextResponse.json(
+        { success: false, error: "Server configuration error. Please try again or contact support.", code: "CONFIG_MISSING" },
+        { status: 503 }
+      );
+    }
+    if (!serviceRoleKey?.trim()) {
+      console.error("[set-cookie] Missing SUPABASE_SERVICE_ROLE_KEY");
+      return NextResponse.json(
+        { success: false, error: "Server configuration error. Please try again or contact support.", code: "CONFIG_MISSING" },
+        { status: 503 }
+      );
+    }
+
     let body: { access_token?: string; refresh_token?: string };
     try {
       body = await request.json();
@@ -62,8 +80,8 @@ export async function POST(request: NextRequest) {
     const cookieStore = await cookies();
     const response = NextResponse.json({ success: true });
     const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      supabaseUrl,
+      supabaseAnonKey,
       {
         cookies: {
           getAll() {
@@ -94,9 +112,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const validation = await validateMerchantFromSession(data.session.user);
+    let validation: Awaited<ReturnType<typeof validateMerchantFromSession>>;
+    try {
+      validation = await validateMerchantFromSession(data.session.user);
+    } catch (validateErr) {
+      console.error("[set-cookie] validateMerchantFromSession threw:", validateErr);
+      await supabase.auth.signOut().catch(() => {});
+      return NextResponse.json(
+        { success: false, error: "Unable to verify your account. Please try again.", code: "VALIDATION_ERROR" },
+        { status: 500 }
+      );
+    }
     if (!validation.isValid) {
-      await supabase.auth.signOut();
+      await supabase.auth.signOut().catch(() => {});
       return NextResponse.json(
         {
           success: false,

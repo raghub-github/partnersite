@@ -111,7 +111,10 @@ function LoginPageContent() {
       body: JSON.stringify({ access_token, refresh_token }),
     });
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
+      if (res.status === 502) {
+        throw new Error('Server temporarily unavailable (502). Please try again.');
+      }
+      const data = await res.json().catch(() => ({})) as { error?: string; code?: string };
       throw new Error(data.error || 'Session could not be set.');
     }
     const next =
