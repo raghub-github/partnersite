@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { validateMerchantFromSession } from "@/lib/auth/validate-merchant";
 import { isNetworkOrTransientError } from "@/lib/auth/session-errors";
+import { hasActiveSessionForDevice } from "@/lib/auth/merchant-session-db";
+import { deviceIdCookie } from "@/lib/auth/auth-cookie-names";
 import { createClient } from "@supabase/supabase-js";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -56,6 +59,19 @@ export async function GET(request: NextRequest) {
     }
 
     const parentId = validation.merchantParentId;
+    const cookieStore = await cookies();
+    const deviceId = cookieStore.get(deviceIdCookie())?.value?.trim();
+    const hasDeviceSession = deviceId
+      ? await hasActiveSessionForDevice(parentId, deviceId)
+      : false;
+    if (!hasDeviceSession) {
+      console.warn("[resolve-session] No active device session (401):", "merchant_id:", parentId, "device_id:", deviceId ? "present" : "missing");
+      return NextResponse.json(
+        { success: false, error: "Session expired or invalid for this device. Please sign in again.", code: "DEVICE_SESSION_INVALID" },
+        { status: 401 }
+      );
+    }
+
     const db = getSupabaseAdmin();
 
     const { data: parentRow } = await db

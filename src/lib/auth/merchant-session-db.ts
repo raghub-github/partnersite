@@ -27,6 +27,34 @@ export async function deactivateSessionsForDevice(deviceId: string): Promise<voi
     .eq("is_active", true);
 }
 
+/** Check if there is an active session for this (merchant_id, device_id). Used for device-scoped auth. */
+export async function hasActiveSessionForDevice(
+  merchantId: number,
+  deviceId: string
+): Promise<boolean> {
+  if (!merchantId || !deviceId?.trim()) return false;
+  const db = getSupabase();
+  const { data, error } = await db
+    .from("merchant_sessions")
+    .select("id")
+    .eq("merchant_id", merchantId)
+    .eq("device_id", deviceId.trim())
+    .eq("is_active", true)
+    .gt("expires_at", new Date().toISOString())
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error("[merchant-session-db] hasActiveSessionForDevice error:", error);
+    return false;
+  }
+  return !!data?.id;
+}
+
+/** Deactivate only the active session(s) for this device (logout this device). */
+export async function deactivateSessionForDevice(deviceId: string): Promise<void> {
+  return deactivateSessionsForDevice(deviceId);
+}
+
 /** Create a new merchant session for this device. Call after deactivateSessionsForDevice. */
 export async function createMerchantSession(params: {
   merchantId: number;

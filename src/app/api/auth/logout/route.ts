@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { expireSession } from "@/lib/auth/session-manager";
+import { deactivateSessionForDevice } from "@/lib/auth/merchant-session-db";
 import {
   sessionStartCookie,
   lastActivityCookie,
@@ -12,6 +13,15 @@ import {
 export async function POST(request: NextRequest) {
   const cookieStore = await cookies();
   const response = NextResponse.json({ success: true });
+
+  const deviceId = cookieStore.get(deviceIdCookie())?.value?.trim();
+  if (deviceId) {
+    try {
+      await deactivateSessionForDevice(deviceId);
+    } catch (e) {
+      console.warn("[logout] deactivateSessionForDevice failed:", e);
+    }
+  }
 
   try {
     const supabase = createServerClient(
@@ -52,7 +62,7 @@ export async function POST(request: NextRequest) {
     sessionStartCookie(),
     lastActivityCookie(),
     sessionIdCookie(),
-    deviceIdCookie(),
+    // Do NOT clear deviceIdCookie() — keep it so the same device reuses the same device_id on next login (fewer rows, one id per device).
   ];
   const expireOpts = { maxAge: 0, expires: new Date(0), path: "/", httpOnly: false, sameSite: "lax" as const };
   [...authCookieNames, ...sessionNames].forEach((name) => {

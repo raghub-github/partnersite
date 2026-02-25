@@ -9,6 +9,9 @@ import {
   expireSession,
   initializeSession,
 } from "@/lib/auth/session-manager";
+import { validateMerchantFromSession } from "@/lib/auth/validate-merchant";
+import { hasActiveSessionForDevice } from "@/lib/auth/merchant-session-db";
+import { deviceIdCookie } from "@/lib/auth/auth-cookie-names";
 
 /** Build path + search for redirect param, stripping OAuth code/state so login URL stays clean. */
 function redirectPathWithoutOAuthParams(pathname: string, search: string): string {
@@ -104,7 +107,7 @@ export async function proxy(request: NextRequest) {
       return response;
     }
 
-    let session: { user: { id: string; email?: string } } | null = null;
+    let session: { user: { id: string; email?: string; phone?: string } } | null = null;
     let sessionError: { message?: string; code?: string } | null = null;
 
     if (hasAuthCookie) {
@@ -116,10 +119,10 @@ export async function proxy(request: NextRequest) {
           data: { user: null },
           error: { message: (err && typeof err === "object" && "message" in err ? String((err as { message: unknown }).message) : "fetch failed"), code: "NETWORK_ERROR" },
         }));
-        const userResult = (await Promise.race([userPromise, timeoutPromise])) as unknown as { data?: { user?: { id: string; email?: string } }; error?: { message?: string; code?: string } };
+        const userResult = (await Promise.race([userPromise, timeoutPromise])) as unknown as { data?: { user?: { id: string; email?: string; phone?: string } }; error?: { message?: string; code?: string } };
         const user = userResult.data?.user ?? null;
         sessionError = userResult.error ?? null;
-        if (user) session = { user: { id: user.id, email: user.email } };
+        if (user) session = { user: { id: user.id, email: user.email, phone: user.phone } };
       } catch {
         session = null;
         sessionError = { message: "Session check failed", code: "NETWORK_ERROR" };
@@ -209,6 +212,42 @@ export async function proxy(request: NextRequest) {
     }
 
     if (session && isProtected) {
+      const deviceId = request.cookies.get(deviceIdCookie())?.value?.trim();
+      let deviceSessionValid = false;
+      if (deviceId) {
+        try {
+          const validation = await validateMerchantFromSession({
+            id: session.user.id,
+            email: session.user.email ?? null,
+            phone: session.user.phone ?? null,
+          });
+          if (validation.isValid && validation.merchantParentId != null) {
+            deviceSessionValid = await hasActiveSessionForDevice(validation.merchantParentId, deviceId);
+          }
+        } catch {
+          // treat as invalid
+        }
+      }
+      if (!deviceSessionValid) {
+        try {
+          await supabase.auth.signOut();
+        } catch {
+          // ignore
+        }
+        clearSupabaseCookies();
+        if (pathname.startsWith("/api/")) {
+          return NextResponse.json(
+            { success: false, error: "Session expired or invalid for this device.", code: "DEVICE_SESSION_INVALID" },
+            { status: 401 }
+          );
+        }
+        const redirectUrl = request.nextUrl.clone();
+        redirectUrl.pathname = "/auth/login";
+        redirectUrl.searchParams.set("redirect", redirectPathWithoutOAuthParams(pathname, request.nextUrl.search || ""));
+        redirectUrl.searchParams.set("reason", "device_session_invalid");
+        return NextResponse.redirect(redirectUrl);
+      }
+
       const cookieWrapper = { get: (name: string) => request.cookies.get(name) };
       let metadata = getSessionMetadata(cookieWrapper);
 

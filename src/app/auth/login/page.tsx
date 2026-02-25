@@ -104,14 +104,32 @@ function LoginPageContent() {
   }, [resendCooldown]);
 
   const setSessionAndRedirect = async (access_token: string, refresh_token: string) => {
-    const res = await fetch('/api/auth/set-cookie', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ access_token, refresh_token }),
-    });
+    const doSetCookie = () =>
+      fetch('/api/auth/set-cookie', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ access_token, refresh_token }),
+      });
+
+    let res = await doSetCookie();
+    if (!res.ok && res.status === 502) {
+      res = await doSetCookie();
+    }
     if (!res.ok) {
       if (res.status === 502) {
+        const check = await fetch('/api/auth/resolve-session', { credentials: 'include' });
+        if (check.ok) {
+          const next =
+            (typeof window !== 'undefined' && sessionStorage.getItem('auth_redirect')) ||
+            redirectTo ||
+            '/auth/post-login';
+          if (typeof window !== 'undefined' && sessionStorage.getItem('auth_redirect')) {
+            sessionStorage.removeItem('auth_redirect');
+          }
+          window.location.href = next.startsWith('/') ? next : '/auth/post-login';
+          return;
+        }
         throw new Error('Server temporarily unavailable (502). Please try again.');
       }
       const data = await res.json().catch(() => ({})) as { error?: string; code?: string };
