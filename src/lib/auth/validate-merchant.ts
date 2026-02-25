@@ -116,22 +116,26 @@ export async function validateMerchantByPhone(phone: string): Promise<MerchantVa
       return { isValid: false, error: "Invalid phone number." };
     }
     const supabase = getSupabaseAdmin();
-    // DB: registered_phone is +91..., registered_phone_normalized is 10 digits
-    const { data: row, error } = await supabase
+    // Use limit(2) and handle in code so duplicate rows for same phone don't cause PGRST116 / 502
+    const { data: rows, error } = await supabase
       .from("merchant_parents")
       .select("id, parent_merchant_id, owner_email, is_active, approval_status, registration_status, registered_phone")
       .or(`registered_phone.eq.${e164},registered_phone_normalized.eq.${tenDigit}`)
-      .maybeSingle();
+      .limit(2);
 
     if (error) {
       console.error("[validateMerchantByPhone] DB error:", error);
       return { isValid: false, error: "Unable to verify your account. Please try again." };
     }
+    const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
     if (!row) {
       return {
         isValid: false,
         error: "No merchant account found for this mobile number. Please register first.",
       };
+    }
+    if (Array.isArray(rows) && rows.length > 1) {
+      console.warn("[validateMerchantByPhone] Multiple merchant_parents for same phone:", tenDigit, "using first.");
     }
     const blockReason = getParentBlockReason(row);
     if (blockReason) {

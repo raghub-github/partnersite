@@ -33,6 +33,8 @@ function applyCookieOptions(
   response.cookies.set(name, value, opts as Parameters<typeof response.cookies.set>[2]);
 }
 
+const SET_COOKIE_TIMEOUT_MS = 25_000;
+
 /**
  * POST /api/auth/set-cookie
  * Call after successful login. Validates merchant by id/phone/email (any match).
@@ -41,7 +43,9 @@ function applyCookieOptions(
  * Used by client callback when hash/token flow is used; primary OAuth flow uses GET /api/auth/callback.
  */
 export async function POST(request: NextRequest) {
+  const run = async (): Promise<NextResponse> => {
   try {
+    console.log("[set-cookie] request start");
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -77,6 +81,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const t0 = Date.now();
     const cookieStore = await cookies();
     const response = NextResponse.json({ success: true });
     const supabase = createServerClient(
@@ -100,6 +105,8 @@ export async function POST(request: NextRequest) {
       access_token,
       refresh_token,
     });
+    const t1 = Date.now();
+    console.log("[set-cookie] setSession in", t1 - t0, "ms, error:", error?.message ?? "none");
 
     if (error) {
       return NextResponse.json({ success: false, error: error.message }, { status: 400 });
@@ -115,6 +122,7 @@ export async function POST(request: NextRequest) {
     let validation: Awaited<ReturnType<typeof validateMerchantFromSession>>;
     try {
       validation = await validateMerchantFromSession(data.session.user);
+      console.log("[set-cookie] validate in", Date.now() - t1, "ms, valid:", validation.isValid);
     } catch (validateErr) {
       console.error("[set-cookie] validateMerchantFromSession threw:", validateErr);
       await supabase.auth.signOut().catch(() => {});
@@ -168,12 +176,33 @@ export async function POST(request: NextRequest) {
     };
     cookieManager.set(deviceIdCookieName, deviceId, deviceCookieOpts);
 
+    console.log("[set-cookie] success in", Date.now() - t0, "ms");
     return response;
   } catch (e) {
     const message = e instanceof Error ? e.message : "set-cookie error";
+    console.error("[set-cookie] handler error:", message);
     return NextResponse.json(
       { success: false, error: message, code: "SET_COOKIE_ERROR" },
       { status: 500 }
     );
   }
+  };
+
+  const timeoutPromise = new Promise<NextResponse>((resolve) =>
+    setTimeout(
+      () =>
+        resolve(
+          NextResponse.json(
+            {
+              success: false,
+              error: "Request took too long. Please try again.",
+              code: "TIMEOUT",
+            },
+            { status: 503 }
+          )
+        ),
+      SET_COOKIE_TIMEOUT_MS
+    )
+  );
+  return Promise.race([run(), timeoutPromise]);
 }

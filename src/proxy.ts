@@ -23,8 +23,13 @@ export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const response = NextResponse.next();
 
-  // Let these API routes always run; they handle their own auth/errors
-  if (pathname === "/api/auth/resolve-session" || pathname === "/api/auth/merchant-session") {
+  // Let these API routes always run; they handle their own auth/errors.
+  // set-cookie must skip middleware to avoid Supabase/createServerClient here (prevents 502 on hosted server).
+  if (
+    pathname === "/api/auth/resolve-session" ||
+    pathname === "/api/auth/merchant-session" ||
+    pathname === "/api/auth/set-cookie"
+  ) {
     return response;
   }
 
