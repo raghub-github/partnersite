@@ -178,6 +178,7 @@ function LoginPageContent() {
     const p = normalizePhone(phone);
     if (!p) return;
     setError('');
+    setOtp('');
     setLoading(true);
     try {
       const checkRes = await fetch(`/api/auth/check-existing?phone=${encodeURIComponent(p)}`);
