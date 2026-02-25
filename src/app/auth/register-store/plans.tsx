@@ -16,7 +16,7 @@ export interface OnboardingPlan {
   highlighted?: boolean;
 }
 
-/** Display price for today (promotional); actual amount is configurable by super admin. */
+/** Promotional price (₹1); standard onboarding amount. Later: configurable via dashboard offer. */
 const PROMO_PRICE_TODAY = 1;
 const STANDARD_ONBOARDING_AMOUNT = 99;
 
@@ -28,7 +28,7 @@ const DEFAULT_PLANS: OnboardingPlan[] = [
     baseServiceFee: "0%",
     highlighted: true,
     features: [
-      `One-time onboarding fee ₹${PROMO_PRICE_TODAY}/- today (standard ₹${STANDARD_ONBOARDING_AMOUNT} — updated by GatiMitra Team)`,
+      `Onboarding fee: ₹${PROMO_PRICE_TODAY} out of ₹${STANDARD_ONBOARDING_AMOUNT} — 99% discount for limited time (standard amount configurable by platform)`,
       "Base service fee 0% for initial period",
       "Real-time on-call support",
       "Weekly or daily payouts",
@@ -225,8 +225,8 @@ export default function OnboardingPlansPage({
         amount: orderData.amount,
         order_id: orderData.orderId,
         name: "Merchant Onboarding",
-        description: "One-time onboarding fee (₹1 today)",
-        handler: async (res) => {
+        description: `Onboarding fee: ₹${PROMO_PRICE_TODAY} out of ₹${STANDARD_ONBOARDING_AMOUNT} (99% off, limited time)`,
+        handler: async (res: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) => {
           setPaying(true);
           try {
             const verifyRes = await fetch("/api/onboarding/verify-payment", {
@@ -253,7 +253,7 @@ export default function OnboardingPlansPage({
         modal: {
           ondismiss: () => setPaying(false),
         },
-      });
+      } as any);
       rzp.open();
     } catch (e) {
       setPaymentError("Something went wrong. Please try again.");
@@ -301,7 +301,8 @@ export default function OnboardingPlansPage({
                     <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs sm:text-sm text-slate-700 mb-3">
                       <span className="flex items-center gap-1">
                         <Info className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-400" />
-                        One-time onboarding fee <strong>₹{PROMO_PRICE_TODAY}/- today</strong>
+                        Onboarding fee: <strong>₹{PROMO_PRICE_TODAY} out of ₹{STANDARD_ONBOARDING_AMOUNT}</strong>
+                        <span className="text-emerald-600 font-medium"> — 99% off for limited time</span>
                         {plan.onboardingFee !== PROMO_PRICE_TODAY && (
                           <span className="text-slate-500"> (standard ₹{plan.onboardingFee})</span>
                         )}
@@ -336,7 +337,7 @@ export default function OnboardingPlansPage({
                         <div className="flex items-start gap-2">
                           <Info className="w-4 h-4 sm:w-5 sm:h-5 text-amber-600 shrink-0 mt-0.5" />
                           <p className="text-[10px] sm:text-xs text-amber-800">
-                            Pay ₹{PROMO_PRICE_TODAY}/- today to proceed. Contract and agreement will be shown on the next step. You will need to read the full contract and sign digitally before submission.
+                            Pay ₹{PROMO_PRICE_TODAY} to proceed (₹{STANDARD_ONBOARDING_AMOUNT} value — 99% discount for limited time). Contract and agreement will be shown on the next step. You will need to read the full contract and sign digitally before submission.
                           </p>
                         </div>
                       </div>
@@ -449,7 +450,7 @@ export default function OnboardingPlansPage({
                 </>
               ) : (
                 <>
-                  <span>Pay ₹{PROMO_PRICE_TODAY} & Continue</span>
+                  <span>Pay ₹{PROMO_PRICE_TODAY} (99% off) & Continue</span>
                   <ChevronLeft className="w-4 h-4 rotate-180 shrink-0" />
                 </>
               )}
