@@ -611,7 +611,41 @@ export async function GET(req: NextRequest) {
           };
         }
         progress = { ...progress, form_data: { ...formData, step4: mergedStep4 } } as ProgressRow;
-      } else if (storeDbId) {
+      }
+
+      // Enrich step4.bank from merchant_store_bank_accounts so contract PDF always has bank details (e.g. after refresh on agreement/signature step)
+      const { data: bankRow } = await db
+        .from("merchant_store_bank_accounts")
+        .select("account_holder_name, account_number, ifsc_code, bank_name, branch_name, account_type, payout_method, upi_id, bank_proof_file_url, upi_qr_screenshot_url")
+        .eq("store_id", storeDbId)
+        .eq("is_active", true)
+        .order("is_primary", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (bankRow) {
+        const formData = (progress.form_data || {}) as Record<string, unknown>;
+        const step4 = (formData.step4 || {}) as Record<string, unknown>;
+        const [signedBankProof, signedUpiQr] = await Promise.all([
+          toFreshSignedUrl(bankRow.bank_proof_file_url ?? null),
+          toFreshSignedUrl(bankRow.upi_qr_screenshot_url ?? null),
+        ]);
+        const enrichedBank = {
+          account_holder_name: bankRow.account_holder_name ?? "",
+          account_number: bankRow.account_number ?? "",
+          ifsc_code: bankRow.ifsc_code ?? "",
+          bank_name: bankRow.bank_name ?? "",
+          branch_name: bankRow.branch_name ?? null,
+          account_type: bankRow.account_type ?? "savings",
+          payout_method: bankRow.payout_method === "upi" ? "upi" : "bank",
+          upi_id: bankRow.upi_id ?? "",
+          bank_proof_file_url: signedBankProof ?? bankRow.bank_proof_file_url ?? null,
+          upi_qr_screenshot_url: signedUpiQr ?? bankRow.upi_qr_screenshot_url ?? null,
+        };
+        progress = { ...progress, form_data: { ...formData, step4: { ...step4, bank: enrichedBank } } } as ProgressRow;
+      }
+
+      if (!docRow && storeDbId) {
         // No documents row in DB: clear step4 doc URLs so UI reflects truth (e.g. after manual DB delete)
         const formData = (progress.form_data || {}) as Record<string, unknown>;
         const step4 = (formData.step4 || {}) as Record<string, unknown>;

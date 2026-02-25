@@ -64,6 +64,8 @@ export default function SignatureStepPage({
             account_number: documents.bank.account_number || "",
             ifsc_code: documents.bank.ifsc_code || "",
             account_type: documents.bank.account_type || "savings",
+            payout_method: documents.bank.payout_method || "bank",
+            upi_id: documents.bank.upi_id || "",
           }
         : undefined,
     };
@@ -229,6 +231,8 @@ export default function SignatureStepPage({
             account_number: documents.bank.account_number || "",
             ifsc_code: documents.bank.ifsc_code || "",
             account_type: documents.bank.account_type || "savings",
+            payout_method: documents.bank.payout_method || "bank",
+            upi_id: documents.bank.upi_id || "",
           }
         : undefined,
     }),

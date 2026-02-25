@@ -97,6 +97,17 @@ Here's a checklist of all variables you need to add:
 - [ ] RAZORPAY_KEY_SECRET
 - [ ] RAZORPAY_WEBHOOK_SECRET
 
+## Razorpay webhook (payment auto-success)
+
+To handle payments even when the user closes the tab or refreshes after paying:
+
+1. In **Razorpay Dashboard** → **Settings** → **Webhooks**, add your webhook URL:  
+   `https://your-production-domain.com/api/webhooks/razorpay`
+2. Subscribe to events: **payment.captured**, **payment.failed**.
+3. Copy the **Webhook Secret** and set it as `RAZORPAY_WEBHOOK_SECRET` in Netlify (and redeploy).
+
+The app will then mark onboarding and subscription payments as successful when Razorpay sends `payment.captured`, and the UI will show the update when the user returns or when polling detects it.
+
 ## Google login redirecting to localhost or 403 resolve-session in production
 
 If after Google sign-in users are sent to `http://localhost:3000`, or if `GET /api/auth/resolve-session` returns 403:

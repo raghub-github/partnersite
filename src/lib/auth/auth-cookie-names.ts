@@ -8,7 +8,7 @@ const DEV_PREFIX = "partner_dev_";
 
 function getPrefix(): string {
   if (typeof process === "undefined") return DEV_PREFIX;
-  const env = process.env.NODE_ENV ?? process.env.VERCEL_ENV ?? "";
+  const env: string = process.env.NODE_ENV ?? process.env.VERCEL_ENV ?? "";
   const isProd = env === "production" || env === "preview";
   return isProd ? PROD_PREFIX : DEV_PREFIX;
 }
