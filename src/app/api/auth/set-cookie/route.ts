@@ -4,8 +4,7 @@ import { cookies } from "next/headers";
 import { initializeSession } from "@/lib/auth/session-manager";
 import { validateMerchantFromSession } from "@/lib/auth/validate-merchant";
 import {
-  deactivateSessionsForDevice,
-  createMerchantSession,
+  replaceSessionForDevice,
   generateDeviceId,
 } from "@/lib/auth/merchant-session-db";
 import { deviceIdCookie } from "@/lib/auth/auth-cookie-names";
@@ -64,7 +63,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let body: { access_token?: string; refresh_token?: string };
+    let body: { access_token?: string; refresh_token?: string; device_id?: string };
     try {
       body = await request.json();
     } catch {
@@ -73,7 +72,7 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    const { access_token, refresh_token } = body ?? {};
+    const { access_token, refresh_token, device_id: bodyDeviceId } = body ?? {};
     if (!access_token || !refresh_token) {
       return NextResponse.json(
         { success: false, error: "Missing tokens", code: "MISSING_TOKENS" },
@@ -144,19 +143,13 @@ export async function POST(request: NextRequest) {
 
     const merchantId = validation.merchantParentId!;
     const deviceIdCookieName = deviceIdCookie();
-    const existingDeviceId = cookieStore.get(deviceIdCookieName)?.value?.trim();
-    const deviceId = existingDeviceId || generateDeviceId();
+    const cookieDeviceId = cookieStore.get(deviceIdCookieName)?.value?.trim();
+    const deviceId = (bodyDeviceId && bodyDeviceId.trim()) || cookieDeviceId || generateDeviceId();
 
     try {
-      await deactivateSessionsForDevice(deviceId);
-      await createMerchantSession({
-        merchantId,
-        deviceId,
-        refreshTokenHash: null,
-      });
+      await replaceSessionForDevice(deviceId.trim(), merchantId);
     } catch (sessionDbErr) {
       console.error("[set-cookie] merchant_sessions error (table may not exist yet):", sessionDbErr);
-      // Continue: set cookies even if merchant_sessions insert fails (e.g. migration not run)
     }
 
     const cookieManager = {

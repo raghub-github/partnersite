@@ -7,6 +7,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { signInWithGoogle, requestPhoneOTP, verifyPhoneOTP } from '@/lib/auth/supabase-client';
 import { clearSupabaseClientSession } from '@/lib/auth/clear-auth-storage';
+import { getOrCreateDeviceId } from '@/lib/auth/device-id-client';
 import { ENABLE_PHONE_OTP_LOGIN } from '@/lib/auth/phone-otp-config';
 import { LoginCard } from './components/LoginCard';
 import { LoginToggle, type LoginTab } from './components/LoginToggle';
@@ -104,12 +105,13 @@ function LoginPageContent() {
   }, [resendCooldown]);
 
   const setSessionAndRedirect = async (access_token: string, refresh_token: string) => {
+    const device_id = getOrCreateDeviceId();
     const doSetCookie = () =>
       fetch('/api/auth/set-cookie', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ access_token, refresh_token }),
+        body: JSON.stringify({ access_token, refresh_token, device_id }),
       });
 
     let res = await doSetCookie();

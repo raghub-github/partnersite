@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { expireSession } from "@/lib/auth/session-manager";
 import { deactivateSessionForDevice } from "@/lib/auth/merchant-session-db";
@@ -23,28 +22,8 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  try {
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, "", { ...options, maxAge: 0, expires: new Date(0) });
-              response.cookies.set(name, "", { ...options, maxAge: 0, expires: new Date(0) });
-            });
-          },
-        },
-      }
-    );
-    await supabase.auth.signOut();
-  } catch {
-    // ignore
-  }
+  // Do NOT call supabase.auth.signOut() — it can invalidate refresh tokens for all devices.
+  // We only clear this device's cookies so other devices stay logged in.
 
   const cookieManager = {
     set: (name: string, value: string, options: Record<string, unknown>) => {
@@ -62,12 +41,14 @@ export async function POST(request: NextRequest) {
     sessionStartCookie(),
     lastActivityCookie(),
     sessionIdCookie(),
-    // Do NOT clear deviceIdCookie() — keep it so the same device reuses the same device_id on next login (fewer rows, one id per device).
+    deviceIdCookie(),
   ];
-  const expireOpts = { maxAge: 0, expires: new Date(0), path: "/", httpOnly: false, sameSite: "lax" as const };
+  const expireOpts = { maxAge: 0, expires: new Date(0), path: "/", sameSite: "lax" as const };
   [...authCookieNames, ...sessionNames].forEach((name) => {
-    cookieStore.set(name, "", expireOpts);
-    response.cookies.set(name, "", expireOpts);
+    const isSupabase = name.startsWith("sb-");
+    const opts = { ...expireOpts, httpOnly: isSupabase };
+    cookieStore.set(name, "", opts as any);
+    response.cookies.set(name, "", opts as any);
   });
 
   return response;

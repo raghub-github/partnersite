@@ -3,6 +3,7 @@
 import { Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { getOrCreateDeviceId } from "@/lib/auth/device-id-client";
 import { Store } from "lucide-react";
 
 function parseHashParams(hash: string): Record<string, string> {
@@ -20,11 +21,12 @@ async function setCookieAndRedirect(
   refreshToken: string,
   next: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  const device_id = getOrCreateDeviceId();
   const res = await fetch("/api/auth/set-cookie", {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ access_token: accessToken, refresh_token: refreshToken }),
+    body: JSON.stringify({ access_token: accessToken, refresh_token: refreshToken, device_id }),
   });
   const text = await res.text();
   if (res.ok) return { ok: true };
