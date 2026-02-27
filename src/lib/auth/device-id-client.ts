@@ -15,7 +15,7 @@ function generate(): string {
 
 /**
  * Get or create a stable device id for this browser (localStorage).
- * Call before POST /api/auth/set-cookie and send in body as device_id.
+ * Call before POST /api/merchant-auth/set-cookie and send in body as device_id.
  */
 export function getOrCreateDeviceId(): string {
   if (typeof window === "undefined") return generate();

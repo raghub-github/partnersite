@@ -1,6 +1,7 @@
 // app/api/store-registration/submit-subabse/route.ts
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { upsertStoreCuisines } from '@/lib/cuisines';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -88,6 +89,15 @@ export async function POST(request: Request) {
       // Log error for debugging
       console.error('Supabase Insert Error:', storeError);
       return NextResponse.json({ success: false, error: 'Failed to insert store', details: storeError.message }, { status: 500 });
+    }
+
+    // Persist cuisines in cuisine_master + merchant_store_cuisines
+    if (store?.id && Array.isArray(storeData.cuisine_types)) {
+      try {
+        await upsertStoreCuisines(store.id as number, storeData.cuisine_types as string[]);
+      } catch (e) {
+        console.error('[store-registration/submit-subabse] upsertStoreCuisines failed', e);
+      }
     }
 
     // TODO: Add R2 upload logic here if needed

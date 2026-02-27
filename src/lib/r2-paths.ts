@@ -1,36 +1,58 @@
 /**
- * R2 folder structure: docs/merchants/{merchant_code}/stores/{store_code}/...
- * Uses merchant code (e.g. GMMP1005) and store code (e.g. GMMC1017) for a consistent main route.
+ * R2 folder structure: parent first, then child.
+ * All paths live under: docs/merchants/{parent_code}/ [then optionally stores/{store_code}/]
  *
- * Structure (docs bucket):
+ * SINGLE SOURCE OF TRUTH — use these helpers for every upload/read/delete.
+ *
+ * Structure:
  *
  *   docs/
  *     merchants/
- *       {parent_merchant_id}/               e.g. GMMP1005 (always use code, not numeric id)
- *         logo/                             parent's logo
+ *       {parent_code}/                      e.g. GMMP1005 (parent first)
+ *         logo/                             parent logo (registration)
+ *           {timestamp}_{name}.{ext}
  *         assets/                           other parent assets (optional)
- *         draft/                            onboarding in progress (no child store yet)
+ *         draft/                            onboarding before store exists
  *           onboarding/
  *             documents/
- *             menu/images/
- *             menu/csv/
+ *               pan/
+ *               aadhaar/
+ *               fssai/
+ *               gst/
+ *               bank/
+ *               agreements/
+ *               other/
+ *             menu/
+ *               images/
+ *               csv/
+ *               pdf/
  *             store-media/
- *             store-media/gallery/
+ *               logo/
+ *               banner/
+ *             store-media/
+ *               gallery/
  *             bank/
  *             agreements/
  *         stores/
- *           {child_store_code}/             e.g. GMMC1017
+ *           {store_code}/                   e.g. GMMC1017 (child)
  *             onboarding/
  *               documents/
- *               menu/images/
- *               menu/csv/
- *               store-media/
+ *                 pan/ | aadhaar/ | fssai/ | gst/ | bank/ | agreements/ | other/
+ *               menu/
+ *                 images/ | csv/ | pdf/
+ *               store-media/  (logo, banner)
  *               store-media/gallery/
  *               bank/
  *               agreements/
- *             menu/                         post-onboarding menu item images / CSV
- *             assets/                       post-onboarding store assets
- *             offers/
+ *             menu/                         post-onboarding (editable)
+ *               items/                      optional per-item folder
+ *                 {item_id}/
+ *               csv/
+ *               pdf/
+ *             store-media/                  post-onboarding (editable: logo, banner, gallery)
+ *               logo/ | banner/ | gallery/
+ *             bank/                         post-onboarding bank/UPI (editable)
+ *             documents/                    read-only refs; do not overwrite PAN/Aadhaar/GST/FSSAI/contract
  */
 
 export const R2_DOCS_PREFIX = 'docs';
@@ -40,11 +62,26 @@ export const R2_ONBOARDING = {
   DOCUMENTS: 'documents',
   MENU_IMAGES: 'menu/images',
   MENU_CSV: 'menu/csv',
+  MENU_PDF: 'menu/pdf',
   STORE_MEDIA: 'store-media',
   STORE_MEDIA_GALLERY: 'store-media/gallery',
   BANK: 'bank',
   AGREEMENTS: 'agreements',
 } as const;
+
+/** Document subfolder names under onboarding/documents (for PAN, Aadhaar, FSSAI, GST, bank, contract, etc.) */
+export const R2_ONBOARDING_DOCUMENT_TYPES = {
+  PAN: 'pan',
+  GST: 'gst',
+  AADHAAR: 'aadhaar',
+  FSSAI: 'fssai',
+  PHARMA: 'pharma',
+  BANK: 'bank',
+  AGREEMENTS: 'agreements',
+  OTHER: 'other',
+} as const;
+
+export type R2OnboardingDocType = keyof typeof R2_ONBOARDING_DOCUMENT_TYPES;
 
 /** Parent root: "docs/merchants/{parentMerchantCode}" — use merchant code (e.g. GMMP1005), not numeric id. */
 export function getParentRoot(parentMerchantCode: string): string {
@@ -52,9 +89,15 @@ export function getParentRoot(parentMerchantCode: string): string {
   return `${R2_MERCHANT_PREFIX}/${id}`;
 }
 
-/** Parent logo folder: "merchants/{parentId}/logo" */
+/** Parent logo folder: "docs/merchants/{parentId}/logo" */
 export function getParentLogoPath(parentId: string): string {
   return `${getParentRoot(parentId)}/logo`;
+}
+
+/** Full R2 key for parent logo: "docs/merchants/{parentId}/logo/{fileName}" */
+export function getParentLogoKey(parentId: string, fileName: string): string {
+  const base = getParentLogoPath(parentId);
+  return fileName ? `${base}/${fileName}` : base;
 }
 
 /** Parent assets folder: "merchants/{parentId}/assets" */
@@ -86,7 +129,7 @@ export function getOnboardingR2Base(
   return `${root}/onboarding`;
 }
 
-/** Full path for onboarding upload (e.g. "merchants/41/stores/GMMC1011/onboarding/documents") */
+/** Full path for onboarding upload (e.g. ".../onboarding/documents", ".../onboarding/menu/images") */
 export function getOnboardingR2Path(
   parentId: string,
   childStoreId: string | null | undefined,
@@ -98,8 +141,22 @@ export function getOnboardingR2Path(
 }
 
 /**
- * Post-onboarding menu: "merchants/{parentId}/stores/{storeId}/menu".
- * If parentId is omitted, falls back to "merchants/{storeId}/menu" for backward compatibility.
+ * Path for onboarding documents by type: ".../onboarding/documents/pan", ".../onboarding/documents/aadhaar", etc.
+ * Use for PAN, Aadhaar, FSSAI, GST, bank, agreements so each type has its own folder.
+ */
+export function getOnboardingDocumentPath(
+  parentId: string,
+  childStoreId: string | null | undefined,
+  docType: R2OnboardingDocType
+): string {
+  const documentsBase = getOnboardingR2Path(parentId, childStoreId, 'DOCUMENTS');
+  const sub = R2_ONBOARDING_DOCUMENT_TYPES[docType] ?? R2_ONBOARDING_DOCUMENT_TYPES.OTHER;
+  return `${documentsBase}/${sub}`;
+}
+
+/**
+ * Post-onboarding menu root: "docs/merchants/{parentId}/stores/{storeId}/menu".
+ * If parentId is omitted, falls back to "docs/merchants/{storeId}/menu".
  */
 export function getMerchantMenuPath(storeId: string, parentId?: string | null): string {
   if (parentId && String(parentId).trim()) {
@@ -108,15 +165,68 @@ export function getMerchantMenuPath(storeId: string, parentId?: string | null): 
   return `${R2_MERCHANT_PREFIX}/${storeId}/menu`;
 }
 
+/** Post-onboarding menu item images folder: ".../menu/items/{itemId}" (optional; can use menu/ with unique filenames). */
+export function getMerchantMenuItemPath(storeId: string, itemId: string, parentId?: string | null): string {
+  return `${getMerchantMenuPath(storeId, parentId)}/items/${itemId}`;
+}
+
+/** Post-onboarding menu CSV folder: ".../menu/csv". */
+export function getMerchantMenuCsvPath(storeId: string, parentId?: string | null): string {
+  return `${getMerchantMenuPath(storeId, parentId)}/csv`;
+}
+
+/** Post-onboarding menu PDF folder: ".../menu/pdf". */
+export function getMerchantMenuPdfPath(storeId: string, parentId?: string | null): string {
+  return `${getMerchantMenuPath(storeId, parentId)}/pdf`;
+}
+
 /**
- * Post-onboarding store assets: "merchants/{parentId}/stores/{storeId}/assets".
- * If parentId is omitted, falls back to "merchants/{storeId}/assets".
+ * Post-onboarding store assets: "docs/merchants/{parentId}/stores/{storeId}/assets".
+ * If parentId is omitted, falls back to "docs/merchants/{storeId}/assets".
  */
 export function getMerchantAssetsPath(storeId: string, parentId?: string | null): string {
   if (parentId && String(parentId).trim()) {
     return `${getParentRoot(parentId)}/stores/${storeId}/assets`;
   }
   return `${R2_MERCHANT_PREFIX}/${storeId}/assets`;
+}
+
+/** Post-onboarding store-media subfolder: logo, banner, or gallery (editable from dashboard). */
+export function getMerchantStoreMediaPath(
+  storeId: string,
+  sub: 'logo' | 'banner' | 'gallery',
+  parentId?: string | null
+): string {
+  const base = parentId && String(parentId).trim()
+    ? `${getParentRoot(parentId)}/stores/${storeId}/store-media`
+    : `${R2_MERCHANT_PREFIX}/${storeId}/store-media`;
+  return `${base}/${sub}`;
+}
+
+/**
+ * Menu uploads (onboarding step 3): strict one-type-per-store.
+ * Path (hierarchical): docs/merchants/{parent_code}/stores/{store_code}/onboarding/menu/{images|pdf|csv}/{uniqueId}.{ext}
+ * - parent_code: merchant_parents.parent_merchant_id (e.g. GMMP1007)
+ * - store_code: merchant_stores.store_id (e.g. GMMC1017)
+ * - attachment_type: 'images' | 'pdf' | 'csv'
+ */
+export const R2_MENU_UPLOADS_PREFIX = "menu-uploads";
+
+export function getMenuUploadR2Key(
+  parentMerchantId: string,
+  storePublicId: string,
+  attachmentType: "images" | "pdf" | "csv",
+  uniqueFileName: string
+): string {
+  const parent = (parentMerchantId && String(parentMerchantId).trim()) || "unknown";
+  const store = (storePublicId && String(storePublicId).trim()) || "unknown";
+  const subPath: "MENU_IMAGES" | "MENU_PDF" | "MENU_CSV" =
+    attachmentType === "images" ? "MENU_IMAGES" :
+    attachmentType === "pdf" ? "MENU_PDF" :
+    "MENU_CSV";
+  const base = getOnboardingR2Path(parent, store, subPath);
+  const fileName = (uniqueFileName && String(uniqueFileName).trim()) || "";
+  return fileName ? `${base}/${fileName}` : base;
 }
 
 /** Offer images: "merchants/{parentId}/stores/{storeId}/offers" or "merchants/{storeId}/offers" */

@@ -17,9 +17,8 @@ function getSupabaseAdmin() {
 }
 
 /**
- * GET /api/auth/resolve-session
- * Requires valid session. Returns parent, child stores, and onboarding progress
- * so the client can redirect: no children → register-store; in progress → resume; has verified → dashboard.
+ * GET /api/merchant-auth/resolve-session
+ * Requires valid Supabase session + device_id cookie (set by set-cookie after login).
  */
 export async function GET(request: NextRequest) {
   try {
@@ -32,11 +31,6 @@ export async function GET(request: NextRequest) {
           { success: false, error: "Service temporarily unavailable", code: "SERVICE_UNAVAILABLE" },
           { status: 503 }
         );
-      }
-      if (userError) {
-        console.warn("[resolve-session] getUser error (401):", userError.message);
-      } else {
-        console.warn("[resolve-session] No user in session (401)");
       }
       return NextResponse.json(
         { success: false, error: "Not authenticated", code: "UNAUTHENTICATED" },
@@ -51,7 +45,6 @@ export async function GET(request: NextRequest) {
     });
 
     if (!validation.isValid || validation.merchantParentId == null) {
-      console.warn("[resolve-session] Merchant validation failed (403):", validation.error, "user id:", user.id);
       return NextResponse.json(
         { success: false, error: validation.error ?? "Merchant not found", code: "MERCHANT_NOT_FOUND" },
         { status: 403 }
@@ -65,6 +58,7 @@ export async function GET(request: NextRequest) {
       ? await hasActiveSessionForDevice(parentId, deviceId)
       : false;
     let setDeviceCookieOnResponse = false;
+
     if (!hasDeviceSession) {
       try {
         deviceId = deviceId || generateDeviceId();
@@ -72,7 +66,7 @@ export async function GET(request: NextRequest) {
         hasDeviceSession = true;
         setDeviceCookieOnResponse = true;
       } catch (e) {
-        console.warn("[resolve-session] No active device session (401):", "merchant_id:", parentId, "device_id:", deviceId ? "present" : "missing");
+        console.error("[merchant-auth/resolve-session] repair session failed:", e);
         return NextResponse.json(
           { success: false, error: "Session expired or invalid for this device. Please sign in again.", code: "DEVICE_SESSION_INVALID" },
           { status: 401 }
@@ -100,32 +94,21 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Check payment status by store_id (each store has its own payment record)
     const storeIds = (stores ?? []).map((s) => s.id).filter((id): id is number => id != null);
     let paymentByStoreId: Record<number, "pending" | "completed"> = {};
-    
     if (storeIds.length > 0) {
-      // Check payment status for each store individually
       const { data: payments } = await db
         .from("merchant_onboarding_payments")
         .select("merchant_store_id, status")
         .eq("merchant_parent_id", parentId)
         .in("merchant_store_id", storeIds)
         .eq("status", "captured");
-      
-      // Mark stores with captured payments as completed
       for (const p of payments ?? []) {
         const sid = p.merchant_store_id as number | null;
-        if (sid != null) {
-          paymentByStoreId[sid] = "completed";
-        }
+        if (sid != null) paymentByStoreId[sid] = "completed";
       }
-      
-      // All other stores default to pending
       for (const sid of storeIds) {
-        if (!paymentByStoreId[sid]) {
-          paymentByStoreId[sid] = "pending";
-        }
+        if (!paymentByStoreId[sid]) paymentByStoreId[sid] = "pending";
       }
     }
 
@@ -151,8 +134,6 @@ export async function GET(request: NextRequest) {
       payment_status: (s.id != null ? (paymentByStoreId[s.id] ?? "pending") : "pending") as "pending" | "completed",
     }));
     const verifiedStores = storeList.filter((s) => s.approval_status === "APPROVED");
-    // Only treat as "incomplete draft" when there is real unfinished work. Do not show "Resume draft"
-    // when all stores are SUBMITTED/APPROVED/REJECTED (stale progress row with store_id null).
     const hasDraftStore = storeList.some((s) => (s.approval_status || "").toUpperCase() === "DRAFT");
     const hasIncompleteStore = storeList.some((s) => {
       const step = s.current_onboarding_step;
@@ -160,8 +141,6 @@ export async function GET(request: NextRequest) {
     });
     const progressStep = progress?.current_step != null ? Number(progress.current_step) : null;
     const progressIncomplete = progressStep != null && progressStep < 9;
-    // Show banner only if: (1) there's a progress row with store_id=null, AND
-    // (2) either there's a DRAFT store OR there's a store with step < 9 OR the progress row itself has step < 9
     const showDraftBanner = progress && !progress?.store_id && (hasDraftStore || hasIncompleteStore || progressIncomplete);
     const onboardingProgress = showDraftBanner ? progress : null;
 
@@ -189,7 +168,7 @@ export async function GET(request: NextRequest) {
     }
     return response;
   } catch (e) {
-    console.error("[resolve-session] Error:", e);
+    console.error("[merchant-auth/resolve-session] Error:", e);
     if (isNetworkOrTransientError(e)) {
       return NextResponse.json(
         { success: false, error: "Service temporarily unavailable", code: "SERVICE_UNAVAILABLE" },

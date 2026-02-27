@@ -41,7 +41,7 @@ export default function PostLoginPage() {
   const resolveSession = useCallback(async () => {
     setStatus("loading");
     try {
-      const res = await fetch("/api/auth/resolve-session", { credentials: "include" });
+      const res = await fetch("/api/merchant-auth/resolve-session", { credentials: "include" });
       if (res.status === 404) {
         setStatus("retry");
         return;

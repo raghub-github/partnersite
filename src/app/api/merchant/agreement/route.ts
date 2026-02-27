@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { getR2SignedUrl, extractR2KeyFromUrl } from '@/lib/r2';
+import { extractR2KeyFromUrl, toStoredDocumentUrl } from '@/lib/r2';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -53,12 +53,9 @@ export async function GET(req: NextRequest) {
     const snapshot = (row.template_snapshot as Record<string, unknown>) || {};
     const r2Key = (snapshot.r2_key as string) || (contractPdfUrl ? extractR2KeyFromUrl(contractPdfUrl) : null);
 
+    // Prefer proxy URL so contract is always accessible (no expiry); proxy serves on demand
     if (r2Key) {
-      try {
-        contractPdfUrl = await getR2SignedUrl(r2Key, 60 * 60 * 24 * 7); // 7 days
-      } catch (e) {
-        console.warn('[merchant/agreement] R2 signed URL failed, using stored URL:', e);
-      }
+      contractPdfUrl = toStoredDocumentUrl(r2Key) || contractPdfUrl;
     }
 
     const rowAny = row as Record<string, unknown>;

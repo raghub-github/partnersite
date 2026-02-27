@@ -3,7 +3,7 @@
 import { useRef, useState, useCallback, useEffect, useMemo } from "react";
 import { ChevronLeft, Upload, Trash2, Loader2 } from "lucide-react";
 import { buildContractText, buildStructuredContract, escapePdfText, sanitizeTextForPdf, type ContractData } from "./agreement";
-import { getOnboardingR2Path } from "@/lib/r2-paths";
+import { getOnboardingR2Path, getOnboardingDocumentPath, type R2OnboardingDocType } from "@/lib/r2-paths";
 
 interface SignatureStepPageProps {
   step1: any;
@@ -526,8 +526,8 @@ export default function SignatureStepPage({
         form.append("filename", filename || file.name);
         const res = await fetch("/api/upload/r2", { method: "POST", body: form });
         const data = await res.json();
-        if (!data.url) throw new Error("Image upload failed");
-        return data.path || data.url;
+        if (!data.url && !data.path && !data.key) throw new Error("Image upload failed");
+        return data.key || data.path || data.url;
       }
 
       const logoUrl = await uploadToR2(storeSetup.logo, getOnboardingR2Path(parentId, childStoreId, "STORE_MEDIA"), "logo");
@@ -548,16 +548,26 @@ export default function SignatureStepPage({
       const menuImageUrls = [...(menuData?.menuImageUrls || []), ...uploadedMenuImageUrls.filter(Boolean)];
       const menuSpreadsheetUrl = menuData?.menuSpreadsheetUrl || uploadedMenuSpreadsheetUrl;
 
-      const documentsPath = getOnboardingR2Path(parentId, childStoreId, "DOCUMENTS");
+      const docTypeFromKey = (k: string): R2OnboardingDocType => {
+        const u = k.toUpperCase();
+        if (u.startsWith("PAN")) return "PAN";
+        if (u.startsWith("GST")) return "GST";
+        if (u.startsWith("AADHAR") || u.startsWith("AADHAAR")) return "AADHAAR";
+        if (u.startsWith("FSSAI")) return "FSSAI";
+        if (u.startsWith("BANK")) return "BANK";
+        if (["PHARMACIST_CERTIFICATE", "PHARMACY_COUNCIL", "DRUG_LICENSE", "SHOP_ESTABLISHMENT", "TRADE_LICENSE", "UDYAM"].some((x) => u.includes(x))) return "PHARMA";
+        return "OTHER";
+      };
       const documentUrls: { type: string; url: string; name: string }[] = [];
       for (const [key, value] of Object.entries(documents)) {
         if (value instanceof File) {
-          const url = await uploadToR2(value, documentsPath, key);
+          const docPath = getOnboardingDocumentPath(parentId, childStoreId, docTypeFromKey(key));
+          const url = await uploadToR2(value, docPath, key);
           if (url) documentUrls.push({ type: key.toUpperCase(), url, name: value.name });
         }
       }
 
-      // Generate PDF and upload to R2
+      // Generate PDF and upload to R2; send R2 key so backend stores proxy URL (no expiry for user)
       let signedPdfUrl: string | null = null;
       try {
         const pdfData = await generatePdfBlob();
@@ -565,12 +575,8 @@ export default function SignatureStepPage({
           const pdfFile = new File([pdfData.blob], pdfData.filename, { type: "application/pdf" });
           const pdfR2Key = await uploadToR2(pdfFile, getOnboardingR2Path(parentId, childStoreId, "AGREEMENTS"), pdfData.filename);
           if (pdfR2Key) {
-            // Get signed URL from R2 (7 days expiry)
-            const signedUrlRes = await fetch(`/api/r2/signed-url?key=${encodeURIComponent(pdfR2Key)}&expires=${7 * 24 * 60 * 60}`);
-            if (signedUrlRes.ok) {
-              const signedUrlData = await signedUrlRes.json();
-              signedPdfUrl = signedUrlData.signedUrl || null;
-            }
+            // Store key (or proxy URL) so backend saves /api/attachments/proxy?key=... — always accessible, no expiry
+            signedPdfUrl = pdfR2Key;
           }
         }
       } catch (pdfErr) {
@@ -604,7 +610,7 @@ export default function SignatureStepPage({
             templateTitle: agreementTemplate?.title || "Merchant Partner Agreement",
             templateContentSnapshot: agreementTemplate?.content_markdown || defaultAgreementText,
             templatePdfUrl: agreementTemplate?.pdf_url || null,
-            signedPdfUrl: signedPdfUrl, // Signed PDF URL from R2
+            signedPdfUrl: signedPdfUrl, // R2 key or proxy URL; backend stores proxy so contract is always accessible
             signerName: signerName.trim(),
             signerEmail: signerEmail || null,
             signerPhone: signerPhone || null,

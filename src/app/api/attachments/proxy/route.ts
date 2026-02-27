@@ -1,10 +1,13 @@
 /**
  * GET /api/attachments/proxy?url=<encoded-url>  OR  ?key=<encoded-r2-key>
  *
- * Proxies R2 object so private bucket attachments can be displayed.
- * - ?key=: R2 object key (e.g. tickets/attachments/123/file.jpeg). Preferred for new uploads.
+ * Serves R2 objects on demand so attachments never show expiry errors.
+ * - ?key=: R2 object key (e.g. docs/merchants/GMMP1005/stores/GMMC1017/onboarding/documents/pan/file.pdf). Preferred.
  * - ?url=: Full R2 URL; key is extracted from pathname. Keeps existing stored URLs working.
- * Each request uses server credentials (no signed URL expiry); effectively "auto-renew" on every view.
+ *
+ * Every request fetches the object from R2 using server credentials and streams it to the client.
+ * There is no signed URL sent to the client — so no expiry. Access is effectively "auto-renewed"
+ * on every view (images, PDFs, CSV, contracts, etc.). Use this URL format in the DB for all attachments.
  */
 
 import { NextRequest, NextResponse } from "next/server";

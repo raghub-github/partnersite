@@ -383,7 +383,7 @@ export default function OnboardingPlansPage({
 
         <p className="text-center text-xs sm:text-sm text-slate-600 mb-6">
           <Link
-            href="/refund-policy"
+            href="/refund-policy?source=onboarding"
             className="inline-flex items-center gap-1.5 text-indigo-600 hover:text-indigo-700 font-medium underline underline-offset-2"
           >
             <FileText size={14} />

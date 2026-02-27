@@ -22,7 +22,7 @@ async function setCookieAndRedirect(
   next: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const device_id = getOrCreateDeviceId();
-  const res = await fetch("/api/auth/set-cookie", {
+  const res = await fetch("/api/merchant-auth/set-cookie", {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -83,7 +83,7 @@ function AuthCallbackContent() {
       const error = searchParams?.get("error");
       const errorDescription = searchParams?.get("error_description");
       if (error) {
-        router.push(`/auth/login?error=${encodeURIComponent(errorDescription || error)}`);
+        router.replace(`/auth/login?error=${encodeURIComponent(errorDescription || error)}`);
         return;
       }
 
@@ -97,17 +97,18 @@ function AuthCallbackContent() {
             refresh_token: refreshToken,
           });
           if (setError) {
-            router.push(`/auth/login?error=${encodeURIComponent(setError.message)}`);
+            router.replace(`/auth/login?error=${encodeURIComponent(setError.message)}`);
             return;
           }
           const result = await setCookieAndRedirect(accessToken, refreshToken, next);
           if (!result.ok) {
             await supabase.auth.signOut();
-            router.push(`/auth/login?error=${encodeURIComponent(result.error)}`);
+            router.replace(`/auth/login?error=${encodeURIComponent(result.error)}`);
             return;
           }
           if (typeof window !== "undefined") {
             sessionStorage.removeItem("auth_redirect");
+            await new Promise((r) => setTimeout(r, 150));
             window.location.href = next.startsWith("/") ? next : `/${next.replace(/^\//, "")}`;
           }
           return;
@@ -116,11 +117,10 @@ function AuthCallbackContent() {
 
       const code = searchParams?.get("code");
       if (code) {
-        // Exchange must happen at the same URL that received the code (redirect_uri match).
-        // So we exchange here on the client, then set cookies via API and redirect.
         const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
         if (exchangeError) {
-          router.push(`/auth/login?error=${encodeURIComponent(exchangeError.message)}`);
+          const errMsg = exchangeError.message || "Could not complete sign in.";
+          router.replace(`/auth/login?error=${encodeURIComponent(errMsg)}`);
           return;
         }
         if (data?.session) {
@@ -131,11 +131,12 @@ function AuthCallbackContent() {
           );
           if (!result.ok) {
             await supabase.auth.signOut();
-            router.push(`/auth/login?error=${encodeURIComponent(result.error)}`);
+            router.replace(`/auth/login?error=${encodeURIComponent(result.error)}`);
             return;
           }
           if (typeof window !== "undefined") {
             sessionStorage.removeItem("auth_redirect");
+            await new Promise((r) => setTimeout(r, 150));
             window.location.href = next.startsWith("/") ? next : `/${next.replace(/^\//, "")}`;
           }
           return;
@@ -144,7 +145,7 @@ function AuthCallbackContent() {
 
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       if (sessionError) {
-        router.push(`/auth/login?error=${encodeURIComponent(sessionError.message)}`);
+        router.replace(`/auth/login?error=${encodeURIComponent(sessionError.message)}`);
         return;
       }
       if (session) {
@@ -155,17 +156,18 @@ function AuthCallbackContent() {
         );
         if (!result.ok) {
           await supabase.auth.signOut();
-          router.push(`/auth/login?error=${encodeURIComponent(result.error)}`);
+          router.replace(`/auth/login?error=${encodeURIComponent(result.error)}`);
           return;
         }
         if (typeof window !== "undefined") {
           sessionStorage.removeItem("auth_redirect");
+          await new Promise((r) => setTimeout(r, 150));
           window.location.href = next.startsWith("/") ? next : `/${next.replace(/^\//, "")}`;
         }
         return;
       }
 
-      router.push("/auth/login?error=authentication_failed");
+      router.replace("/auth/login?error=authentication_failed");
     };
 
     run();

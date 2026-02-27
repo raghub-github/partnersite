@@ -55,6 +55,39 @@ interface DocumentData {
   [key: string]: any;
 }
 
+const IMAGE_EXT_REGEX = /\.(png|jpe?g|webp|gif|bmp)$/i;
+
+const isImageUrlForPreview = (url?: string) => {
+  if (!url || typeof url !== 'string') return false;
+  const clean = url.split('?')[0];
+  return IMAGE_EXT_REGEX.test(clean);
+};
+
+function useImagePreview(file: File | null, existingUrl?: string) {
+  const [objectUrl, setObjectUrl] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (file && file.type && file.type.startsWith('image/')) {
+      const url = URL.createObjectURL(file);
+      setObjectUrl(url);
+      return () => {
+        URL.revokeObjectURL(url);
+      };
+    }
+    setObjectUrl(undefined);
+    return;
+  }, [file]);
+
+  if (file && (file as any).type && (file as any).type.startsWith('image/') && objectUrl) {
+    return objectUrl;
+  }
+  if (isImageUrlForPreview(existingUrl)) {
+    return existingUrl;
+  }
+  return undefined;
+}
+
 interface StoreSetupData {
   logo: File | null;
   logo_preview: string;
@@ -172,7 +205,6 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
     return false;
   });
   const [documentSaving, setDocumentSaving] = useState(false);
-
   const documentFormatValidators = {
     pan: (v: string) => /^[A-Z]{5}[0-9]{4}[A-Z]$/.test((v || '').replace(/\s/g, '')) ? '' : 'Invalid PAN. Format: 5 letters, 4 digits, 1 letter (e.g. ABCDE1234F)',
     aadhar: (v: string) => /^\d{12}$/.test((v || '').replace(/\s/g, '')) ? '' : 'Invalid Aadhaar. Must be exactly 12 digits',
@@ -225,6 +257,13 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
       upi_qr_file: null,
     },
   });
+
+  // Live image previews for key documents (only when file/URL is an image)
+  const panPreviewUrl = useImagePreview(documents.pan_image, documents.pan_image_url);
+  const aadharFrontPreviewUrl = useImagePreview(documents.aadhar_front, documents.aadhar_front_url);
+  const aadharBackPreviewUrl = useImagePreview(documents.aadhar_back, documents.aadhar_back_url);
+  const fssaiPreviewUrl = useImagePreview(documents.fssai_image, documents.fssai_image_url);
+  const gstPreviewUrl = useImagePreview(documents.gst_image, documents.gst_image_url);
 
   const [storeSetup, setStoreSetup] = useState<StoreSetupData>(defaultStoreSetupData);
   const [allCuisines, setAllCuisines] = useState<string[]>([]);
@@ -695,42 +734,116 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
     setStoreSetup(newForm);
   };
 
+  const MAX_GALLERY_IMAGES = 3;
+
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>, field: 'logo' | 'banner') => {
     const file = e.target.files?.[0] || null;
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const newForm = {
-          ...storeSetup,
-          [field]: file,
-          [`${field}_preview`]: reader.result as string,
-        };
-        setStoreSetup(newForm);
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const newForm = {
+        ...storeSetup,
+        [field]: file,
+        // clear any persisted URL when changing
+        ...(field === 'logo' && { logo_url: undefined }),
+        ...(field === 'banner' && { banner_url: undefined }),
+        [`${field}_preview`]: reader.result as string,
       };
-      reader.readAsDataURL(file);
-    }
+      setStoreSetup(newForm);
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleGalleryImagesChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files ? Array.from(e.target.files) : [];
-    const previews: string[] = [];
-    let loaded = 0;
-    if (files.length === 0) {
-      const newForm = { ...storeSetup, gallery_images: [], gallery_previews: [] };
-      setStoreSetup(newForm);
+    const allFiles = e.target.files ? Array.from(e.target.files) : [];
+    if (allFiles.length === 0) return;
+
+    // Count total images including already selected (previews/urls) to enforce max
+    const existingCount =
+      (Array.isArray(storeSetup.gallery_previews) ? storeSetup.gallery_previews.length : 0) ||
+      (Array.isArray((storeSetup as any).gallery_image_urls) ? (storeSetup as any).gallery_image_urls.length : 0);
+
+    const slotsLeft = MAX_GALLERY_IMAGES - existingCount;
+    if (slotsLeft <= 0) {
+      setValidationType('error');
+      setValidationMessage(`You can upload maximum ${MAX_GALLERY_IMAGES} gallery images.`);
+      setShowValidationModal(true);
       return;
     }
-    files.forEach((file, idx) => {
+
+    const filesToAdd = allFiles.slice(0, slotsLeft);
+    if (allFiles.length > slotsLeft) {
+      setValidationType('error');
+      setValidationMessage(`You can upload maximum ${MAX_GALLERY_IMAGES} gallery images.`);
+      setShowValidationModal(true);
+    }
+    if (filesToAdd.length === 0) return;
+
+    const newImages = Array.isArray(storeSetup.gallery_images)
+      ? storeSetup.gallery_images.filter((f): f is File => !!f)
+      : [];
+    const newPreviews = Array.isArray(storeSetup.gallery_previews)
+      ? [...storeSetup.gallery_previews]
+      : [];
+
+    let loaded = 0;
+
+    filesToAdd.forEach((file) => {
       const reader = new FileReader();
       reader.onloadend = () => {
-        previews[idx] = reader.result as string;
+        newImages.push(file);
+        newPreviews.push(reader.result as string);
         loaded++;
-        if (loaded === files.length) {
-          const newForm = { ...storeSetup, gallery_images: files, gallery_previews: previews };
-          setStoreSetup(newForm);
+        if (loaded === filesToAdd.length) {
+          setStoreSetup(prev => ({
+            ...(prev as any),
+            gallery_images: newImages,
+            gallery_previews: newPreviews,
+            // keep existing URLs; they will be merged with new uploads on save
+            gallery_image_urls: (prev as any).gallery_image_urls || [],
+          }));
         }
       };
       reader.readAsDataURL(file);
+    });
+  };
+
+  const handleRemoveLogo = () => {
+    setStoreSetup(prev => ({
+      ...(prev as any),
+      logo: null,
+      logo_preview: '',
+      logo_url: undefined,
+    }));
+  };
+
+  const handleRemoveBanner = () => {
+    setStoreSetup(prev => ({
+      ...(prev as any),
+      banner: null,
+      banner_preview: '',
+      banner_url: undefined,
+    }));
+  };
+
+  const handleRemoveGalleryImage = (index: number) => {
+    setStoreSetup(prev => {
+      const nextImages = Array.isArray(prev.gallery_images) ? [...prev.gallery_images] : [];
+      const nextPreviews = Array.isArray(prev.gallery_previews) ? [...prev.gallery_previews] : [];
+      const nextUrls = Array.isArray((prev as any).gallery_image_urls)
+        ? [...((prev as any).gallery_image_urls as string[])]
+        : [];
+      if (index >= 0) {
+        if (nextImages.length > index) nextImages.splice(index, 1);
+        if (nextPreviews.length > index) nextPreviews.splice(index, 1);
+        if (nextUrls.length > index) nextUrls.splice(index, 1);
+      }
+      return {
+        ...(prev as any),
+        gallery_images: nextImages,
+        gallery_previews: nextPreviews,
+        gallery_image_urls: nextUrls,
+      };
     });
   };
 
@@ -918,12 +1031,16 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
   useEffect(() => {
     const loadCuisines = async () => {
       try {
-        const res = await fetch('/data/cuisines.json');
+        const res = await fetch('/api/cuisines');
         if (!res.ok) return;
         const data = await res.json();
+        let list: string[] = [];
         if (Array.isArray(data)) {
-          setAllCuisines(data.filter((item) => typeof item === 'string'));
+          list = data.filter((item) => typeof item === 'string');
+        } else if (Array.isArray((data as any)?.cuisines)) {
+          list = (data as any).cuisines.filter((item: unknown) => typeof item === 'string');
         }
+        setAllCuisines(list);
       } catch (err) {
         console.error('Failed to load cuisines:', err);
       }
@@ -931,7 +1048,7 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
     loadCuisines();
   }, []);
 
-  const filteredCuisines = useMemo(() => {
+  const filteredCuisines = useMemo<string[]>(() => {
     const query = cuisineSearch.trim().toLowerCase();
     if (!query) return allCuisines;
     return allCuisines.filter((cuisine) => cuisine.toLowerCase().includes(query));
@@ -1230,7 +1347,7 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
               <p className="text-xs text-slate-500 mt-1">JPG, PNG or PDF · Max 5MB</p>
             </button>
           ) : (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 p-4">
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-emerald-600">
@@ -1243,7 +1360,18 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                       {documents.pan_image ? documents.pan_image.name : 'Uploaded'}
                     </p>
                     <p className="text-xs text-slate-500">
-                      {documents.pan_image ? ((documents.pan_image.size / 1024 / 1024).toFixed(2) + ' MB') : (documents.pan_image_url ? <a href={documents.pan_image_url} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">View file</a> : null)}
+                      {documents.pan_image
+                        ? (documents.pan_image.size / 1024 / 1024).toFixed(2) + ' MB'
+                        : documents.pan_image_url ? (
+                            <a
+                              href={documents.pan_image_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-indigo-600 hover:underline"
+                            >
+                              View file
+                            </a>
+                          ) : null}
                     </p>
                   </div>
                 </div>
@@ -1262,10 +1390,21 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                     title="Remove"
                   >
                     <span className="sr-only">Remove</span>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
                   </button>
                 </div>
               </div>
+              {panPreviewUrl && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
+                  <img
+                    src={panPreviewUrl}
+                    alt="PAN preview"
+                    className="h-28 w-full object-contain bg-white"
+                  />
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1350,7 +1489,7 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                 <p className="text-xs text-slate-500 mt-0.5">Photo & details</p>
               </button>
             ) : (
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 p-4">
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-3">
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-emerald-600">
@@ -1366,6 +1505,15 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                     <button type="button" onClick={() => removeFile('aadhar_front')} className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-200 hover:text-slate-700" title="Remove"><span className="sr-only">Remove</span><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
                   </div>
                 </div>
+                {aadharFrontPreviewUrl && (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
+                    <img
+                      src={aadharFrontPreviewUrl}
+                      alt="Aadhaar front preview"
+                      className="h-28 w-full object-contain bg-white"
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1381,7 +1529,7 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                 <p className="text-xs text-slate-500 mt-0.5">Address side</p>
               </button>
             ) : (
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 p-4">
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-3">
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-emerald-600">
@@ -1397,6 +1545,15 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                     <button type="button" onClick={() => removeFile('aadhar_back')} className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-200 hover:text-slate-700" title="Remove"><span className="sr-only">Remove</span><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
                   </div>
                 </div>
+                {aadharBackPreviewUrl && (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
+                    <img
+                      src={aadharBackPreviewUrl}
+                      alt="Aadhaar back preview"
+                      className="h-28 w-full object-contain bg-white"
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1688,10 +1845,23 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                 {hasDocFileOrUrl('fssai_image') ? 'Change File' : 'Upload Certificate'}
               </button>
               {hasDocFileOrUrl('fssai_image') && (
-                <div className="flex-1">
+                <div className="flex-1 space-y-2">
                   <div className="flex items-center justify-between px-2 py-1 rounded-xl border border-emerald-200 bg-emerald-50/80">
-                    <span className="text-xs text-gray-600 truncate max-w-[120px]">
-                      {documents.fssai_image ? documents.fssai_image.name : (documents.fssai_image_url ? <a href={documents.fssai_image_url} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">Uploaded · View</a> : 'Uploaded')}
+                    <span className="text-xs text-gray-600 truncate max-w-[140px]">
+                      {documents.fssai_image
+                        ? documents.fssai_image.name
+                        : documents.fssai_image_url ? (
+                            <a
+                              href={documents.fssai_image_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-indigo-600 hover:underline"
+                            >
+                              Uploaded · View
+                            </a>
+                          ) : (
+                            'Uploaded'
+                          )}
                     </span>
                     <button
                       type="button"
@@ -1702,6 +1872,15 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                       ✕
                     </button>
                   </div>
+                  {fssaiPreviewUrl && (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
+                      <img
+                        src={fssaiPreviewUrl}
+                        alt="FSSAI certificate preview"
+                        className="h-28 w-full object-contain bg-white"
+                      />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1795,10 +1974,23 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
               {hasDocFileOrUrl('gst_image') ? 'Change File' : 'Upload Certificate'}
             </button>
             {hasDocFileOrUrl('gst_image') && (
-              <div className="flex-1">
+              <div className="flex-1 space-y-2">
                 <div className="flex items-center justify-between px-2 py-1 rounded-xl border border-emerald-200 bg-emerald-50/80">
-                  <span className="text-xs text-gray-600 truncate max-w-[120px]">
-                    {documents.gst_image ? documents.gst_image.name : (documents.gst_image_url ? <a href={documents.gst_image_url} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">Uploaded · View</a> : 'Uploaded')}
+                  <span className="text-xs text-gray-600 truncate max-w-[140px]">
+                    {documents.gst_image
+                      ? documents.gst_image.name
+                      : documents.gst_image_url ? (
+                          <a
+                            href={documents.gst_image_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-indigo-600 hover:underline"
+                          >
+                            Uploaded · View
+                          </a>
+                        ) : (
+                          'Uploaded'
+                        )}
                   </span>
                   <button
                     type="button"
@@ -1809,6 +2001,15 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                     ✕
                   </button>
                 </div>
+                {gstPreviewUrl && (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
+                    <img
+                      src={gstPreviewUrl}
+                      alt="GST certificate preview"
+                      className="h-28 w-full object-contain bg-white"
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2241,8 +2442,15 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                     className="w-full px-2 py-1.5 sm:px-3 sm:py-2 text-xs sm:text-sm border border-slate-300 rounded-lg sm:rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white file:mr-2 file:py-1 file:px-2 file:text-xs file:rounded file:border-0 file:bg-indigo-50 file:text-indigo-700"
                   />
                   {storeSetup.logo_preview && (
-                    <div className="mt-1.5">
+                    <div className="mt-1.5 flex items-center gap-3">
                       <img src={storeSetup.logo_preview} alt="Logo" className="h-14 sm:h-20 w-auto rounded shadow border" />
+                      <button
+                        type="button"
+                        onClick={handleRemoveLogo}
+                        className="text-xs px-2 py-1 rounded-md border border-rose-200 text-rose-700 hover:bg-rose-50"
+                      >
+                        Remove
+                      </button>
                     </div>
                   )}
                   <p className="text-xs text-gray-500 mt-1">JPG, PNG</p>
@@ -2262,8 +2470,15 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                     className="w-full px-2 py-1.5 sm:px-3 sm:py-2 text-xs sm:text-sm border border-slate-300 rounded-lg sm:rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white file:mr-2 file:py-1 file:px-2 file:text-xs file:rounded file:border-0 file:bg-indigo-50 file:text-indigo-700"
                   />
                   {storeSetup.banner_preview && (
-                    <div className="mt-1.5">
+                    <div className="mt-1.5 space-y-2">
                       <img src={storeSetup.banner_preview} alt="Banner" className="h-14 sm:h-20 w-full object-cover rounded shadow border" />
+                      <button
+                        type="button"
+                        onClick={handleRemoveBanner}
+                        className="text-xs px-2 py-1 rounded-md border border-rose-200 text-rose-700 hover:bg-rose-50"
+                      >
+                        Remove
+                      </button>
                     </div>
                   )}
                   <p className="text-xs text-gray-500 mt-1">JPG, PNG</p>
@@ -2284,11 +2499,26 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                     className="w-full px-2 py-1.5 sm:px-3 sm:py-2 text-xs sm:text-sm border border-slate-300 rounded-lg sm:rounded-xl focus:ring-2 focus:ring-indigo-500 bg-white file:mr-2 file:py-1 file:px-2 file:text-xs file:rounded file:border-0 file:bg-indigo-50 file:text-indigo-700"
                   />
                   <div className="flex flex-wrap gap-1.5 mt-1.5">
-                    {storeSetup.gallery_previews && storeSetup.gallery_previews.map((src, idx) => (
-                      <img key={idx} src={src} alt={`Gallery ${idx + 1}`} className="h-12 w-12 sm:h-14 sm:w-14 object-cover rounded border" />
-                    ))}
+                    {storeSetup.gallery_previews &&
+                      storeSetup.gallery_previews.map((src, idx) => (
+                        <div key={idx} className="relative group">
+                          <img
+                            src={src}
+                            alt={`Gallery ${idx + 1}`}
+                            className="h-12 w-12 sm:h-14 sm:w-14 object-cover rounded border"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveGalleryImage(idx)}
+                            className="absolute -top-1 -right-1 rounded-full bg-rose-600 text-white text-[10px] w-4 h-4 flex items-center justify-center shadow hover:bg-rose-700"
+                            title="Remove"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
                   </div>
-                  <p className="text-xs text-gray-500 mt-1">Multiple images (JPG, PNG)</p>
+                  <p className="text-xs text-gray-500 mt-1">Multiple images (JPG, PNG) · Max {MAX_GALLERY_IMAGES}</p>
                 </div>
 
                 <div className="rounded-lg sm:rounded-xl border border-slate-200 bg-white p-3 sm:p-4 shadow-sm">
@@ -2330,7 +2560,7 @@ const CombinedDocumentStoreSetup: React.FC<CombinedComponentProps> = ({
                   )}
                   <div className="max-h-44 sm:max-h-52 overflow-y-auto rounded-lg border border-slate-200 p-2.5 sm:p-3 bg-slate-50/70">
                     <div className="flex flex-wrap gap-1.5 sm:gap-2">
-                      {filteredCuisines.map((cuisine) => {
+                      {filteredCuisines.map((cuisine: string) => {
                         const selected = storeSetup.cuisine_types.includes(cuisine);
                         return (
                           <button

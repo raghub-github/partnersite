@@ -11,6 +11,7 @@ import { createClient } from '@/lib/supabase/client';
 import { useSearchParams } from 'next/navigation';
 import { handleAuthError, isAuthError, refreshAuthIfNeeded } from '@/lib/auth/client-auth-handler';
 import CombinedDocumentStoreSetup from './doc';
+import Step3MenuUpload from './Step3MenuUpload';
 import PreviewPage from './preview';
 import OnboardingPlansPage from './plans';
 import AgreementContractPage from './agreement';
@@ -101,7 +102,7 @@ interface StoreSetupData {
   [key: string]: any;
 }
 
-type MenuUploadMode = 'IMAGE' | 'CSV';
+type MenuUploadMode = 'IMAGE' | 'PDF' | 'CSV';
 
 const supabase = createClient();
 
@@ -228,12 +229,19 @@ const StoreRegistrationForm = () => {
   const [menuUploadedSpreadsheetUrl, setMenuUploadedSpreadsheetUrl] = useState<string | null>(null);
   const [menuUploadedSpreadsheetFileName, setMenuUploadedSpreadsheetFileName] = useState<string | null>(null);
   const [menuUploadedImageNames, setMenuUploadedImageNames] = useState<string[]>([]);
+  const [menuPdfFile, setMenuPdfFile] = useState<File | null>(null);
+  const [menuUploadedPdfUrl, setMenuUploadedPdfUrl] = useState<string | null>(null);
+  const [menuUploadedPdfFileName, setMenuUploadedPdfFileName] = useState<string | null>(null);
+  const [menuUploadIds, setMenuUploadIds] = useState<number[]>([]);
   const [menuUploadError, setMenuUploadError] = useState('');
+  const [imagePreviewUrls, setImagePreviewUrls] = useState<string[]>([]);
   const [confirmModal, setConfirmModal] = useState<{ title: string; message: string; variant?: 'warning' | 'error' | 'info'; confirmLabel?: string; onConfirm: () => void; onCancel?: () => void } | null>(null);
   const [isImageDragActive, setIsImageDragActive] = useState(false);
   const [isCsvDragActive, setIsCsvDragActive] = useState(false);
+  const [isPdfDragActive, setIsPdfDragActive] = useState(false);
   const imageUploadInputRef = useRef<HTMLInputElement>(null);
   const csvUploadInputRef = useRef<HTMLInputElement>(null);
+  const pdfUploadInputRef = useRef<HTMLInputElement>(null);
   const [draftStoreDbId, setDraftStoreDbId] = useState<number | null>(null);
   const [draftStorePublicId, setDraftStorePublicId] = useState<string | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
@@ -290,11 +298,15 @@ const StoreRegistrationForm = () => {
 
     // Step 3 data — always set from saved so UI matches DB (clear when null/empty after remove or manual DB delete)
     if (saved.step3 != null) {
-      setMenuUploadMode(saved.step3.menuUploadMode === 'CSV' ? 'CSV' : saved.step3.menuUploadMode === 'IMAGE' ? 'IMAGE' : 'CSV');
+      const mode = saved.step3.menuUploadMode === 'PDF' ? 'PDF' : saved.step3.menuUploadMode === 'CSV' ? 'CSV' : saved.step3.menuUploadMode === 'IMAGE' ? 'IMAGE' : 'IMAGE';
+      setMenuUploadMode(mode);
       setMenuUploadedImageUrls(Array.isArray(saved.step3.menuImageUrls) ? saved.step3.menuImageUrls : []);
       setMenuUploadedImageNames(Array.isArray(saved.step3.menuImageNames) ? saved.step3.menuImageNames : []);
       setMenuUploadedSpreadsheetUrl(saved.step3.menuSpreadsheetUrl ?? null);
       setMenuUploadedSpreadsheetFileName(saved.step3.menuSpreadsheetName ?? null);
+      setMenuUploadedPdfUrl(saved.step3.menuPdfUrl ?? null);
+      setMenuUploadedPdfFileName(saved.step3.menuPdfFileName ?? null);
+      setMenuUploadIds(Array.isArray(saved.step3.menuUploadIds) ? saved.step3.menuUploadIds : []);
     }
 
     // Step 4 data — always set from saved so UI matches DB (clear URLs when null after remove or manual DB delete)
@@ -371,6 +383,14 @@ const StoreRegistrationForm = () => {
   useEffect(() => {
     setIsClient(true);
   }, []);
+
+  useEffect(() => {
+    const urls = menuImageFiles.map((f) => URL.createObjectURL(f));
+    setImagePreviewUrls(urls);
+    return () => {
+      urls.forEach((u) => URL.revokeObjectURL(u));
+    };
+  }, [menuImageFiles]);
 
   const parentIdParam = searchParams?.get('parent_id');
   useEffect(() => {
@@ -1112,33 +1132,16 @@ const StoreRegistrationForm = () => {
       setMenuUploadError('');
     }
 
+    const MAX_IMAGES = 5;
+    const currentCount = menuImageFiles.length + menuUploadedImageUrls.length;
+    if (currentCount + validFiles.length > MAX_IMAGES) {
+      setMenuUploadError(`Maximum ${MAX_IMAGES} images allowed. You have ${currentCount} and tried to add ${validFiles.length}.`);
+      return;
+    }
     if (validFiles.length > 0) {
-      const hasExisting = menuImageFiles.length > 0 || menuUploadedImageUrls.length > 0;
-      if (hasExisting) {
-        setConfirmModal({
-          title: 'Change uploaded files?',
-          message: 'You are about to replace the current menu upload. This action cannot be undone.',
-          variant: 'warning',
-          onConfirm: () => {
-            setMenuUploadError('');
-            setMenuImageFiles(validFiles);
-            setMenuUploadedImageUrls([]);
-            setMenuUploadedImageNames([]);
-            setMenuUploadMode('IMAGE');
-            setMenuSpreadsheetFile(null);
-            setMenuUploadedSpreadsheetUrl(null);
-            setMenuUploadedSpreadsheetFileName(null);
-            setConfirmModal(null);
-          },
-          onCancel: () => setConfirmModal(null),
-        });
-        return;
-      }
+      // Append new images; never replace when adding more of the same type (replace only on tab switch)
       setMenuImageFiles((prev) => [...prev, ...validFiles]);
-      setMenuUploadedImageUrls([]);
       setMenuUploadMode('IMAGE');
-      setMenuSpreadsheetFile(null);
-      setMenuUploadedSpreadsheetUrl(null);
     }
   };
 
@@ -1178,6 +1181,169 @@ const StoreRegistrationForm = () => {
     setMenuImageFiles([]);
     setMenuUploadedImageUrls([]);
     setMenuUploadedImageNames([]);
+  };
+
+  const handleMenuPdfUpload = (file: File | null) => {
+    if (!file) return;
+    if ((file.type || '').toLowerCase() !== 'application/pdf') {
+      setMenuUploadError('Only PDF files are allowed.');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setMenuUploadError('PDF must be under 5 MB.');
+      return;
+    }
+    setMenuUploadError('');
+    setMenuPdfFile(file);
+    setMenuUploadedPdfUrl(null);
+    setMenuUploadedPdfFileName(null);
+    setMenuUploadMode('PDF');
+    setMenuImageFiles([]);
+    setMenuUploadedImageUrls([]);
+    setMenuUploadedImageNames([]);
+    setMenuSpreadsheetFile(null);
+    setMenuUploadedSpreadsheetUrl(null);
+    setMenuUploadedSpreadsheetFileName(null);
+  };
+
+  const handleRemovePendingImage = (idx: number) => {
+    setConfirmModal({
+      title: 'Remove image?',
+      message: 'Remove from list (not uploaded yet).',
+      variant: 'warning',
+      onConfirm: () => {
+        setMenuImageFiles((p) => p.filter((_, i) => i !== idx));
+        setConfirmModal(null);
+      },
+      onCancel: () => setConfirmModal(null),
+    });
+  };
+
+  const handleRemoveUploadedImage = async (idx: number) => {
+    const id = menuUploadIds[idx];
+    if (draftStoreDbId && id) {
+      try {
+        await fetch('/api/auth/register-store-menu-uploads?id=' + String(id), { method: 'DELETE', credentials: 'include' });
+      } catch (e) {
+        console.warn('Delete menu upload failed:', e);
+      }
+    }
+    const newUrls = menuUploadedImageUrls.filter((_, i) => i !== idx);
+    const newNames = menuUploadedImageNames.filter((_, i) => i !== idx);
+    const newIds = menuUploadIds.filter((_, i) => i !== idx);
+    setMenuUploadedImageUrls(newUrls);
+    setMenuUploadedImageNames(newNames);
+    setMenuUploadIds(newIds);
+    setConfirmModal(null);
+    await saveStepData(3, false, {
+      step3: {
+        menuUploadMode,
+        menuImageNames: newNames,
+        menuImageUrls: newUrls,
+        menuUploadIds: newIds,
+        menuSpreadsheetName: menuUploadedSpreadsheetFileName ?? null,
+        menuSpreadsheetUrl: menuUploadedSpreadsheetUrl ?? null,
+        menuPdfUrl: menuUploadedPdfUrl ?? null,
+        menuPdfFileName: menuUploadedPdfFileName ?? null,
+      },
+    }, true);
+  };
+
+  const handleRemoveCsvFile = async () => {
+    const id = menuUploadIds[0];
+    if (draftStoreDbId && id) {
+      try {
+        await fetch('/api/auth/register-store-menu-uploads?id=' + String(id), { method: 'DELETE', credentials: 'include' });
+      } catch (e) {
+        console.warn('Delete menu upload failed:', e);
+      }
+    }
+    setMenuSpreadsheetFile(null);
+    setMenuUploadedSpreadsheetUrl(null);
+    setMenuUploadedSpreadsheetFileName(null);
+    setMenuUploadIds([]);
+    setConfirmModal(null);
+    await saveStepData(3, false, {
+      step3: {
+        menuUploadMode,
+        menuImageNames: menuUploadedImageNames,
+        menuImageUrls: menuUploadedImageUrls,
+        menuSpreadsheetName: null,
+        menuSpreadsheetUrl: null,
+        menuUploadIds: [],
+        menuPdfUrl: menuUploadedPdfUrl ?? null,
+        menuPdfFileName: menuUploadedPdfFileName ?? null,
+      },
+    }, true);
+  };
+
+  const handleRemovePdfFile = async () => {
+    const id = menuUploadIds[0];
+    if (draftStoreDbId && id) {
+      try {
+        await fetch('/api/auth/register-store-menu-uploads?id=' + String(id), { method: 'DELETE', credentials: 'include' });
+      } catch (e) {
+        console.warn('Delete menu upload failed:', e);
+      }
+    }
+    setMenuPdfFile(null);
+    setMenuUploadedPdfUrl(null);
+    setMenuUploadedPdfFileName(null);
+    setMenuUploadIds([]);
+    setConfirmModal(null);
+    await saveStepData(3, false, {
+      step3: {
+        menuUploadMode,
+        menuPdfUrl: null,
+        menuPdfFileName: null,
+        menuUploadIds: [],
+        menuImageNames: menuUploadedImageNames,
+        menuImageUrls: menuUploadedImageUrls,
+        menuSpreadsheetName: menuUploadedSpreadsheetFileName ?? null,
+        menuSpreadsheetUrl: menuUploadedSpreadsheetUrl ?? null,
+      },
+    }, true);
+  };
+
+  const handleMenuUploadModeClick = (mode: 'IMAGE' | 'PDF' | 'CSV') => {
+    if (menuUploadMode === mode) return;
+    const hasUploads = menuImageFiles.length > 0 || menuUploadedImageUrls.length > 0 || !!menuSpreadsheetFile || !!menuUploadedSpreadsheetUrl || !!menuPdfFile || !!menuUploadedPdfUrl;
+    if (hasUploads) {
+      setConfirmModal({
+        title: 'Switch upload type?',
+        message: 'Switching upload type will delete all previous files from the server. Continue?',
+        variant: 'warning',
+        confirmLabel: 'Yes, switch',
+        onConfirm: async () => {
+          if (draftStoreDbId) {
+            try {
+              const form = new FormData();
+              form.append('action', 'switch_type');
+              form.append('store_id', String(draftStoreDbId));
+              form.append('new_attachment_type', mode === 'IMAGE' ? 'images' : mode === 'PDF' ? 'pdf' : 'csv');
+              await fetch('/api/auth/register-store-menu-uploads', { method: 'POST', credentials: 'include', body: form });
+            } catch (e) {
+              console.warn('Switch-type API failed:', e);
+            }
+          }
+          setMenuUploadMode(mode);
+          setMenuImageFiles([]);
+          setMenuUploadedImageUrls([]);
+          setMenuUploadedImageNames([]);
+          setMenuSpreadsheetFile(null);
+          setMenuUploadedSpreadsheetUrl(null);
+          setMenuUploadedSpreadsheetFileName(null);
+          setMenuPdfFile(null);
+          setMenuUploadedPdfUrl(null);
+          setMenuUploadedPdfFileName(null);
+          setMenuUploadIds([]);
+          setConfirmModal(null);
+        },
+        onCancel: () => setConfirmModal(null),
+      });
+    } else {
+      setMenuUploadMode(mode);
+    }
   };
 
   const uploadToR2 = async (file: File, folder: string, filename: string) => {
@@ -1266,6 +1432,9 @@ const StoreRegistrationForm = () => {
           menuImageUrls: menuUploadedImageUrls,
           menuSpreadsheetName: menuSpreadsheetFile?.name ?? menuUploadedSpreadsheetFileName ?? null,
           menuSpreadsheetUrl: menuUploadedSpreadsheetUrl,
+          menuPdfFileName: menuPdfFile?.name ?? menuUploadedPdfFileName ?? null,
+          menuPdfUrl: menuUploadedPdfUrl,
+          menuUploadIds,
         },
       };
     }
@@ -1450,6 +1619,7 @@ const StoreRegistrationForm = () => {
     }
     if (stepNumber === 3) {
       if (menuUploadMode === 'IMAGE') return menuImageFiles.length > 0 || menuUploadedImageUrls.length > 0;
+      if (menuUploadMode === 'PDF') return !!menuPdfFile || !!menuUploadedPdfUrl;
       return !!menuSpreadsheetFile || !!menuUploadedSpreadsheetUrl;
     }
     return true;
@@ -1457,131 +1627,67 @@ const StoreRegistrationForm = () => {
 
   const nextStep = async () => {
     if (validateStep(step)) {
-      // Handle file uploads for step 3 (blocking - must wait for uploads)
+      // Step 3: use menu uploads API (R2 + DB via merchant_store_media_files), then save progress
       if (step === 3) {
         setUploadLoading(true);
         try {
-          let step3Patch: { step3?: { menuUploadMode: MenuUploadMode; menuImageNames: string[]; menuImageUrls: string[]; menuSpreadsheetName: string | null; menuSpreadsheetUrl: string | null } } | undefined;
-          const parentId = (parentInfo?.parent_merchant_id || searchParams?.get('parent_id') || 'merchant') as string;
-          const childStoreId = currentStoreId || draftStorePublicId;
-          const menuImagesPath = getOnboardingR2Path(parentId, childStoreId, 'MENU_IMAGES');
-          
-          // Track if we're replacing existing files
-          const hasOldFiles = menuUploadedImageUrls.length > 0 || menuUploadedSpreadsheetUrl !== null;
-          const hasNewFiles = menuImageFiles.length > 0 || menuSpreadsheetFile !== null;
-          const isReplacing = hasOldFiles && hasNewFiles;
-          
-          if (menuUploadMode === 'IMAGE' && menuImageFiles.length > 0) {
-            const uploaded = await Promise.all(
-              menuImageFiles.map((file, idx) =>
-                uploadToR2(file, menuImagesPath, `menu_image_${Date.now()}_${idx + 1}`)
-              )
-            );
-            
-            // If replacing old files, call the replace API
-            if (isReplacing && draftStoreDbId) {
-              try {
-                await fetch('/api/menu/replace-files', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    storeDbId: draftStoreDbId,
-                    oldImageUrls: menuUploadedImageUrls,
-                    oldSpreadsheetUrl: null,
-                    newImageUrls: uploaded,
-                    newSpreadsheetUrl: null,
-                    menuUploadMode: 'IMAGE',
-                  }),
-                });
-              } catch (replaceErr) {
-                console.warn('File replacement failed (non-critical):', replaceErr);
-                // Continue with upload even if replacement fails
-              }
+          const storeId = draftStoreDbId;
+          const hasNewFiles = menuImageFiles.length > 0 || menuSpreadsheetFile !== null || menuPdfFile !== null;
+          let step3Patch: Record<string, unknown> | undefined;
+
+          if (storeId && hasNewFiles) {
+            const form = new FormData();
+            form.append('store_id', String(storeId));
+            const at = menuUploadMode === 'IMAGE' ? 'images' : menuUploadMode === 'PDF' ? 'pdf' : 'csv';
+            form.append('attachment_type', at);
+            if (menuUploadMode === 'IMAGE' && menuImageFiles.length > 0) {
+              menuImageFiles.forEach((f) => form.append('files', f));
+            } else if (menuUploadMode === 'CSV' && menuSpreadsheetFile) {
+              form.append('file', menuSpreadsheetFile);
+            } else if (menuUploadMode === 'PDF' && menuPdfFile) {
+              form.append('file', menuPdfFile);
             }
-            
-            setMenuUploadedImageUrls(uploaded);
-            setMenuUploadedImageNames(menuImageFiles.map((f) => f.name));
-            step3Patch = {
-              step3: {
-                menuUploadMode: 'IMAGE',
-                menuImageNames: menuImageFiles.map((f) => f.name),
-                menuImageUrls: uploaded,
-                menuSpreadsheetName: null,
-                menuSpreadsheetUrl: null,
-              },
-            };
-          } else if (menuUploadMode === 'CSV' && menuSpreadsheetFile) {
-            const menuCsvPath = getOnboardingR2Path(parentId, childStoreId, 'MENU_CSV');
-            const uploadedSheetUrl = await uploadToR2(
-              menuSpreadsheetFile,
-              menuCsvPath,
-              `menu_sheet_${Date.now()}.csv`
-            );
-            
-            // If replacing old files, call the replace API
-            if (isReplacing && draftStoreDbId) {
-              try {
-                await fetch('/api/menu/replace-files', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    storeDbId: draftStoreDbId,
-                    oldImageUrls: [],
-                    oldSpreadsheetUrl: menuUploadedSpreadsheetUrl,
-                    newImageUrls: [],
-                    newSpreadsheetUrl: uploadedSheetUrl,
-                    menuUploadMode: 'CSV',
-                  }),
-                });
-              } catch (replaceErr) {
-                console.warn('File replacement failed (non-critical):', replaceErr);
-                // Continue with upload even if replacement fails
-              }
+            const res = await fetch('/api/auth/register-store-menu-uploads', { method: 'POST', credentials: 'include', body: form });
+            const data = await res.json();
+            if (!res.ok) {
+              alert(data?.error || 'Upload failed. Please try again.');
+              return;
             }
-            
-            setMenuUploadedSpreadsheetUrl(uploadedSheetUrl);
-            setMenuUploadedSpreadsheetFileName(menuSpreadsheetFile.name || null);
-            step3Patch = {
-              step3: {
-                menuUploadMode: 'CSV',
-                menuImageNames: [],
-                menuImageUrls: [],
-                menuSpreadsheetName: menuSpreadsheetFile.name || null,
-                menuSpreadsheetUrl: uploadedSheetUrl,
-              },
-            };
-          } else if (menuUploadMode === 'CSV' && menuUploadedSpreadsheetUrl) {
-            step3Patch = {
-              step3: {
-                menuUploadMode: 'CSV',
-                menuImageNames: [],
-                menuImageUrls: [],
-                menuSpreadsheetName: menuUploadedSpreadsheetFileName ?? null,
-                menuSpreadsheetUrl: menuUploadedSpreadsheetUrl,
-              },
-            };
-          } else if (menuUploadMode === 'IMAGE' && menuUploadedImageUrls.length > 0) {
-            step3Patch = {
-              step3: {
-                menuUploadMode: 'IMAGE',
-                menuImageNames: menuUploadedImageNames,
-                menuImageUrls: menuUploadedImageUrls,
-                menuSpreadsheetName: null,
-                menuSpreadsheetUrl: null,
-              },
-            };
+            const files = (data.files || []) as { id: number; file_url: string; file_name: string | null; file_size: number | null }[];
+            const ids = files.map((f) => f.id);
+            const urls = files.map((f) => f.file_url);
+            const names = files.map((f) => f.file_name ?? '');
+            if (menuUploadMode === 'IMAGE') {
+              setMenuUploadedImageUrls(urls);
+              setMenuUploadedImageNames(names);
+              setMenuUploadIds(ids);
+              setMenuImageFiles([]);
+              step3Patch = { step3: { menuUploadMode: 'IMAGE', menuImageUrls: urls, menuImageNames: names, menuUploadIds: ids, menuSpreadsheetUrl: null, menuSpreadsheetName: null, menuPdfUrl: null, menuPdfFileName: null } };
+            } else if (menuUploadMode === 'CSV') {
+              setMenuUploadedSpreadsheetUrl(urls[0] ?? null);
+              setMenuUploadedSpreadsheetFileName(names[0] ?? null);
+              setMenuUploadIds(ids);
+              setMenuSpreadsheetFile(null);
+              step3Patch = { step3: { menuUploadMode: 'CSV', menuSpreadsheetUrl: urls[0] ?? null, menuSpreadsheetName: names[0] ?? null, menuUploadIds: ids, menuImageUrls: [], menuImageNames: [], menuPdfUrl: null, menuPdfFileName: null } };
+            } else {
+              setMenuUploadedPdfUrl(urls[0] ?? null);
+              setMenuUploadedPdfFileName(names[0] ?? null);
+              setMenuUploadIds(ids);
+              setMenuPdfFile(null);
+              step3Patch = { step3: { menuUploadMode: 'PDF', menuPdfUrl: urls[0] ?? null, menuPdfFileName: names[0] ?? null, menuUploadIds: ids, menuImageUrls: [], menuImageNames: [], menuSpreadsheetUrl: null, menuSpreadsheetName: null } };
+            }
+          } else {
+            step3Patch = getStepPatch(3) as Record<string, unknown>;
           }
 
-          // Save to DB immediately, then navigate only on success
-          const currentStep = step;
-          const result = await saveStepData(currentStep, true, step3Patch, true);
+          const result = await saveStepData(step, true, step3Patch, true);
           if (!result?.success) {
             alert(result?.error || 'Data could not be saved. Please try again.');
             return;
           }
-          setStep(prev => prev + 1);
-        } catch (uploadErr: any) {
-          alert(uploadErr?.message || 'Failed to upload menu file(s). Please try again.');
+          setStep((prev) => prev + 1);
+        } catch (uploadErr: unknown) {
+          alert(uploadErr instanceof Error ? uploadErr.message : 'Failed to upload menu file(s). Please try again.');
         } finally {
           setUploadLoading(false);
         }
@@ -1607,9 +1713,11 @@ const StoreRegistrationForm = () => {
       if (step === 1 && formData.store_type === 'OTHERS' && !formData.custom_store_type.trim()) {
         alert('Please specify your store type in the "Custom Store Type" field.');
       } else if (step === 3 && menuUploadMode === 'IMAGE' && menuImageFiles.length === 0 && menuUploadedImageUrls.length === 0) {
-        alert('Please upload at least one menu image (max 5 MB each) before continuing.');
+        alert('Please upload at least one menu image (max 5) before continuing.');
+      } else if (step === 3 && menuUploadMode === 'PDF' && !menuPdfFile && !menuUploadedPdfUrl) {
+        alert('Please upload a PDF file before continuing.');
       } else if (step === 3 && menuUploadMode === 'CSV' && !menuSpreadsheetFile && !menuUploadedSpreadsheetUrl) {
-        alert('Please upload a CSV/XLS/XLSX file before continuing.');
+        alert('Please upload a CSV/Excel file before continuing.');
       } else {
         alert('Please fill all required fields before proceeding.');
       }
@@ -1970,6 +2078,10 @@ const StoreRegistrationForm = () => {
     setMenuSpreadsheetFile(null);
     setMenuUploadedImageUrls([]);
     setMenuUploadedSpreadsheetUrl(null);
+    setMenuPdfFile(null);
+    setMenuUploadedPdfUrl(null);
+    setMenuUploadedPdfFileName(null);
+    setMenuUploadIds([]);
     setDraftStoreDbId(null);
     setDraftStorePublicId(null);
     setSelectedPlanId(null);
@@ -2096,6 +2208,40 @@ const StoreRegistrationForm = () => {
       </div>
     );
   }
+
+  const step3MenuUploadProps = {
+    menuUploadMode,
+    onModeClick: handleMenuUploadModeClick,
+    menuImageFiles,
+    menuUploadedImageUrls,
+    menuUploadedImageNames,
+    menuUploadIds,
+    menuSpreadsheetFile,
+    menuUploadedSpreadsheetUrl,
+    menuUploadedSpreadsheetFileName,
+    menuPdfFile,
+    menuUploadedPdfUrl,
+    menuUploadedPdfFileName,
+    setConfirmModal,
+    menuUploadError,
+    isImageDragActive,
+    setIsImageDragActive,
+    isPdfDragActive,
+    setIsPdfDragActive,
+    isCsvDragActive,
+    setIsCsvDragActive,
+    onMenuImageUpload: handleMenuImageUpload,
+    onMenuPdfUpload: handleMenuPdfUpload,
+    onMenuSpreadsheetUpload: handleMenuSpreadsheetUpload,
+    imageUploadInputRef,
+    pdfUploadInputRef,
+    csvUploadInputRef,
+    imagePreviewUrls,
+    onRemovePendingImage: handleRemovePendingImage,
+    onRemoveUploadedImage: handleRemoveUploadedImage,
+    onRemoveCsvFile: handleRemoveCsvFile,
+    onRemovePdfFile: handleRemovePdfFile,
+  };
 
   return (
     <div className="h-screen max-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex flex-col overflow-hidden">
@@ -2967,297 +3113,7 @@ const StoreRegistrationForm = () => {
         )}
 
         {/* Step 3: Menu Setup */}
-        {step === 3 && (
-          <div className="h-full flex items-start justify-center">
-            <div className="w-full max-w-6xl h-full overflow-y-auto rounded-2xl bg-white shadow-sm border border-slate-200 p-4 sm:p-6 hide-scrollbar">
-              <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <div className="flex items-start gap-3">
-                  <div className="p-2.5 rounded-xl bg-indigo-50 border border-indigo-100">
-                    <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7h18M3 12h18M3 17h18" />
-                    </svg>
-                  </div>
-                  <div>
-                    <h2 className="text-lg sm:text-xl font-bold text-slate-800">Delivery Menu Upload</h2>
-                    <p className="text-xs sm:text-sm text-slate-500">Upload only menu images or one CSV/Excel file. Manual entry will be enabled after verification.</p>
-                  </div>
-                </div>
-                <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const hasUploads = menuImageFiles.length > 0 || menuUploadedImageUrls.length > 0 || !!menuSpreadsheetFile || !!menuUploadedSpreadsheetUrl;
-                      if (menuUploadMode !== 'IMAGE' && hasUploads) {
-                        setConfirmModal({
-                          title: 'Are you sure?',
-                          message: 'This action will remove all of your uploaded files.',
-                          variant: 'warning',
-                          confirmLabel: 'Yes, discard',
-                          onConfirm: () => {
-                            setMenuUploadMode('IMAGE');
-                            setMenuImageFiles([]);
-                            setMenuUploadedImageUrls([]);
-                            setMenuUploadedImageNames([]);
-                            setMenuSpreadsheetFile(null);
-                            setMenuUploadedSpreadsheetUrl(null);
-                            setMenuUploadedSpreadsheetFileName(null);
-                            setConfirmModal(null);
-                          },
-                          onCancel: () => setConfirmModal(null),
-                        });
-                      } else {
-                        setMenuUploadMode('IMAGE');
-                      }
-                    }}
-                    className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition ${
-                      menuUploadMode === 'IMAGE' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-800'
-                    }`}
-                  >
-                    Menu Images
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const hasUploads = menuImageFiles.length > 0 || menuUploadedImageUrls.length > 0 || !!menuSpreadsheetFile || !!menuUploadedSpreadsheetUrl;
-                      if (menuUploadMode !== 'CSV' && hasUploads) {
-                        setConfirmModal({
-                          title: 'Are you sure?',
-                          message: 'This action will remove all of your uploaded files.',
-                          variant: 'warning',
-                          confirmLabel: 'Yes, discard',
-                          onConfirm: () => {
-                            setMenuUploadMode('CSV');
-                            setMenuImageFiles([]);
-                            setMenuUploadedImageUrls([]);
-                            setMenuUploadedImageNames([]);
-                            setMenuSpreadsheetFile(null);
-                            setMenuUploadedSpreadsheetUrl(null);
-                            setMenuUploadedSpreadsheetFileName(null);
-                            setConfirmModal(null);
-                          },
-                          onCancel: () => setConfirmModal(null),
-                        });
-                      } else {
-                        setMenuUploadMode('CSV');
-                      }
-                    }}
-                    className={`px-3 py-1.5 text-xs sm:text-sm font-medium rounded-md transition ${
-                      menuUploadMode === 'CSV' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-800'
-                    }`}
-                  >
-                    CSV / Excel
-                  </button>
-                </div>
-              </div>
-
-              {menuUploadError && (
-                <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs sm:text-sm text-amber-700">
-                  {menuUploadError}
-                </div>
-              )}
-
-              {menuUploadMode === 'IMAGE' ? (
-                <div
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setIsImageDragActive(true);
-                  }}
-                  onDragLeave={() => setIsImageDragActive(false)}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    setIsImageDragActive(false);
-                    handleMenuImageUpload(Array.from(e.dataTransfer.files || []));
-                  }}
-                  className={`rounded-2xl border-2 border-dashed p-6 sm:p-8 transition ${
-                    isImageDragActive ? 'border-indigo-500 bg-indigo-50' : 'border-slate-300 bg-slate-50'
-                  }`}
-                >
-                  <input
-                    ref={imageUploadInputRef}
-                    type="file"
-                    accept="image/jpeg,image/jpg,image/png,image/webp"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => handleMenuImageUpload(Array.from(e.target.files || []))}
-                  />
-                  <div className="text-center">
-                    <p className="text-sm sm:text-base font-semibold text-slate-800">Drag & drop menu images here</p>
-                    <p className="mt-1 text-xs sm:text-sm text-slate-500">JPG / PNG / WEBP, up to 5 MB per image</p>
-                    <button
-                      type="button"
-                      onClick={() => imageUploadInputRef.current?.click()}
-                      className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
-                    >
-                      Upload images
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setIsCsvDragActive(true);
-                  }}
-                  onDragLeave={() => setIsCsvDragActive(false)}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    setIsCsvDragActive(false);
-                    const dropped = Array.from(e.dataTransfer.files || [])[0] || null;
-                    handleMenuSpreadsheetUpload(dropped);
-                  }}
-                  className={`rounded-2xl border-2 border-dashed p-6 sm:p-8 transition ${
-                    isCsvDragActive ? 'border-indigo-500 bg-indigo-50' : 'border-slate-300 bg-slate-50'
-                  }`}
-                >
-                  <input
-                    ref={csvUploadInputRef}
-                    type="file"
-                    accept=".csv,.xls,.xlsx"
-                    className="hidden"
-                    onChange={(e) => handleMenuSpreadsheetUpload((e.target.files || [])[0] || null)}
-                  />
-                  <div className="text-center">
-                    <p className="text-sm sm:text-base font-semibold text-slate-800">Drag & drop CSV / Excel here</p>
-                    <p className="mt-1 text-xs sm:text-sm text-slate-500">Accepted: .csv, .xls, .xlsx</p>
-                    <button
-                      type="button"
-                      onClick={() => csvUploadInputRef.current?.click()}
-                      className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700"
-                    >
-                      Upload spreadsheet
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <div className="mt-6 grid grid-cols-1 gap-3">
-                {menuUploadMode === 'IMAGE' && (menuImageFiles.length > 0 || menuUploadedImageUrls.length > 0) && (
-                  <>
-                    <div className="text-sm font-semibold text-slate-700">Selected images</div>
-                    {menuImageFiles.map((file, idx) => (
-                      <div key={`${file.name}-${idx}`} className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 bg-white">
-                        <div className="min-w-0">
-                          <p className="text-sm text-slate-700 truncate">{file.name}</p>
-                          <p className="text-xs text-slate-500">{(file.size / (1024 * 1024)).toFixed(2)} MB</p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setConfirmModal({
-                              title: 'Remove uploaded file?',
-                              message: 'You are about to remove this file. This action cannot be undone.',
-                              variant: 'warning',
-                              onConfirm: () => {
-                                setMenuImageFiles((p) => p.filter((_: File, i: number) => i !== idx));
-                                setConfirmModal(null);
-                              },
-                              onCancel: () => setConfirmModal(null),
-                            });
-                          }}
-                          className="text-xs text-rose-600 hover:text-rose-700"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    ))}
-                    {menuImageFiles.length === 0 && menuUploadedImageUrls.map((url, idx) => (
-                      <div key={`${url}-${idx}`} className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 bg-white">
-                        <div className="min-w-0 flex items-center gap-2">
-                          <p className="text-sm text-slate-700 truncate">{menuUploadedImageNames[idx] || `Image ${idx + 1}`}</p>
-                          {url && (
-                            <a href={url} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline flex-shrink-0">
-                              View
-                            </a>
-                          )}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setConfirmModal({
-                              title: 'Remove uploaded file?',
-                              message: 'You are about to remove this file. This action cannot be undone.',
-                              variant: 'warning',
-                              onConfirm: async () => {
-                                const newUrls = menuUploadedImageUrls.filter((_: string, i: number) => i !== idx);
-                                const newNames = menuUploadedImageNames.filter((_: string, i: number) => i !== idx);
-                                setMenuUploadedImageUrls(newUrls);
-                                setMenuUploadedImageNames(newNames);
-                                setConfirmModal(null);
-                                await saveStepData(3, false, {
-                                  step3: {
-                                    menuUploadMode,
-                                    menuImageNames: newNames,
-                                    menuImageUrls: newUrls,
-                                    menuSpreadsheetName: menuUploadedSpreadsheetFileName ?? null,
-                                    menuSpreadsheetUrl: menuUploadedSpreadsheetUrl ?? null,
-                                  },
-                                }, true);
-                              },
-                              onCancel: () => setConfirmModal(null),
-                            });
-                          }}
-                          className="text-xs text-rose-600 hover:text-rose-700"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    ))}
-                  </>
-                )}
-                {menuUploadMode === 'CSV' && (menuSpreadsheetFile || menuUploadedSpreadsheetUrl) && (
-                  <div className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 bg-white">
-                    <div className="min-w-0 flex items-center gap-2">
-                      <div>
-                        <p className="text-sm text-slate-700 truncate">
-                          {menuSpreadsheetFile?.name ?? menuUploadedSpreadsheetFileName ?? 'Spreadsheet file'}
-                        </p>
-                        {menuSpreadsheetFile && (
-                          <p className="text-xs text-slate-500">
-                            {(menuSpreadsheetFile.size / (1024 * 1024)).toFixed(2)} MB
-                          </p>
-                        )}
-                      </div>
-                      {menuUploadedSpreadsheetUrl && (
-                        <a href={menuUploadedSpreadsheetUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline flex-shrink-0">
-                          View
-                        </a>
-                      )}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setConfirmModal({
-                          title: 'Remove uploaded file?',
-                          message: 'You are about to remove this file. This action cannot be undone.',
-                          variant: 'warning',
-                          onConfirm: async () => {
-                            setMenuSpreadsheetFile(null);
-                            setMenuUploadedSpreadsheetUrl(null);
-                            setMenuUploadedSpreadsheetFileName(null);
-                            setConfirmModal(null);
-                            await saveStepData(3, false, {
-                              step3: {
-                                menuUploadMode,
-                                menuImageNames: menuUploadedImageNames,
-                                menuImageUrls: menuUploadedImageUrls,
-                                menuSpreadsheetName: null,
-                                menuSpreadsheetUrl: null,
-                              },
-                            }, true);
-                          },
-                          onCancel: () => setConfirmModal(null),
-                        });
-                      }}
-                      className="text-xs text-rose-600 hover:text-rose-700"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
+        {step === 3 ? <Step3MenuUpload {...step3MenuUploadProps} /> : null}
 
         {/* Step 4: Store Documents */}
         {step === 4 && (
@@ -3371,6 +3227,8 @@ const StoreRegistrationForm = () => {
                 menuSpreadsheetFile: null,
                 menuImageUrls: menuUploadedImageUrls,
                 menuSpreadsheetUrl: menuUploadedSpreadsheetUrl,
+                menuPdfUrl: menuUploadedPdfUrl,
+                menuPdfFileName: menuUploadedPdfFileName,
               }}
               parentInfo={parentInfo}
               onBack={async () => {
@@ -3498,6 +3356,8 @@ const StoreRegistrationForm = () => {
                 menuSpreadsheetFile: null,
                 menuImageUrls: menuUploadedImageUrls,
                 menuSpreadsheetUrl: menuUploadedSpreadsheetUrl,
+                menuPdfUrl: menuUploadedPdfUrl,
+                menuPdfFileName: menuUploadedPdfFileName,
               }}
               parentInfo={parentInfo}
               agreementTemplate={agreementTemplate}

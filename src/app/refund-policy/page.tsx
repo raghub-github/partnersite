@@ -2,7 +2,7 @@
 
 import React, { useEffect } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   FileText,
   Shield,
@@ -18,14 +18,18 @@ import {
 
 export default function RefundPolicyPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
-  // If user has store context (e.g. from dashboard), show refund policy with sidebar on same app shell
+  // If user has store context (e.g. from dashboard), show refund policy with sidebar on same app shell.
+  // Skip this redirect when explicitly coming from onboarding (source=onboarding).
   useEffect(() => {
+    const source = searchParams?.get('source');
+    if (source === 'onboarding') return;
     const storeId = typeof window !== 'undefined' ? localStorage.getItem('selectedStoreId') : null;
     if (storeId) {
       router.replace(`/mx/refund-policy?storeId=${encodeURIComponent(storeId)}`);
     }
-  }, [router]);
+  }, [router, searchParams]);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 via-white to-orange-50/30">

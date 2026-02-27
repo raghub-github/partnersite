@@ -251,6 +251,8 @@ interface ItemFormProps {
   imageValidationError?: string;
   /** True while aspect-ratio/size validation is in progress */
   imageValidating?: boolean;
+  /** Dynamic cuisine options loaded for this store; falls back to default list if empty. */
+  cuisineOptions?: string[];
 }
 
 export const dynamic = 'force-dynamic'
@@ -264,6 +266,7 @@ const globalStyles = `
 // Food type options
 const FOOD_TYPES = ['Vegetarian', 'Non-Vegetarian', 'Vegan', 'Eggitarian'];
 const SPICE_LEVELS = ['Mild', 'Medium', 'Hot', 'Very Hot'];
+// Default cuisine list (used as seed; UI will merge with cuisines from DB per store)
 const CUISINE_TYPES = [
   'North Indian', 'Chinese', 'Fast Food', 'South Indian', 'Biryani', 'Pizza', 'Bakery', 'Street Food', 'Burger', 'Mughlai', 'Momos', 'Sandwich', 'Mithai', 'Rolls', 'Beverages', 'Desserts', 'Cafe', 'Healthy Food', 'Maharashtrian', 'Tea', 'Bengali', 'Ice Cream', 'Juices', 'Shake', 'Shawarma', 'Gujarati', 'Italian', 'Continental', 'Lebanese', 'Salad', 'Andhra', 'Waffle', 'Coffee', 'Kebab', 'Arabian', 'Kerala', 'Asian', 'Seafood', 'Pasta', 'BBQ', 'Rajasthani', 'Wraps', 'Paan', 'Hyderabadi', 'Mexican', 'Bihari', 'Goan', 'Assamese', 'American', 'Mandi', 'Chettinad', 'Mishti', 'Bar Food', 'Malwani', 'Odia', 'Roast Chicken', 'Tamil', 'Japanese', 'Finger Food', 'Korean', 'North Eastern', 'Thai', 'Kathiyawadi', 'Bubble Tea', 'Mangalorean', 'Burmese', 'Sushi', 'Lucknowi', 'Modern Indian', 'Tibetan', 'Afghan', 'Oriental', 'Pancake', 'Kashmiri', 'Middle Eastern', 'Grocery', 'Konkan', 'European', 'Awadhi', 'Hot dogs', 'Sindhi', 'Turkish', 'Naga', 'Mediterranean', 'Nepalese', 'Cuisine Varies', 'Saoji', 'Charcoal Chicken', 'Steak', 'Frozen Yogurt', 'Panini', 'Parsi', 'Sichuan', 'Iranian', 'Grilled Chicken', 'French', 'Raw Meats', 'Drinks Only', 'Vietnamese', 'Liquor', 'Greek', 'Himachali', 'Bohri', 'Garhwali', 'Cantonese', 'Malaysian', 'Belgian', 'British', 'African', 'Spanish', 'Manipuri', 'Egyptian', 'Sri Lankan', 'Relief fund', 'Bangladeshi', 'Indonesian', 'Tex-Mex', 'Irish', 'Singaporean', 'South American', 'Mongolian', 'German', 'Russian', 'Brazilian', 'Pakistani', 'Australian', 'Moroccan', 'Filipino', 'Hot Pot', 'Retail Products', 'Mizo', 'Portuguese', 'Indian', 'Tripuri', 'Delight Goodies', 'Meghalayan', 'Sikkimese', 'Armenian', 'Afghani',
 ];
@@ -297,7 +300,12 @@ function ItemForm(props: ItemFormProps) {
     maxCuisinesPerItem = null,
     imageValidationError,
     imageValidating = false,
+    cuisineOptions,
   } = props;
+
+  const ALL_CUISINES: string[] = Array.isArray(cuisineOptions) && cuisineOptions.length > 0
+    ? Array.from(new Set([...cuisineOptions, ...CUISINE_TYPES]))
+    : CUISINE_TYPES;
 
   const selectedCuisines: string[] = formData.cuisine_type
     ? String(formData.cuisine_type).split(',').map((s: string) => s.trim()).filter(Boolean)
@@ -580,7 +588,7 @@ function ItemForm(props: ItemFormProps) {
                   <span className="text-gray-500 font-normal">(max {maxCuisinesPerItem})</span>
                 )}
               </label>
-              {cuisineViewMore && CUISINE_TYPES.length > CUISINE_TOP_COUNT && (
+              {cuisineViewMore && ALL_CUISINES.length > CUISINE_TOP_COUNT && (
                 <div className="mt-1">
                   <button
                     type="button"
@@ -625,12 +633,12 @@ function ItemForm(props: ItemFormProps) {
               {(() => {
                 const q = cuisineSearch.trim().toLowerCase();
                 const filtered = q
-                  ? CUISINE_TYPES.filter((c) => c.toLowerCase().includes(q))
-                  : CUISINE_TYPES;
-                const topCuisines = CUISINE_TYPES.slice(0, CUISINE_TOP_COUNT);
+                  ? ALL_CUISINES.filter((c) => c.toLowerCase().includes(q))
+                  : ALL_CUISINES;
+                const topCuisines = ALL_CUISINES.slice(0, CUISINE_TOP_COUNT);
                 const showAsTop = !cuisineViewMore && !q ? topCuisines : filtered;
-                const hasMore = !cuisineViewMore && !q && CUISINE_TYPES.length > CUISINE_TOP_COUNT;
-                const customAdd = q && !CUISINE_TYPES.some((c) => c.toLowerCase() === q) && !selectedCuisines.some((c) => c.toLowerCase() === q);
+                const hasMore = !cuisineViewMore && !q && ALL_CUISINES.length > CUISINE_TOP_COUNT;
+                const customAdd = q && !ALL_CUISINES.some((c) => c.toLowerCase() === q) && !selectedCuisines.some((c) => c.toLowerCase() === q);
                 return (
                   <>
                     <div className="flex flex-wrap gap-1.5 mt-1.5">
@@ -679,7 +687,7 @@ function ItemForm(props: ItemFormProps) {
                         onClick={() => setCuisineViewMore(true)}
                         className="mt-1.5 text-xs text-orange-600 hover:text-orange-700 font-medium"
                       >
-                        View more cuisines ({CUISINE_TYPES.length - CUISINE_TOP_COUNT} more)
+                        View more cuisines ({ALL_CUISINES.length - CUISINE_TOP_COUNT} more)
                       </button>
                     )}
                   </>
@@ -988,6 +996,7 @@ function MenuContent() {
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [cuisineOptions, setCuisineOptions] = useState<string[]>(CUISINE_TYPES);
 
   // Modal states
   const [showAddModal, setShowAddModal] = useState(false);
@@ -1195,6 +1204,30 @@ function MenuContent() {
       .then((data) => setCategories(data))
       .catch(() => setCategories([]))
       .finally(() => setCategoryLoading(false));
+  }, [storeId]);
+
+  // Fetch cuisines for the store and merge with default list
+  useEffect(() => {
+    if (!storeId) return;
+    let cancelled = false;
+    const loadCuisines = async () => {
+      try {
+        const res = await fetch(`/api/merchant/store-cuisines?storeId=${encodeURIComponent(storeId)}`);
+        if (!res.ok) return;
+        const data = await res.json().catch(() => ({}));
+        const apiCuisines: string[] = Array.isArray((data as any).cuisines)
+          ? (data as any).cuisines.filter((c: unknown) => typeof c === 'string')
+          : [];
+        if (!cancelled && apiCuisines.length > 0) {
+          const merged = Array.from(new Set([...apiCuisines, ...CUISINE_TYPES]));
+          setCuisineOptions(merged);
+        }
+      } catch (e) {
+        console.error('[menu] Failed to load cuisines for store', e);
+      }
+    };
+    loadCuisines();
+    return () => { cancelled = true; };
   }, [storeId]);
 
   // Fetch store and menu items
@@ -1518,6 +1551,23 @@ function MenuContent() {
       }
       const result = await res.json();
       if (result && result.item_id) {
+        // Sync store cuisines (limit handled by plan; backend enforces actual caps)
+        try {
+          const cuisinesFromItem = (newItem.cuisine_type || '')
+            .split(',')
+            .map((s: string) => s.trim())
+            .filter(Boolean);
+          if (storeId && cuisinesFromItem.length > 0) {
+            const mergedCuisines = Array.from(new Set([...(cuisineOptions || []), ...cuisinesFromItem]));
+            await fetch('/api/merchant/store-cuisines', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ storeId, cuisines: mergedCuisines }),
+            }).catch(() => {});
+          }
+        } catch (e) {
+          console.error('[menu] Failed to sync store cuisines for new item', e);
+        }
         // API already created customizations/addons/variants server-side (bypasses RLS)
         setMenuItems((prev) => [result, ...prev]);
         setShowAddModal(false);
@@ -1647,6 +1697,23 @@ function MenuContent() {
       }
       const result = await res.json();
       if (result?.item_id) {
+        // Sync store cuisines for this save
+        try {
+          const cuisinesFromItem = (newItem.cuisine_type || '')
+            .split(',')
+            .map((s: string) => s.trim())
+            .filter(Boolean);
+          if (storeId && cuisinesFromItem.length > 0) {
+            const mergedCuisines = Array.from(new Set([...(cuisineOptions || []), ...cuisinesFromItem]));
+            await fetch('/api/merchant/store-cuisines', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ storeId, cuisines: mergedCuisines }),
+            }).catch(() => {});
+          }
+        } catch (e) {
+          console.error('[menu] Failed to sync store cuisines on Save & Next', e);
+        }
         setAddItemSaved({ item_id: result.item_id, id: result.id });
         setMenuItems((prev) => [result, ...prev]);
         toast.success('Item saved. Add customizations/variants or click Submit.');
@@ -1944,6 +2011,23 @@ function MenuContent() {
         const errJson = await res.json().catch(() => ({}));
         throw new Error(errJson?.error || 'Failed to update item');
       }
+      // Sync store cuisines from edited item (if cuisine_type changed / has values)
+      try {
+        const cuisinesFromItem = (editForm.cuisine_type || '')
+          .split(',')
+          .map((s: string) => s.trim())
+          .filter(Boolean);
+        if (storeId && cuisinesFromItem.length > 0) {
+          const mergedCuisines = Array.from(new Set([...(cuisineOptions || []), ...cuisinesFromItem]));
+          await fetch('/api/merchant/store-cuisines', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ storeId, cuisines: mergedCuisines }),
+          }).catch(() => {});
+        }
+      } catch (e) {
+        console.error('[menu] Failed to sync store cuisines on edit Save & Next', e);
+      }
       toast.success('Item saved. Add or edit customizations/variants, then click Submit.');
     } catch (e) {
       console.error('Error updating item:', e);
@@ -2086,6 +2170,23 @@ function MenuContent() {
           setMenuItems((prev) => prev.map((item) => (item.item_id === editingId ? { ...item, ...updatedMenuItem } : item)));
         } else {
           setMenuItems((prev) => prev.map((item) => (item.item_id === editingId ? { ...item, ...result, item_image_url: itemImageUrl } : item)));
+        }
+        // Sync store cuisines after full edit save
+        try {
+          const cuisinesFromItem = (result.cuisine_type || editForm.cuisine_type || '')
+            .split(',')
+            .map((s: string) => s.trim())
+            .filter(Boolean);
+          if (storeId && cuisinesFromItem.length > 0) {
+            const mergedCuisines = Array.from(new Set([...(cuisineOptions || []), ...cuisinesFromItem]));
+            await fetch('/api/merchant/store-cuisines', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ storeId, cuisines: mergedCuisines }),
+            }).catch(() => {});
+          }
+        } catch (e) {
+          console.error('[menu] Failed to sync store cuisines on Save', e);
         }
         setShowEditModal(false);
         await refetchImageCount();
@@ -2698,6 +2799,7 @@ function MenuContent() {
               maxCuisinesPerItem={planLimits?.maxCuisinesPerItem ?? null}
               imageValidationError={addImageValidationError}
               imageValidating={addImageValidating}
+              cuisineOptions={cuisineOptions}
               onCancel={() => {
                 setAddItemSaved(null);
                 setShowAddModal(false);
@@ -2764,6 +2866,7 @@ function MenuContent() {
               maxCuisinesPerItem={planLimits?.maxCuisinesPerItem ?? null}
               imageValidationError={editImageValidationError}
               imageValidating={editImageValidating}
+              cuisineOptions={cuisineOptions}
               onCancel={() => {
                 setShowEditModal(false);
                 setEditImageValidationError('');

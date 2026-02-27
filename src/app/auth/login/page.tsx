@@ -60,8 +60,9 @@ function LoginPageContent() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (oauthCode) return;
     clearSupabaseClientSession();
-  }, []);
+  }, [oauthCode]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !oauthCode) return;
@@ -107,7 +108,7 @@ function LoginPageContent() {
   const setSessionAndRedirect = async (access_token: string, refresh_token: string) => {
     const device_id = getOrCreateDeviceId();
     const doSetCookie = () =>
-      fetch('/api/auth/set-cookie', {
+      fetch('/api/merchant-auth/set-cookie', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -120,7 +121,7 @@ function LoginPageContent() {
     }
     if (!res.ok) {
       if (res.status === 502) {
-        const check = await fetch('/api/auth/resolve-session', { credentials: 'include' });
+        const check = await fetch('/api/merchant-auth/resolve-session', { credentials: 'include' });
         if (check.ok) {
           const next =
             (typeof window !== 'undefined' && sessionStorage.getItem('auth_redirect')) ||

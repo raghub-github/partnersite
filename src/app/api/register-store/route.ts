@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
-import { getOnboardingR2Path } from '@/lib/r2-paths';
+import { getOnboardingR2Path, getOnboardingDocumentPath, type R2OnboardingDocType } from '@/lib/r2-paths';
+import { upsertStoreCuisines } from '@/lib/cuisines';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -49,16 +50,15 @@ export async function POST(req: NextRequest) {
     if (!value || typeof value !== 'string') return null;
     return toStoredDocumentUrl(value) ?? value;
   };
-  // Define document types and folders
-  const docFolders = {
-    PAN: 'PAN',
-    GST: 'GST',
-    AADHAAR: 'AADHAAR',
-    FSSAI: 'FSSAI',
-    PHARMA: 'PHARMA',
-    BANNERS: 'BANNERS',
-    GALLERY: 'GALLERY',
-    OTHERS: 'OTHERS',
+  // Map API document type to R2 onboarding document folder (pan, aadhaar, fssai, gst, bank, pharma, other)
+  const toR2DocType = (docType: string): R2OnboardingDocType => {
+    if (docType === 'PAN') return 'PAN';
+    if (docType === 'GST') return 'GST';
+    if (docType === 'AADHAAR') return 'AADHAAR';
+    if (docType === 'FSSAI') return 'FSSAI';
+    if (docType === 'BANK_PROOF' || docType === 'BANK') return 'BANK';
+    if (['PHARMACIST_CERTIFICATE', 'PHARMACY_COUNCIL_REGISTRATION', 'DRUG_LICENSE', 'SHOP_ESTABLISHMENT', 'TRADE_LICENSE', 'UDYAM'].includes(docType)) return 'PHARMA';
+    return 'OTHER';
   };
   try {
     if (!supabaseUrl || !supabaseServiceKey) {
@@ -132,9 +132,6 @@ export async function POST(req: NextRequest) {
         storeId = generatedId;
       }
     }
-    // R2 folder: merchants/{parentId}/stores/{storeId}/onboarding/documents (parentMerchantId declared above)
-    const documentsPath = getOnboardingR2Path(String(parentMerchantId), storeId ?? undefined, 'DOCUMENTS');
-    
     // Map all possible frontend keys to valid enum values for document_type_merchant
     // Valid enum values: PAN, GST, AADHAR, FSSAI, PHARMACIST_CERTIFICATE, PHARMACY_COUNCIL_REGISTRATION, DRUG_LICENSE, SHOP_ESTABLISHMENT, TRADE_LICENSE, UDYAM, OTHER
     const typeMap: Record<string, string> = {
@@ -164,25 +161,17 @@ export async function POST(req: NextRequest) {
       OTHER: 'OTHER',
       // Add more mappings as needed
     };
-    // --- R2 Document Upload Logic (after storeId and typeMap are defined) ---
+    // --- R2 Document Upload Logic: each document type under onboarding/documents/{pan|aadhaar|fssai|gst|bank|pharma|other} ---
     if (documentUrls && documentUrls.length > 0) {
       for (const doc of documentUrls) {
         const docType: string = typeMap[doc.type] || doc.type;
-        let folder = docFolders[docType as keyof typeof docFolders] || 'OTHERS';
-        // For pharma, group pharmacist and council under PHARMA
-        if (docType === 'PHARMACIST_CERTIFICATE' || docType === 'PHARMACY_COUNCIL_REGISTRATION' || docType === 'DRUG_LICENSE') {
-          folder = 'PHARMA';
-        }
-        // For banners and gallery
-        if (docType === 'BANNER') folder = 'BANNERS';
-        if (docType === 'GALLERY') folder = 'GALLERY';
-        // Compose R2 key using new structure (documents are all under onboarding/documents)
+        const r2DocType = toR2DocType(docType);
+        const documentPath = getOnboardingDocumentPath(String(parentMerchantId), storeId ?? undefined, r2DocType);
         const fileName = `${Date.now()}_${doc.name}`;
-        const r2Key = `${documentsPath}/${fileName}`;
-        // Upload file to R2
+        const r2Key = `${documentPath}/${fileName}`;
         if (doc.file) {
           await uploadToR2(doc.file, r2Key);
-          doc.url = r2Key; // Save R2 key as URL for DB
+          doc.url = r2Key;
         }
       }
     }
@@ -251,6 +240,15 @@ export async function POST(req: NextRequest) {
         .single();
       if (error) throw new Error(error.message);
       storeData = data;
+    }
+
+    // 2.a Ensure cuisines are stored in cuisine_master + merchant_store_cuisines
+    if (storeData?.id && Array.isArray(storeSetup.cuisine_types)) {
+      try {
+        await upsertStoreCuisines(storeData.id as number, storeSetup.cuisine_types as string[]);
+      } catch (e) {
+        console.error('[register-store] upsertStoreCuisines failed', e);
+      }
     }
 
     // 2.a Persist menu upload references for frequent updates (if media table exists)
@@ -608,11 +606,48 @@ export async function POST(req: NextRequest) {
         null;
       const userAgent = req.headers.get('user-agent') || null;
 
-      // Extract R2 key from signed URL for auto-renewal
+      // Resolve the contract PDF to its R2 key, copy it to the correct store path if needed,
+      // and always store a proxy URL (never a signed URL) so the contract is permanently accessible.
+      let contractPdfUrlStored: string | null = null;
       let contractPdfR2Key: string | null = null;
       if (agreementAcceptance.signedPdfUrl) {
-        const { extractR2KeyFromUrl } = await import('@/lib/r2');
-        contractPdfR2Key = extractR2KeyFromUrl(agreementAcceptance.signedPdfUrl) || null;
+        const rawValue = agreementAcceptance.signedPdfUrl.trim();
+        let originalKey = extractR2KeyFromUrl(rawValue) || (rawValue.includes('://') ? null : rawValue.replace(/^\/+/, ''));
+
+        if (originalKey) {
+          const correctAgreementsPath = getOnboardingR2Path(String(parentMerchantId), storeId, 'AGREEMENTS');
+          const fileName = originalKey.split('/').pop() || `contract_${Date.now()}.pdf`;
+          const correctKey = `${correctAgreementsPath}/${fileName}`;
+
+          if (originalKey !== correctKey) {
+            try {
+              const { S3Client: S3, GetObjectCommand: GetObj, PutObjectCommand: PutObj } = await import('@aws-sdk/client-s3');
+              const s3 = new S3({
+                region: process.env.R2_REGION || 'auto',
+                endpoint: process.env.R2_ENDPOINT,
+                credentials: { accessKeyId: process.env.R2_ACCESS_KEY!, secretAccessKey: process.env.R2_SECRET_KEY! },
+              });
+              const bucket = process.env.R2_BUCKET_NAME!;
+              const getResp = await s3.send(new GetObj({ Bucket: bucket, Key: originalKey }));
+              if (getResp.Body) {
+                const bodyBytes = await getResp.Body.transformToByteArray();
+                await s3.send(new PutObj({
+                  Bucket: bucket,
+                  Key: correctKey,
+                  Body: bodyBytes,
+                  ContentType: getResp.ContentType || 'application/pdf',
+                }));
+                originalKey = correctKey;
+                console.log(`[register-store] Copied contract PDF to correct path: ${correctKey}`);
+              }
+            } catch (copyErr) {
+              console.warn('[register-store] Could not copy contract PDF to store path, using original key:', copyErr);
+            }
+          }
+
+          contractPdfR2Key = originalKey;
+          contractPdfUrlStored = `/api/attachments/proxy?key=${encodeURIComponent(originalKey)}`;
+        }
       }
 
       const commissionFirst = agreementAcceptance.commissionFirstMonthPct != null ? Number(agreementAcceptance.commissionFirstMonthPct) : 0;
@@ -633,7 +668,7 @@ export async function POST(req: NextRequest) {
           agreement_effective_from: effectiveFrom,
           agreement_effective_to: effectiveTo,
         },
-        contract_pdf_url: agreementAcceptance.signedPdfUrl || agreementAcceptance.templatePdfUrl || null,
+        contract_pdf_url: contractPdfUrlStored ?? agreementAcceptance.templatePdfUrl ?? null,
         signer_name: agreementAcceptance.signerName || null,
         signer_email: agreementAcceptance.signerEmail || null,
         signer_phone: agreementAcceptance.signerPhone || null,

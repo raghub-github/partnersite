@@ -33,7 +33,7 @@ interface PreviewPageProps {
   documents: any;
   storeSetup: any;
   menuData?: {
-    menuUploadMode?: 'IMAGE' | 'CSV';
+    menuUploadMode?: 'IMAGE' | 'CSV' | 'PDF';
     menuImageFiles?: File[];
     menuSpreadsheetFile?: File | null;
     menuImageUrls?: string[];

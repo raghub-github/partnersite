@@ -1,6 +1,7 @@
 // app/api/store-registration/submit/route.ts
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase';
+import { upsertStoreCuisines } from '@/lib/cuisines';
 
 // Simulate a database auto-increment for demonstration (replace with real DB logic)
 let parentCounter = 1001;
@@ -71,6 +72,14 @@ export async function POST(request: Request) {
     // Map formData to document records (one per document type)
     const storeRow = data?.[0];
     const storeRowId = storeRow?.id;
+
+    if (storeRowId && Array.isArray(storeData.cuisine_types)) {
+      try {
+        await upsertStoreCuisines(storeRowId as number, storeData.cuisine_types as string[]);
+      } catch (e) {
+        console.error('[store-registration/submit] upsertStoreCuisines failed', e);
+      }
+    }
     const docTypes = [
       {
         type: 'PAN',

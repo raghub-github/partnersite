@@ -27,8 +27,9 @@ export async function proxy(request: NextRequest) {
   const response = NextResponse.next();
 
   // Let these API routes always run; they handle their own auth/errors.
-  // set-cookie must skip middleware to avoid Supabase/createServerClient here (prevents 502 on hosted server).
+  // Merchant auth lives under /api/merchant-auth/ to avoid being shadowed by NextAuth catch-all at /api/auth/[...nextauth].
   if (
+    pathname.startsWith("/api/merchant-auth/") ||
     pathname === "/api/auth/resolve-session" ||
     pathname === "/api/auth/merchant-session" ||
     pathname === "/api/auth/set-cookie"

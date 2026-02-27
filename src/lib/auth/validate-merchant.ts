@@ -161,17 +161,18 @@ export async function validateMerchantByPhone(phone: string): Promise<MerchantVa
   }
 }
 
-/** Validate merchant by email (password or email OTP login). */
+/** Validate merchant by email (password, email OTP, or Google OAuth). Case-insensitive match. */
 export async function validateMerchantForLogin(email: string): Promise<MerchantValidationResult> {
   if (!email?.trim()) {
     return { isValid: false, error: "Email is required." };
   }
   try {
     const supabase = getSupabaseAdmin();
+    const normalized = email.trim().toLowerCase();
     const { data: row, error } = await supabase
       .from("merchant_parents")
       .select("id, parent_merchant_id, owner_email, is_active, approval_status, registration_status, supabase_user_id")
-      .eq("owner_email", email.trim().toLowerCase())
+      .ilike("owner_email", normalized)
       .maybeSingle();
 
     if (error) {

@@ -229,6 +229,22 @@ export async function POST(req: NextRequest) {
     }
 
     const menuItemId = data.id as number
+
+    // If an image key was provided, also insert into merchant_menu_item_images as primary image
+    if (payload.item_image_url) {
+      try {
+        await supabase
+          .from('merchant_menu_item_images')
+          .insert([{
+            menu_item_id: menuItemId,
+            image_url: payload.item_image_url,
+            is_primary: true,
+            display_order: 0,
+          }]);
+      } catch (imgErr) {
+        console.error('[menu-items POST] merchant_menu_item_images insert error', imgErr);
+      }
+    }
     const customizations = Array.isArray(body.customizations) ? body.customizations : []
 
     for (let i = 0; i < customizations.length; i++) {

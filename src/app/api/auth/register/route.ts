@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { getR2SignedUrl } from "@/lib/r2";
+import { getParentLogoKey } from "@/lib/r2-paths";
+import { uploadToR2, toStoredDocumentUrl } from "@/lib/r2";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -15,50 +15,17 @@ function getSupabaseAdmin() {
 
 const MERCHANT_TYPE_VALUES = ["LOCAL", "BRAND", "CHAIN", "FRANCHISE"] as const;
 
-function getR2Client(): S3Client | null {
-  if (
-    !process.env.R2_BUCKET_NAME ||
-    !process.env.R2_PUBLIC_BASE_URL ||
-    !process.env.R2_ENDPOINT ||
-    !process.env.R2_ACCESS_KEY ||
-    !process.env.R2_SECRET_KEY
-  ) {
-    return null;
-  }
-  return new S3Client({
-    region: process.env.R2_REGION || "auto",
-    endpoint: process.env.R2_ENDPOINT,
-    credentials: {
-      accessKeyId: process.env.R2_ACCESS_KEY,
-      secretAccessKey: process.env.R2_SECRET_KEY,
-    },
-  });
-}
-
-/** Upload parent logo to R2 and return a signed URL (https://...) for merchant_parents.store_logo. */
+/** Upload parent logo to R2 under docs/merchants/{parent_code}/logo and return storable URL (proxy format) for merchant_parents.store_logo. */
 async function uploadParentLogoToR2(
   file: File,
   parentMerchantId: string
 ): Promise<string | null> {
-  const s3 = getR2Client();
-  if (!s3 || !process.env.R2_BUCKET_NAME) return null;
   const ext = (file.name.split(".").pop() || "png").replace(/[^a-z0-9]/gi, "").toLowerCase() || "png";
   const baseName = file.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9.-]/g, "_").slice(0, 80) || "logo";
-  const key = `merchant-parents/${parentMerchantId}/logo/${Date.now()}_${baseName}.${ext}`;
-  const buffer = Buffer.from(await file.arrayBuffer());
-  await s3.send(
-    new PutObjectCommand({
-      Bucket: process.env.R2_BUCKET_NAME,
-      Key: key,
-      Body: buffer,
-      ContentType: file.type || "image/png",
-    })
-  );
-  try {
-    return await getR2SignedUrl(key, 86400 * 7);
-  } catch {
-    return null;
-  }
+  const fileName = `${Date.now()}_${baseName}.${ext}`;
+  const key = getParentLogoKey(parentMerchantId, fileName);
+  await uploadToR2(file, key);
+  return toStoredDocumentUrl(key) ?? key;
 }
 
 /**
