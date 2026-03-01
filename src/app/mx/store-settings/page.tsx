@@ -14,6 +14,7 @@ import { Clock, Phone, Save, AlertCircle, CheckCircle2, X, Zap, Shield, BarChart
 import { PageSkeletonGeneric } from '@/components/PageSkeleton'
 import { Toaster, toast } from 'sonner'
 import { MobileHamburgerButton } from '@/components/MobileHamburgerButton'
+import { SettingsSidebar } from './components/SettingsSidebar'
 
 const StoreLocationMapboxGL = dynamicImport(() => import('@/components/StoreLocationMapboxGL'), { ssr: false })
 const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || ''
@@ -47,19 +48,28 @@ function StoreSettingsContent() {
   const [isLoading, setIsLoading] = useState(true)
   const [storeId, setStoreId] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
-  const [activeTab, setActiveTab] = useState<'plans' | 'premium' | 'timings' | 'operations' | 'menu-capacity' | 'delivery' | 'address' | 'riders' | 'pos' | 'notifications' | 'audit' | 'gatimitra'>(() => {
+  const [activeTab, setActiveTab] = useState<'plans' | 'premium' | 'timings' | 'operations' | 'menu-capacity' | 'delivery' | 'address' | 'pos' | 'notifications' | 'audit' | 'gatimitra'>(() => {
     if (typeof window !== 'undefined') {
       const urlTab = new URLSearchParams(window.location.search).get('tab')
-      const validTabs = ['plans', 'premium', 'timings', 'operations', 'menu-capacity', 'delivery', 'address', 'riders', 'pos', 'notifications', 'audit', 'gatimitra']
+      const validTabs = ['plans', 'premium', 'timings', 'operations', 'menu-capacity', 'delivery', 'address', 'pos', 'notifications', 'audit', 'gatimitra']
+      if (urlTab === 'packaging' || urlTab === 'riders') return 'delivery'
       if (urlTab && validTabs.includes(urlTab)) return urlTab as any
     }
     return 'plans'
   })
 
-  // Sync tab FROM URL when search params change (e.g. "Manage all riders" → tab=riders)
-  const validTabsList = ['plans', 'premium', 'timings', 'operations', 'menu-capacity', 'delivery', 'address', 'riders', 'pos', 'notifications', 'audit', 'gatimitra']
+  const validTabsList = ['plans', 'premium', 'timings', 'operations', 'menu-capacity', 'delivery', 'address', 'pos', 'notifications', 'audit', 'gatimitra']
   useEffect(() => {
     const urlTab = searchParams?.get('tab') || 'plans'
+    if (urlTab === 'packaging' || urlTab === 'riders') {
+      if (activeTab !== 'delivery') setActiveTab('delivery')
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search)
+        params.set('tab', 'delivery')
+        window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`)
+      }
+      return
+    }
     if (validTabsList.includes(urlTab) && urlTab !== activeTab) {
       setActiveTab(urlTab as typeof activeTab)
     }
@@ -149,11 +159,23 @@ function StoreSettingsContent() {
   const [maxCuisines, setMaxCuisines] = useState<number | null>(null)
   const [imageUploadAllowed, setImageUploadAllowed] = useState(false)
   
+  // Packaging charge (store-level; editable once per 30 days)
+  const [packagingChargeAmount, setPackagingChargeAmount] = useState<string>('')
+  const [packagingChargeLastUpdatedAt, setPackagingChargeLastUpdatedAt] = useState<string | null>(null)
+  const [canEditPackagingCharge, setCanEditPackagingCharge] = useState(true)
+  const [nextPackagingEditableAt, setNextPackagingEditableAt] = useState<string | null>(null)
+  const [packagingSaving, setPackagingSaving] = useState(false)
+
   // Delivery Settings state
   const [gatimitraDeliveryEnabled, setGatimitraDeliveryEnabled] = useState(true)
   const [selfDeliveryEnabled, setSelfDeliveryEnabled] = useState(false)
   const [deliveryRadiusKm, setDeliveryRadiusKm] = useState(5)
   const [showSelfDeliveryConfirm, setShowSelfDeliveryConfirm] = useState(false)
+  // Delivery charge per km (₹10–₹15, editable once per 30 days) for merchant self-delivery
+  const [deliveryChargePerKm, setDeliveryChargePerKm] = useState<string>('')
+  const [deliveryChargePerKmLastUpdatedAt, setDeliveryChargePerKmLastUpdatedAt] = useState<string | null>(null)
+  const [canEditDeliveryChargePerKm, setCanEditDeliveryChargePerKm] = useState(true)
+  const [nextDeliveryChargeEditableAt, setNextDeliveryChargeEditableAt] = useState<string | null>(null)
 
   // Self-delivery riders (Settings > Riders tab)
   type RiderRow = { id: number; rider_name: string; rider_mobile: string; rider_email: string | null; vehicle_number: string | null; is_primary: boolean; is_active: boolean; has_active_orders: boolean; created_at: string; updated_at: string }
@@ -269,22 +291,24 @@ function StoreSettingsContent() {
         const slots = [];
         let is24Hours = false;
 
-        if (data[`${day}_slot1_start`] && data[`${day}_slot1_end`]) {
-          slots.push({
-            id: '1',
-            openingTime: data[`${day}_slot1_start`],
-            closingTime: data[`${day}_slot1_end`]
-          });
-          if (data[`${day}_slot1_start`] === '00:00' && data[`${day}_slot1_end`] === '00:00') {
+        const toHHMM = (v: string | null) => {
+          if (!v) return null;
+          const parts = v.split(':');
+          return parts.length >= 2 ? `${parts[0].padStart(2, '0')}:${parts[1]}` : v;
+        };
+        const s1Start = toHHMM(data[`${day}_slot1_start`]);
+        const s1End = toHHMM(data[`${day}_slot1_end`]);
+        const s2Start = toHHMM(data[`${day}_slot2_start`]);
+        const s2End = toHHMM(data[`${day}_slot2_end`]);
+
+        if (s1Start && s1End) {
+          slots.push({ id: '1', openingTime: s1Start, closingTime: s1End });
+          if (s1Start === '00:00' && (s1End === '23:59' || s1End === '00:00')) {
             is24Hours = true;
           }
         }
-        if (data[`${day}_slot2_start`] && data[`${day}_slot2_end`]) {
-          slots.push({
-            id: '2',
-            openingTime: data[`${day}_slot2_start`],
-            closingTime: data[`${day}_slot2_end`]
-          });
+        if (s2Start && s2End) {
+          slots.push({ id: '2', openingTime: s2Start, closingTime: s2End });
         }
 
         // Calculate duration
@@ -464,11 +488,43 @@ function StoreSettingsContent() {
           if (typeof data.delivery_radius_km === 'number' && !isNaN(data.delivery_radius_km)) {
             setDeliveryRadiusKm(data.delivery_radius_km)
           }
+          if (data.delivery_charge_per_km != null && !isNaN(Number(data.delivery_charge_per_km))) {
+            setDeliveryChargePerKm(String(data.delivery_charge_per_km))
+          } else {
+            setDeliveryChargePerKm('')
+          }
+          if (data.delivery_charge_per_km_last_updated_at != null) {
+            setDeliveryChargePerKmLastUpdatedAt(data.delivery_charge_per_km_last_updated_at)
+          } else {
+            setDeliveryChargePerKmLastUpdatedAt(null)
+          }
+          setCanEditDeliveryChargePerKm(data.can_edit_delivery_charge_per_km !== false)
+          if (data.next_delivery_charge_editable_at) {
+            setNextDeliveryChargeEditableAt(data.next_delivery_charge_editable_at)
+          } else {
+            setNextDeliveryChargeEditableAt(null)
+          }
           if (typeof data.auto_accept_orders === 'boolean') {
             setAutoAcceptOrders(data.auto_accept_orders)
           }
           if (typeof data.preparation_buffer_minutes === 'number' && !isNaN(data.preparation_buffer_minutes)) {
             setPreparationBufferMinutes(data.preparation_buffer_minutes)
+          }
+          if (data.packaging_charge_amount != null && !isNaN(Number(data.packaging_charge_amount))) {
+            setPackagingChargeAmount(String(data.packaging_charge_amount))
+          } else {
+            setPackagingChargeAmount('')
+          }
+          if (data.packaging_charge_last_updated_at != null) {
+            setPackagingChargeLastUpdatedAt(data.packaging_charge_last_updated_at)
+          } else {
+            setPackagingChargeLastUpdatedAt(null)
+          }
+          setCanEditPackagingCharge(data.can_edit_packaging_charge !== false)
+          if (data.next_packaging_editable_at) {
+            setNextPackagingEditableAt(data.next_packaging_editable_at)
+          } else {
+            setNextPackagingEditableAt(null)
           }
           if (data.address) {
             const addr = data.address
@@ -783,9 +839,9 @@ function StoreSettingsContent() {
     loadMenuStats()
   }, [storeId])
 
-  // Load self-delivery riders when Riders tab is active
+  // Load self-delivery riders when Delivery tab is active (delivery includes riders)
   useEffect(() => {
-    if (!storeId || activeTab !== 'riders') return
+    if (!storeId || activeTab !== 'delivery') return
     setRidersLoading(true)
     fetch(`/api/merchant/self-delivery-riders?storeId=${encodeURIComponent(storeId)}`)
       .then((res) => res.json())
@@ -1012,6 +1068,34 @@ function StoreSettingsContent() {
     }
   }
 
+  const handleSavePackaging = async () => {
+    if (!storeId || !canEditPackagingCharge) return
+    const amount = packagingChargeAmount.trim() === '' ? NaN : parseFloat(packagingChargeAmount)
+    if (isNaN(amount) || amount < 5 || amount > 15) {
+      toast.error('Packaging charge must be between ₹5 and ₹15.')
+      return
+    }
+    setIsSaving(true)
+    try {
+      const res = await fetch('/api/merchant/store-settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId, packaging_charge_amount: amount }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(data.error || '❌ Failed to save packaging charge')
+        return
+      }
+      toast.success('✅ Packaging charge saved. You can edit it again after 30 days.')
+      setPackagingChargeLastUpdatedAt(new Date().toISOString())
+      setCanEditPackagingCharge(false)
+      setNextPackagingEditableAt(data.next_editable_at || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString())
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
   const handleSaveSettings = async () => {
     if (activeTab === 'address' && (!fullAddress?.trim() || !storeAddress?.trim() || !addressState?.trim() || !addressPostalCode?.trim())) {
       toast.error('⚠️ Please fill in full address, city, state and postal code')
@@ -1039,20 +1123,35 @@ function StoreSettingsContent() {
         return
       }
       if (activeTab === 'delivery' && storeId) {
+        const payload: Record<string, unknown> = {
+          storeId,
+          self_delivery: selfDeliveryEnabled,
+          platform_delivery: gatimitraDeliveryEnabled,
+          delivery_radius_km: typeof deliveryRadiusKm === 'number' && !isNaN(deliveryRadiusKm) ? deliveryRadiusKm : 5,
+        }
+        const perKmStr = deliveryChargePerKm.trim()
+        if (perKmStr !== '') {
+          const perKm = parseFloat(perKmStr)
+          if (isNaN(perKm) || perKm < 10 || perKm > 15) {
+            toast.error('Delivery charge per km must be between ₹10 and ₹15.')
+            return
+          }
+          payload.delivery_charge_per_km = perKm
+        }
         const res = await fetch('/api/merchant/store-settings', {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            storeId,
-            self_delivery: selfDeliveryEnabled,
-            platform_delivery: gatimitraDeliveryEnabled,
-            delivery_radius_km: typeof deliveryRadiusKm === 'number' && !isNaN(deliveryRadiusKm) ? deliveryRadiusKm : 5,
-          }),
+          body: JSON.stringify(payload),
         })
         const data = await res.json().catch(() => ({}))
         if (!res.ok) {
           toast.error(data.error || '❌ Failed to save delivery settings')
           return
+        }
+        if (payload.delivery_charge_per_km != null) {
+          setDeliveryChargePerKmLastUpdatedAt(new Date().toISOString())
+          setCanEditDeliveryChargePerKm(false)
+          setNextDeliveryChargeEditableAt(data.next_editable_at || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString())
         }
         toast.success('✅ Delivery settings saved successfully!')
         return
@@ -1591,11 +1690,9 @@ function StoreSettingsContent() {
 
       if (!res.ok) {
         let errorText = 'Failed to save';
-        let errorDetails: any = null;
         try {
           const errorData = await res.json();
           errorText = errorData.error || errorText;
-          errorDetails = errorData;
         } catch (e) {
           try {
             errorText = await res.text() || errorText;
@@ -1604,24 +1701,16 @@ function StoreSettingsContent() {
           }
         }
         
-        // Log the error to audit log
-        await logActivity('TIMING_SAVE_ERROR', `Failed to save timings: ${errorText}`, {
-          error: errorText,
-          errorDetails,
-          timingsData: timings,
-          scheduleState: {
-            sameForAll: sameForAllToUse,
-            force24Hours: force24HoursToUse,
-            closedDay: closedDayToUse,
-          },
-        });
-        
-        console.error('Failed to save timings:', errorText, errorDetails);
+        console.error('Failed to save timings:', errorText);
+        toast.error(errorText);
         return false;
       }
 
       const result = await res.json();
-      const success = result.success !== false; // Return true if success is true or undefined
+      const success = result.success !== false;
+      if (result.warnings?.length) {
+        result.warnings.forEach((w: string) => toast.warning(w));
+      }
       
       // Log successful save
       if (success) {
@@ -1853,8 +1942,9 @@ function StoreSettingsContent() {
       return
     }
     
-    // Mark this day as having manual time changes (to show save button)
     setManualTimeChanges(prev => new Set(prev).add(day))
+    if (applyMondayToAll) setApplyMondayToAll(false);
+    if (force24Hours) setForce24Hours(false);
     
     const newSlot: TimeSlot = {
       id: Date.now().toString(),
@@ -1866,17 +1956,6 @@ function StoreSettingsContent() {
       if (d.day === day) {
         const newSlots = [...d.slots, newSlot]
         const { hours, minutes } = calculateOperationalTime(newSlots)
-        
-        // Disable same for all when individual day is modified
-        if (applyMondayToAll) {
-          setApplyMondayToAll(false);
-        }
-        
-        // Disable 24 hours when slots are added
-        if (force24Hours) {
-          setForce24Hours(false);
-        }
-        
         return {
           ...d,
           slots: newSlots,
@@ -1897,24 +1976,14 @@ function StoreSettingsContent() {
       return
     }
     
-    // Mark this day as having manual time changes (to show save button)
     setManualTimeChanges(prev => new Set(prev).add(day))
+    if (applyMondayToAll) setApplyMondayToAll(false);
+    if (force24Hours) setForce24Hours(false);
     
     setStoreSchedule(prev => prev.map(d => {
       if (d.day === day) {
         const newSlots = d.slots.filter(s => s.id !== slotId)
         const { hours, minutes } = calculateOperationalTime(newSlots)
-        
-        // Disable same for all when individual day is modified
-        if (applyMondayToAll) {
-          setApplyMondayToAll(false);
-        }
-        
-        // Disable 24 hours when slots are modified
-        if (force24Hours) {
-          setForce24Hours(false);
-        }
-        
         return {
           ...d,
           slots: newSlots,
@@ -1962,40 +2031,26 @@ function StoreSettingsContent() {
   }, [storeId, activeTab]);
 
   const updateTimeSlot = (day: DayType, slotId: string, field: 'openingTime' | 'closingTime', value: string) => {
-    // Mark this day as having manual time changes (to show save button)
     setManualTimeChanges(prev => new Set(prev).add(day))
-    setStoreSchedule(prev => {
-      const newSchedule = prev.map(d => {
-        if (d.day === day) {
-          const newSlots = d.slots.map(slot => 
-            slot.id === slotId ? { ...slot, [field]: value } : slot
-          )
-          const { hours, minutes } = calculateOperationalTime(newSlots)
-          
-          // Disable same for all when individual day is modified
-          if (applyMondayToAll) {
-            setApplyMondayToAll(false);
-          }
-          
-          // Disable 24 hours when slots are modified
-          if (force24Hours) {
-            setForce24Hours(false);
-          }
-          
-          return {
-            ...d,
-            slots: newSlots,
-            duration: `${hours}.${minutes.toString().padStart(2, '0')} hrs`,
-            operationalHours: hours,
-            operationalMinutes: minutes
-          }
+    if (applyMondayToAll) setApplyMondayToAll(false);
+    if (force24Hours) setForce24Hours(false);
+    
+    setStoreSchedule(prev => prev.map(d => {
+      if (d.day === day) {
+        const newSlots = d.slots.map(slot => 
+          slot.id === slotId ? { ...slot, [field]: value } : slot
+        )
+        const { hours, minutes } = calculateOperationalTime(newSlots)
+        return {
+          ...d,
+          slots: newSlots,
+          duration: `${hours}.${minutes.toString().padStart(2, '0')} hrs`,
+          operationalHours: hours,
+          operationalMinutes: minutes
         }
-        return d
-      });
-      
-      return newSchedule;
-    });
-    toast.success('Time slot updated')
+      }
+      return d
+    }));
   }
 
   const copyToAllDays = () => {
@@ -2067,11 +2122,25 @@ function StoreSettingsContent() {
       storeSchedule.forEach(day => {
         const prefix = day.day;
         timings[`${prefix}_open`] = day.isOpen && !day.isOutletClosed;
-        timings[`${prefix}_slot1_start`] = day.slots[0]?.openingTime || null;
-        timings[`${prefix}_slot1_end`] = day.slots[0]?.closingTime || null;
-        timings[`${prefix}_slot2_start`] = day.slots[1]?.openingTime || null;
-        timings[`${prefix}_slot2_end`] = day.slots[1]?.closingTime || null;
-        timings[`${prefix}_total_duration_minutes`] = day.is24Hours ? 24 * 60 : (day.operationalHours * 60 + day.operationalMinutes);
+        if (day.is24Hours) {
+          timings[`${prefix}_slot1_start`] = '00:00';
+          timings[`${prefix}_slot1_end`] = '23:59';
+          timings[`${prefix}_slot2_start`] = null;
+          timings[`${prefix}_slot2_end`] = null;
+          timings[`${prefix}_total_duration_minutes`] = 24 * 60;
+        } else if (day.isOutletClosed) {
+          timings[`${prefix}_slot1_start`] = null;
+          timings[`${prefix}_slot1_end`] = null;
+          timings[`${prefix}_slot2_start`] = null;
+          timings[`${prefix}_slot2_end`] = null;
+          timings[`${prefix}_total_duration_minutes`] = 0;
+        } else {
+          timings[`${prefix}_slot1_start`] = day.slots[0]?.openingTime || null;
+          timings[`${prefix}_slot1_end`] = day.slots[0]?.closingTime || null;
+          timings[`${prefix}_slot2_start`] = day.slots[1]?.openingTime || null;
+          timings[`${prefix}_slot2_end`] = day.slots[1]?.closingTime || null;
+          timings[`${prefix}_total_duration_minutes`] = (day.operationalHours * 60 + day.operationalMinutes);
+        }
       });
     }
     
@@ -2094,8 +2163,11 @@ function StoreSettingsContent() {
       });
       
       if (res.ok) {
+        const result = await res.json().catch(() => ({}));
+        if (result.warnings?.length) {
+          result.warnings.forEach((w: string) => toast.warning(w));
+        }
         toast.success('✅ Store timings saved successfully!');
-        // Immediately refresh timings from Supabase
         await fetchTimings();
       } else {
         let data;
@@ -2406,17 +2478,6 @@ function StoreSettingsContent() {
                   >
                     <MapPin size={14} />
                     Address
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('riders')}
-                    className={`px-4 py-2 font-semibold text-xs border-b-2 transition-colors flex items-center gap-1 whitespace-nowrap ${
-                      activeTab === 'riders'
-                        ? 'border-orange-600 text-orange-700'
-                        : 'border-transparent text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    <Users size={14} />
-                    Riders
                   </button>
                   <button
                     onClick={() => setActiveTab('pos')}
@@ -3054,7 +3115,215 @@ function StoreSettingsContent() {
                         className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
                       />
                     </div>
+                    <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 max-w-xs">
+                      <label className="block text-sm font-semibold text-gray-900 mb-2">
+                        Delivery charge per km (₹10 – ₹15)
+                      </label>
+                      <p className="text-xs text-gray-600 mb-2">
+                        When you deliver with your own riders, customers are charged this amount per km. Editable <strong>once in 30 days</strong>.
+                      </p>
+                      <input
+                        type="number"
+                        min={10}
+                        max={15}
+                        step="0.01"
+                        value={deliveryChargePerKm}
+                        onChange={(e) => setDeliveryChargePerKm(e.target.value)}
+                        disabled={!canEditDeliveryChargePerKm}
+                        placeholder="10–15"
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">Must be between ₹10 and ₹15 per km.</p>
+                      {deliveryChargePerKmLastUpdatedAt && (
+                        <p className="text-xs text-gray-500 mt-2">
+                          Last updated: {new Date(deliveryChargePerKmLastUpdatedAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                        </p>
+                      )}
+                      {!canEditDeliveryChargePerKm && nextDeliveryChargeEditableAt && (
+                        <p className="text-xs text-amber-700 mt-2 font-medium">
+                          You can edit again from {new Date(nextDeliveryChargeEditableAt).toLocaleDateString('en-IN')}.
+                        </p>
+                      )}
+                    </div>
                   </div>
+                </div>
+
+                {/* Packaging Charge (same page) */}
+                <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-gray-900">Packaging Charge</h3>
+                    <button
+                      onClick={handleSavePackaging}
+                      disabled={isSaving || !canEditPackagingCharge}
+                      title={!canEditPackagingCharge && nextPackagingEditableAt ? `Editable again from ${new Date(nextPackagingEditableAt).toLocaleDateString('en-IN')}` : undefined}
+                      className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-all font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      <Save size={16} />
+                      {isSaving ? 'Saving...' : 'Save'}
+                    </button>
+                  </div>
+                  <p className="text-sm text-gray-600 mb-4">
+                    Set a fixed packaging charge (₹) for your store. Amount must be <strong>between ₹5 and ₹15</strong>. This amount can be applied to specific menu items by the agent from the agent dashboard. You can change this value <strong>once in 30 days</strong>.
+                  </p>
+                  <div className="space-y-4">
+                    <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 max-w-xs">
+                      <label className="block text-sm font-semibold text-gray-900 mb-2">Packaging charge amount (₹5 – ₹15)</label>
+                      <input
+                        type="number"
+                        min={5}
+                        max={15}
+                        step="0.01"
+                        value={packagingChargeAmount}
+                        onChange={(e) => setPackagingChargeAmount(e.target.value)}
+                        disabled={!canEditPackagingCharge}
+                        placeholder="5–15"
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">Must be between ₹5 and ₹15.</p>
+                      {packagingChargeLastUpdatedAt && (
+                        <p className="text-xs text-gray-500 mt-2">
+                          Last updated: {new Date(packagingChargeLastUpdatedAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+                        </p>
+                      )}
+                      {!canEditPackagingCharge && nextPackagingEditableAt && (
+                        <p className="text-xs text-amber-700 mt-2 font-medium">
+                          You can edit again from {new Date(nextPackagingEditableAt).toLocaleDateString('en-IN')}.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Self-Delivery Riders (same page) */}
+                <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 shadow-sm">
+                  <h3 className="text-lg font-bold text-gray-900 mb-2">Self-Delivery Riders</h3>
+                  <p className="text-sm text-gray-600 mb-4">Add and manage riders for self delivery. Edit and delete are disabled when a rider has an active order.</p>
+                  <div className="mb-4 p-4 bg-gray-50 rounded-lg space-y-3">
+                    <p className="text-sm font-semibold text-gray-800">{riderEditId !== null ? 'Edit rider' : 'Add new rider'}</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <input
+                        type="text"
+                        placeholder="Rider name *"
+                        value={riderForm.rider_name}
+                        onChange={(e) => setRiderForm((f) => ({ ...f, rider_name: e.target.value }))}
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Mobile *"
+                        value={riderForm.rider_mobile}
+                        onChange={(e) => setRiderForm((f) => ({ ...f, rider_mobile: e.target.value }))}
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Email (optional)"
+                        value={riderForm.rider_email}
+                        onChange={(e) => setRiderForm((f) => ({ ...f, rider_email: e.target.value }))}
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Vehicle number (optional)"
+                        value={riderForm.vehicle_number}
+                        onChange={(e) => setRiderForm((f) => ({ ...f, vehicle_number: e.target.value }))}
+                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => saveRider(riderEditId)}
+                        disabled={riderSaving}
+                        className="px-4 py-2 bg-orange-600 text-white rounded-lg text-sm font-medium hover:bg-orange-700 disabled:opacity-50"
+                      >
+                        {riderSaving ? 'Saving...' : riderEditId !== null ? 'Update rider' : 'Add rider'}
+                      </button>
+                      {riderEditId !== null && (
+                        <button
+                          type="button"
+                          onClick={() => { setRiderEditId(null); setRiderForm({ rider_name: '', rider_mobile: '', rider_email: '', vehicle_number: '' }); }}
+                          className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50"
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {ridersLoading ? (
+                    <p className="text-sm text-gray-500">Loading riders…</p>
+                  ) : riders.length === 0 ? (
+                    <p className="text-sm text-gray-500">No riders added yet. Add one above.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-gray-200 text-left">
+                            <th className="py-2 pr-4 font-semibold text-gray-700">ID</th>
+                            <th className="py-2 pr-4 font-semibold text-gray-700">Name</th>
+                            <th className="py-2 pr-4 font-semibold text-gray-700">Mobile</th>
+                            <th className="py-2 pr-4 font-semibold text-gray-700">Email</th>
+                            <th className="py-2 pr-4 font-semibold text-gray-700">Status</th>
+                            <th className="py-2 text-right font-semibold text-gray-700">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {riders.map((r) => (
+                            <tr key={r.id} className="border-b border-gray-100">
+                              <td className="py-2 pr-4 font-mono text-gray-600">{r.id}</td>
+                              <td className="py-2 pr-4 font-medium">{r.rider_name}</td>
+                              <td className="py-2 pr-4">{r.rider_mobile}</td>
+                              <td className="py-2 pr-4 text-gray-600">{r.rider_email || '—'}</td>
+                              <td className="py-2 pr-4">
+                                {r.has_active_orders ? <span className="text-amber-600 font-medium">Active order</span> : <span className="text-gray-500">—</span>}
+                              </td>
+                              <td className="py-2 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => { setRiderEditId(r.id); setRiderForm({ rider_name: r.rider_name, rider_mobile: r.rider_mobile, rider_email: r.rider_email || '', vehicle_number: r.vehicle_number || '' }); }}
+                                  disabled={r.has_active_orders}
+                                  className="mr-2 text-orange-600 hover:text-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setRiderDeleteId(r.id)}
+                                  disabled={r.has_active_orders}
+                                  className="text-red-600 hover:text-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium"
+                                >
+                                  Delete
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {riderDeleteId !== null && (
+                    <div className="mt-4 p-4 bg-red-50 rounded-lg flex items-center justify-between gap-4">
+                      <span className="text-sm text-gray-800">Delete this rider?</span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => deleteRider(riderDeleteId)}
+                          disabled={riderDeleting}
+                          className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+                        >
+                          {riderDeleting ? 'Deleting...' : 'Yes, delete'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRiderDeleteId(null)}
+                          disabled={riderDeleting}
+                          className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -3236,141 +3505,6 @@ function StoreSettingsContent() {
                       <p className="text-xs text-gray-500 mt-2">Drag marker or click on map to set location. Search above for exact address.</p>
                     </div>
                   </div>
-                </div>
-              </div>
-            )}
-
-            {activeTab === 'riders' && (
-              <div className="space-y-4 sm:space-y-6">
-                <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 shadow-sm">
-                  <h3 className="text-lg font-bold text-gray-900 mb-2">Self-Delivery Riders</h3>
-                  <p className="text-sm text-gray-600 mb-4">Add and manage riders for self delivery. Edit and delete are disabled when a rider has an active order.</p>
-                  <div className="mb-4 p-4 bg-gray-50 rounded-lg space-y-3">
-                    <p className="text-sm font-semibold text-gray-800">{riderEditId !== null ? 'Edit rider' : 'Add new rider'}</p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <input
-                        type="text"
-                        placeholder="Rider name *"
-                        value={riderForm.rider_name}
-                        onChange={(e) => setRiderForm((f) => ({ ...f, rider_name: e.target.value }))}
-                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                      />
-                      <input
-                        type="text"
-                        placeholder="Mobile *"
-                        value={riderForm.rider_mobile}
-                        onChange={(e) => setRiderForm((f) => ({ ...f, rider_mobile: e.target.value }))}
-                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                      />
-                      <input
-                        type="text"
-                        placeholder="Email (optional)"
-                        value={riderForm.rider_email}
-                        onChange={(e) => setRiderForm((f) => ({ ...f, rider_email: e.target.value }))}
-                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                      />
-                      <input
-                        type="text"
-                        placeholder="Vehicle number (optional)"
-                        value={riderForm.vehicle_number}
-                        onChange={(e) => setRiderForm((f) => ({ ...f, vehicle_number: e.target.value }))}
-                        className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                      />
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => saveRider(riderEditId)}
-                        disabled={riderSaving}
-                        className="px-4 py-2 bg-orange-600 text-white rounded-lg text-sm font-medium hover:bg-orange-700 disabled:opacity-50"
-                      >
-                        {riderSaving ? 'Saving...' : riderEditId !== null ? 'Update rider' : 'Add rider'}
-                      </button>
-                      {riderEditId !== null && (
-                        <button
-                          type="button"
-                          onClick={() => { setRiderEditId(null); setRiderForm({ rider_name: '', rider_mobile: '', rider_email: '', vehicle_number: '' }); }}
-                          className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50"
-                        >
-                          Cancel
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  {ridersLoading ? (
-                    <p className="text-sm text-gray-500">Loading riders…</p>
-                  ) : riders.length === 0 ? (
-                    <p className="text-sm text-gray-500">No riders added yet. Add one above.</p>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b border-gray-200 text-left">
-                            <th className="py-2 pr-4 font-semibold text-gray-700">ID</th>
-                            <th className="py-2 pr-4 font-semibold text-gray-700">Name</th>
-                            <th className="py-2 pr-4 font-semibold text-gray-700">Mobile</th>
-                            <th className="py-2 pr-4 font-semibold text-gray-700">Email</th>
-                            <th className="py-2 pr-4 font-semibold text-gray-700">Status</th>
-                            <th className="py-2 text-right font-semibold text-gray-700">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {riders.map((r) => (
-                            <tr key={r.id} className="border-b border-gray-100">
-                              <td className="py-2 pr-4 font-mono text-gray-600">{r.id}</td>
-                              <td className="py-2 pr-4 font-medium">{r.rider_name}</td>
-                              <td className="py-2 pr-4">{r.rider_mobile}</td>
-                              <td className="py-2 pr-4 text-gray-600">{r.rider_email || '—'}</td>
-                              <td className="py-2 pr-4">
-                                {r.has_active_orders ? <span className="text-amber-600 font-medium">Active order</span> : <span className="text-gray-500">—</span>}
-                              </td>
-                              <td className="py-2 text-right">
-                                <button
-                                  type="button"
-                                  onClick={() => { setRiderEditId(r.id); setRiderForm({ rider_name: r.rider_name, rider_mobile: r.rider_mobile, rider_email: r.rider_email || '', vehicle_number: r.vehicle_number || '' }); }}
-                                  disabled={r.has_active_orders}
-                                  className="mr-2 text-orange-600 hover:text-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium"
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setRiderDeleteId(r.id)}
-                                  disabled={r.has_active_orders}
-                                  className="text-red-600 hover:text-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium"
-                                >
-                                  Delete
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                  {riderDeleteId !== null && (
-                    <div className="mt-4 p-4 bg-red-50 rounded-lg flex items-center justify-between gap-4">
-                      <span className="text-sm text-gray-800">Delete this rider?</span>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => deleteRider(riderDeleteId)}
-                          disabled={riderDeleting}
-                          className="px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50"
-                        >
-                          {riderDeleting ? 'Deleting...' : 'Yes, delete'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setRiderDeleteId(null)}
-                          disabled={riderDeleting}
-                          className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  )}
                 </div>
               </div>
             )}
@@ -4087,14 +4221,56 @@ function StoreSettingsContent() {
                               // Save only this day's timings
                               const dayData = storeSchedule.find(d => d.day === daySchedule.day)
                               if (dayData && storeId) {
-                                const timings: any = { store_id: storeId }
+                                // Client-side validation for slot times
+                                if (dayData.isOpen && !dayData.isOutletClosed && !dayData.is24Hours) {
+                                  const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
+                                  const s1o = dayData.slots[0]?.openingTime
+                                  const s1c = dayData.slots[0]?.closingTime
+                                  if (s1o && s1c && toMin(s1c) <= toMin(s1o)) {
+                                    toast.error(`${daySchedule.label}: Slot 1 end time must be after start time`)
+                                    setIsSaving(false)
+                                    return
+                                  }
+                                  const s2o = dayData.slots[1]?.openingTime
+                                  const s2c = dayData.slots[1]?.closingTime
+                                  if (s2o && s2c && toMin(s2c) <= toMin(s2o)) {
+                                    toast.error(`${daySchedule.label}: Slot 2 end time must be after start time`)
+                                    setIsSaving(false)
+                                    return
+                                  }
+                                  if (s1c && s2o && toMin(s2o) <= toMin(s1c)) {
+                                    toast.error(`${daySchedule.label}: Slot 2 must start after Slot 1 ends (${s1c})`)
+                                    setIsSaving(false)
+                                    return
+                                  }
+                                }
+
+                                const timings: any = {
+                                  store_id: storeId,
+                                  same_for_all: applyMondayToAll,
+                                  force_24_hours: force24Hours,
+                                }
                                 const prefix = dayData.day
                                 timings[`${prefix}_open`] = dayData.isOpen && !dayData.isOutletClosed
-                                timings[`${prefix}_slot1_start`] = dayData.slots[0]?.openingTime || null
-                                timings[`${prefix}_slot1_end`] = dayData.slots[0]?.closingTime || null
-                                timings[`${prefix}_slot2_start`] = dayData.slots[1]?.openingTime || null
-                                timings[`${prefix}_slot2_end`] = dayData.slots[1]?.closingTime || null
-                                timings[`${prefix}_total_duration_minutes`] = dayData.is24Hours ? 24 * 60 : (dayData.operationalHours * 60 + dayData.operationalMinutes)
+                                if (dayData.is24Hours) {
+                                  timings[`${prefix}_slot1_start`] = '00:00'
+                                  timings[`${prefix}_slot1_end`] = '23:59'
+                                  timings[`${prefix}_slot2_start`] = null
+                                  timings[`${prefix}_slot2_end`] = null
+                                  timings[`${prefix}_total_duration_minutes`] = 24 * 60
+                                } else if (dayData.isOutletClosed) {
+                                  timings[`${prefix}_slot1_start`] = null
+                                  timings[`${prefix}_slot1_end`] = null
+                                  timings[`${prefix}_slot2_start`] = null
+                                  timings[`${prefix}_slot2_end`] = null
+                                  timings[`${prefix}_total_duration_minutes`] = 0
+                                } else {
+                                  timings[`${prefix}_slot1_start`] = dayData.slots[0]?.openingTime || null
+                                  timings[`${prefix}_slot1_end`] = dayData.slots[0]?.closingTime || null
+                                  timings[`${prefix}_slot2_start`] = dayData.slots[1]?.openingTime || null
+                                  timings[`${prefix}_slot2_end`] = dayData.slots[1]?.closingTime || null
+                                  timings[`${prefix}_total_duration_minutes`] = (dayData.operationalHours * 60 + dayData.operationalMinutes)
+                                }
                                 
                                 const { data: { user } } = await supabase.auth.getUser()
                                 timings.updated_by_email = user?.email || ''
@@ -4107,28 +4283,25 @@ function StoreSettingsContent() {
                                 })
                                 
                                 if (res.ok) {
+                                  const result = await res.json().catch(() => ({}))
+                                  if (result.warnings?.length) {
+                                    result.warnings.forEach((w: string) => toast.warning(w))
+                                  }
                                   toast.success(`✅ ${daySchedule.label} saved!`)
-                                  await fetchTimings()
-                                  
-                                  // Remove from manual changes after save
                                   setManualTimeChanges(prev => {
                                     const newSet = new Set(prev);
                                     newSet.delete(daySchedule.day);
                                     return newSet;
                                   });
-                                  
-                                  // Log activity
-                                  await logActivity('TIMING_UPDATE', `Updated ${daySchedule.label} timings`, {
-                                    day: daySchedule.day,
-                                    isOpen: dayData.isOpen,
-                                    is24Hours: dayData.is24Hours,
-                                    isOutletClosed: dayData.isOutletClosed,
-                                    slots: dayData.slots,
-                                  })
-                                  await fetchLastUpdatedInfo(); // Refresh last updated info
-                                  await fetchTimings(); // Refresh timings to get updated info
+                                  await fetchTimings()
+                                  await fetchLastUpdatedInfo()
                                 } else {
-                                  toast.error('Failed to save timings')
+                                  let errMsg = 'Failed to save timings'
+                                  try {
+                                    const errData = await res.json()
+                                    if (errData?.error) errMsg = errData.error
+                                  } catch {}
+                                  toast.error(errMsg)
                                 }
                               }
                             } catch (error) {
@@ -4320,134 +4493,12 @@ function StoreSettingsContent() {
           </div>
           </div>
 
-          {/* Right Sidebar Navigation */}
+          {/* Right Sidebar Navigation - uses shared list so Packaging Charge is always visible */}
           <div className="hidden lg:flex lg:flex-col lg:w-64 lg:shrink-0 bg-white border-l border-gray-200">
-            <div className="sticky top-0 h-screen overflow-y-auto hide-scrollbar p-4">
-              <div className="space-y-1">
-                <h2 className="text-lg font-bold text-gray-900 mb-4 px-3">Settings</h2>
-                <button
-                  onClick={() => setActiveTab('plans')}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    activeTab === 'plans'
-                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
-                      : 'text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  <Crown size={18} />
-                  Plans & Subscription
-                </button>
-                <button
-                  onClick={() => setActiveTab('timings')}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    activeTab === 'timings'
-                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
-                      : 'text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  <Clock size={18} />
-                  Outlet Timings
-                </button>
-                <button
-                  onClick={() => setActiveTab('operations')}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    activeTab === 'operations'
-                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
-                      : 'text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  <Power size={18} />
-                  Store Operations
-                </button>
-                <button
-                  onClick={() => setActiveTab('menu-capacity')}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    activeTab === 'menu-capacity'
-                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
-                      : 'text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  <ChefHat size={18} />
-                  Menu & Capacity
-                </button>
-                <button
-                  onClick={() => setActiveTab('delivery')}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    activeTab === 'delivery'
-                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
-                      : 'text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  <Package size={18} />
-                  Delivery Settings
-                </button>
-                <button
-                  onClick={() => setActiveTab('address')}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    activeTab === 'address'
-                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
-                      : 'text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  <MapPin size={18} />
-                  Address
-                </button>
-                <button
-                  onClick={() => setActiveTab('riders')}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    activeTab === 'riders'
-                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
-                      : 'text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  <Users size={18} />
-                  Self-Delivery Riders
-                </button>
-                <button
-                  onClick={() => setActiveTab('pos')}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    activeTab === 'pos'
-                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
-                      : 'text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  <Smartphone size={18} />
-                  POS Integration
-                </button>
-                <button
-                  onClick={() => setActiveTab('notifications')}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    activeTab === 'notifications'
-                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
-                      : 'text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  <Bell size={18} />
-                  Notifications
-                </button>
-                <button
-                  onClick={() => setActiveTab('audit')}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    activeTab === 'audit'
-                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
-                      : 'text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  <Activity size={18} />
-                  Audit & Activity
-                </button>
-                <button
-                  onClick={() => setActiveTab('gatimitra')}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                    activeTab === 'gatimitra'
-                      ? 'bg-orange-50 text-orange-700 border border-orange-200'
-                      : 'text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  <img src="/gstore.png" alt="Store" className="w-5 h-5" />
-                  Store on Gatimitra
-                </button>
-              </div>
-            </div>
+            <SettingsSidebar
+              activeTab={activeTab}
+              onTabChange={(tab) => setActiveTab(tab as typeof activeTab)}
+            />
           </div>
         </div>
 

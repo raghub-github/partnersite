@@ -304,25 +304,68 @@ export const fetchStoreOperatingHours = async (storeId: string) => {
 // ============================================
 
 // Offer type (strictly matches DB schema)
+/** Supported offer types for the enterprise offer engine */
+export type OfferType =
+  | 'PERCENTAGE' | 'FLAT' | 'BUY_X_GET_Y' | 'BUY_N_GET_M'
+  | 'FREE_ITEM' | 'FREE_DELIVERY' | 'CART_PERCENTAGE' | 'CART_FLAT'
+  | 'TIERED' | 'BOGO' | 'BUNDLE' | 'COUPON';
+
+/** Applicability: where the offer applies */
+export type ApplicabilityType = 'ALL' | 'ITEM' | 'CATEGORY' | 'CART' | 'DELIVERY' | 'SPECIFIC_ITEMS_SET';
+
 export interface Offer {
   offer_id: string;
-  store_id: number; // bigint
+  store_id: number;
   offer_title: string;
   offer_description: string | null;
-  offer_type: 'BUY_N_GET_M' | 'PERCENTAGE' | 'FLAT' | 'COUPON' | 'FREE_ITEM';
-  offer_sub_type: 'ALL_ORDERS' | 'SPECIFIC_ITEM';
+  offer_image_url?: string | null;
+  offer_terms?: string | null;
+  offer_type: OfferType | string;
+  offer_sub_type?: string | null;
   menu_item_ids: string[] | null;
-  discount_value: string | null; // numeric(10,2) comes as string
-  min_order_amount: string | null; // numeric(10,2) comes as string
+  discount_value: string | number | null;
+  discount_percentage?: string | number | null;
+  max_discount_amount?: string | number | null;
+  min_order_amount: string | number | null;
+  max_order_amount?: string | number | null;
+  min_items?: number | null;
   buy_quantity: number | null;
   get_quantity: number | null;
   coupon_code: string | null;
-  image_url: string | null;
+  /** @deprecated use offer_image_url */
+  image_url?: string | null;
   valid_from: string;
   valid_till: string;
   is_active: boolean | null;
+  /** Enterprise: auto-apply without coupon */
+  auto_apply?: boolean | null;
+  /** Enterprise: can combine with other stackable offers */
+  is_stackable?: boolean | null;
+  /** Enterprise: higher = higher priority when non-stackable */
+  priority?: number | null;
+  /** Enterprise: max times this offer applies per order */
+  per_order_limit?: number | null;
+  /** Enterprise: only for first order */
+  first_order_only?: boolean | null;
+  new_user_only?: boolean | null;
+  user_segment?: Record<string, unknown> | null;
+  max_discount_per_order?: string | number | null;
+  usage_reset_period?: string | null;
+  max_uses_total?: number | null;
+  max_uses_per_user?: number | null;
+  current_uses?: number | null;
+  applicable_on_days?: string[] | null;
+  applicable_time_start?: string | null;
+  applicable_time_end?: string | null;
+  offer_metadata?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
+  /** Audit: who created this offer (display name or email) */
+  created_by_name?: string | null;
+  /** Audit: who last updated (display name or email) */
+  updated_by_name?: string | null;
+  /** Audit: when last updated by a user */
+  updated_by_at?: string | null;
 }
 
 // Fetch active offers for a store
@@ -426,23 +469,42 @@ export async function createOffer(offerData: any): Promise<Offer | null> {
       return null;
     }
 
-    // Prepare payload strictly per schema
-    const payload = {
+    // Prepare payload per schema (offer_image_url is DB column; image_url is legacy alias)
+    const payload: Record<string, unknown> = {
       store_id: storeBigIntId,
       offer_title: offerData.offer_title,
       offer_description: offerData.offer_description ?? null,
       offer_type: offerData.offer_type,
-      offer_sub_type: offerData.offer_sub_type,
+      offer_sub_type: offerData.offer_sub_type ?? null,
       menu_item_ids: offerData.menu_item_ids ?? null,
       discount_value: offerData.discount_value ?? null,
+      discount_percentage: offerData.discount_percentage ?? null,
+      max_discount_amount: offerData.max_discount_amount ?? null,
       min_order_amount: offerData.min_order_amount ?? null,
+      max_order_amount: offerData.max_order_amount ?? null,
+      min_items: offerData.min_items ?? null,
       buy_quantity: offerData.buy_quantity ?? null,
       get_quantity: offerData.get_quantity ?? null,
       coupon_code: offerData.coupon_code ?? null,
-      image_url: offerData.image_url ?? null,
+      offer_image_url: offerData.offer_image_url ?? offerData.image_url ?? null,
       valid_from: offerData.valid_from,
       valid_till: offerData.valid_till,
-      is_active: offerData.is_active ?? true
+      is_active: offerData.is_active ?? true,
+      auto_apply: offerData.auto_apply ?? true,
+      is_stackable: offerData.is_stackable ?? false,
+      priority: offerData.priority ?? 0,
+      per_order_limit: offerData.per_order_limit ?? 1,
+      first_order_only: offerData.first_order_only ?? false,
+      new_user_only: offerData.new_user_only ?? false,
+      user_segment: offerData.user_segment ?? null,
+      max_discount_per_order: offerData.max_discount_per_order ?? null,
+      usage_reset_period: offerData.usage_reset_period ?? null,
+      max_uses_total: offerData.max_uses_total ?? null,
+      max_uses_per_user: offerData.max_uses_per_user ?? null,
+      applicable_on_days: offerData.applicable_on_days ?? null,
+      applicable_time_start: offerData.applicable_time_start ?? null,
+      applicable_time_end: offerData.applicable_time_end ?? null,
+      offer_metadata: offerData.offer_metadata ?? null,
     };
 
     const { data, error } = await supabase

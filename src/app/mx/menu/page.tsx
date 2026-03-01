@@ -107,7 +107,7 @@ import React, { useState, useEffect, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'next/navigation'
 import { Toaster, toast } from 'sonner'
-import { Plus, Edit2, Trash2, X, Upload, Package, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Image as ImageIcon, Info, Search, FileText } from 'lucide-react'
+import { Plus, Edit2, Trash2, X, Upload, Package, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Image as ImageIcon, Info, Search, FileText, Eye } from 'lucide-react'
 import { MXLayoutWhite } from '@/components/MXLayoutWhite'
 import { MobileHamburgerButton } from '@/components/MobileHamburgerButton'
 import { 
@@ -222,6 +222,8 @@ function validateMenuItemImage(file: File): Promise<{ valid: true } | { valid: f
 
 interface ItemFormProps {
   isEdit?: boolean;
+  /** When true, all fields are read-only and only a Close button is shown (view details in merchant portal). */
+  readOnly?: boolean;
   formData: any;
   setFormData: (data: any) => void;
   imagePreview: string;
@@ -278,6 +280,7 @@ const CUSTOMIZATION_TYPES = ['Radio', 'Checkbox', 'Dropdown', 'Text'];
 function ItemForm(props: ItemFormProps) {
   const {
     isEdit = false,
+    readOnly = false,
     formData,
     setFormData,
     imagePreview,
@@ -502,8 +505,8 @@ function ItemForm(props: ItemFormProps) {
     <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl mx-2 md:mx-0 border border-gray-100">
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100">
         <div>
-          <h2 className="text-base font-bold text-gray-900">{title}</h2>
-          <p className="text-xs text-gray-500">{isEdit ? `Editing: ${currentItemId}` : 'Enter details for the menu item'}</p>
+          <h2 className="text-base font-bold text-gray-900">{readOnly ? 'View menu item details' : title}</h2>
+          <p className="text-xs text-gray-500">{readOnly ? 'View only — editing is managed from the agent dashboard' : (isEdit ? `Editing: ${currentItemId}` : 'Enter details for the menu item')}</p>
         </div>
         <button type="button" onClick={onCancel} className="p-1.5 hover:bg-gray-100 rounded-lg" aria-label="Close">
           <X size={18} className="text-gray-600" />
@@ -532,6 +535,7 @@ function ItemForm(props: ItemFormProps) {
         autoComplete="off"
         onSubmit={async (e) => {
           e.preventDefault();
+          if (readOnly) return;
           if (activeSection === 'main') {
             if (onSaveAndNext) {
               try {
@@ -554,11 +558,11 @@ function ItemForm(props: ItemFormProps) {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <div>
                 <label className="text-xs font-medium text-gray-600">Item name *</label>
-                <input type="text" placeholder="Name" className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.item_name} onChange={e => setFormData({ ...formData, item_name: e.target.value })} required />
+                <input type="text" placeholder="Name" readOnly={readOnly} className={`w-full px-2.5 py-1.5 border rounded text-sm ${readOnly ? 'bg-gray-50 border-gray-200' : 'border-gray-200'}`} value={formData.item_name} onChange={e => !readOnly && setFormData({ ...formData, item_name: e.target.value })} required />
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600">Category *</label>
-                <select className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.category_id ?? ''} onChange={e => setFormData({ ...formData, category_id: e.target.value ? Number(e.target.value) : null })} required>
+                <select disabled={readOnly} className={`w-full px-2.5 py-1.5 border rounded text-sm ${readOnly ? 'bg-gray-50 border-gray-200' : 'border-gray-200'}`} value={formData.category_id ?? ''} onChange={e => !readOnly && setFormData({ ...formData, category_id: e.target.value ? Number(e.target.value) : null })} required>
                   <option value="">Select</option>
                   {categories.map((cat: MenuCategory) => <option key={cat.id} value={cat.id}>{cat.category_name}</option>)}
                 </select>
@@ -568,14 +572,14 @@ function ItemForm(props: ItemFormProps) {
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="text-xs font-medium text-gray-600">Food type</label>
-                <select className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.food_type || ''} onChange={e => setFormData({ ...formData, food_type: e.target.value })}>
+                <select disabled={readOnly} className={`w-full px-2.5 py-1.5 border rounded text-sm ${readOnly ? 'bg-gray-50 border-gray-200' : 'border-gray-200'}`} value={formData.food_type || ''} onChange={e => !readOnly && setFormData({ ...formData, food_type: e.target.value })}>
                   <option value="">—</option>
                   {FOOD_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600">Spice</label>
-                <select className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.spice_level || ''} onChange={e => setFormData({ ...formData, spice_level: e.target.value })}>
+                <select disabled={readOnly} className={`w-full px-2.5 py-1.5 border rounded text-sm ${readOnly ? 'bg-gray-50 border-gray-200' : 'border-gray-200'}`} value={formData.spice_level || ''} onChange={e => !readOnly && setFormData({ ...formData, spice_level: e.target.value })}>
                   <option value="">—</option>
                   {SPICE_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
                 </select>
@@ -608,18 +612,21 @@ function ItemForm(props: ItemFormProps) {
                       className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium bg-orange-100 border border-orange-300 text-orange-800"
                     >
                       {c}
-                      <button
-                        type="button"
-                        onClick={() => toggleCuisine(c)}
-                        className="p-0.5 rounded hover:bg-orange-200 text-orange-600"
-                        aria-label={`Remove ${c}`}
-                      >
-                        <X size={12} />
-                      </button>
+                      {!readOnly && (
+                        <button
+                          type="button"
+                          onClick={() => toggleCuisine(c)}
+                          className="p-0.5 rounded hover:bg-orange-200 text-orange-600"
+                          aria-label={`Remove ${c}`}
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
                     </span>
                   ))}
                 </div>
               )}
+              {!readOnly && (
               <div className="relative mt-1">
                 <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
@@ -630,6 +637,7 @@ function ItemForm(props: ItemFormProps) {
                   className="w-full pl-8 pr-2 py-1.5 border border-gray-200 rounded text-sm"
                 />
               </div>
+              )}
               {(() => {
                 const q = cuisineSearch.trim().toLowerCase();
                 const filtered = q
@@ -648,22 +656,22 @@ function ItemForm(props: ItemFormProps) {
                         return (
                           <label
                             key={c}
-                            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs border cursor-pointer transition-colors ${
-                              disabled ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed' : checked ? 'bg-orange-100 border-orange-300 text-orange-800' : 'bg-white border-gray-200 text-gray-700 hover:border-orange-200'
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs border transition-colors ${
+                              readOnly ? 'bg-gray-50 border-gray-200 text-gray-700 cursor-default' : disabled ? 'bg-gray-50 border-gray-200 text-gray-400 cursor-not-allowed' : checked ? 'bg-orange-100 border-orange-300 text-orange-800 cursor-pointer' : 'bg-white border-gray-200 text-gray-700 hover:border-orange-200 cursor-pointer'
                             }`}
                           >
                             <input
                               type="checkbox"
                               checked={checked}
-                              disabled={disabled}
-                              onChange={() => toggleCuisine(c)}
+                              disabled={disabled || readOnly}
+                              onChange={() => !readOnly && toggleCuisine(c)}
                               className="sr-only"
                             />
                             <span>{c}</span>
                           </label>
                         );
                       })}
-                      {customAdd && (
+                      {!readOnly && customAdd && (
                         <button
                           type="button"
                           disabled={cuisineAtLimit}
@@ -681,7 +689,7 @@ function ItemForm(props: ItemFormProps) {
                         </button>
                       )}
                     </div>
-                    {hasMore && (
+                    {!readOnly && hasMore && (
                       <button
                         type="button"
                         onClick={() => setCuisineViewMore(true)}
@@ -726,6 +734,20 @@ function ItemForm(props: ItemFormProps) {
                     )}
                     <span className="font-medium mt-0.5">{imageLimit != null ? `${imageLimit}/${imageLimit}` : 'Limit'}</span>
                     <span className="mt-0.5 text-[10px] font-semibold text-red-600">Limit Exceeded</span>
+                  </div>
+                ) : readOnly ? (
+                  <div className="w-20 rounded-lg border overflow-hidden flex flex-col items-center justify-center bg-gray-50 border-gray-200">
+                    <div className="w-16 h-16 flex items-center justify-center relative">
+                      {imagePreview ? (
+                        imagePreview.startsWith('blob:') || imagePreview.startsWith('data:') ? (
+                          <img src={imagePreview} alt="" className="w-full h-full object-cover" />
+                        ) : (
+                          <R2Image src={imagePreview} alt="" className="w-full h-full object-cover" />
+                        )
+                      ) : (
+                        <ImageIcon size={20} className="text-gray-400" />
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <>
@@ -776,16 +798,16 @@ function ItemForm(props: ItemFormProps) {
               </div>
               <div className="flex-1 min-w-0">
                 <label className="text-xs font-medium text-gray-600">Description</label>
-                <textarea className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm resize-none" rows={2} placeholder="Optional" value={formData.item_description || ''} onChange={e => setFormData({ ...formData, item_description: e.target.value })} />
+                <textarea readOnly={readOnly} className={`w-full px-2.5 py-1.5 border rounded text-sm resize-none ${readOnly ? 'bg-gray-50 border-gray-200' : 'border-gray-200'}`} rows={2} placeholder="Optional" value={formData.item_description || ''} onChange={e => !readOnly && setFormData({ ...formData, item_description: e.target.value })} />
                 <label className="text-xs font-medium text-gray-600 mt-1 block">Allergens (comma)</label>
-                <input type="text" placeholder="e.g. Nuts, Dairy" className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.allergens || ''} onChange={e => setFormData({ ...formData, allergens: e.target.value })} />
+                <input type="text" readOnly={readOnly} placeholder="e.g. Nuts, Dairy" className={`w-full px-2.5 py-1.5 border rounded text-sm ${readOnly ? 'bg-gray-50 border-gray-200' : 'border-gray-200'}`} value={formData.allergens || ''} onChange={e => !readOnly && setFormData({ ...formData, allergens: e.target.value })} />
               </div>
             </div>
             {/* Pricing row: base, selling, discount%, tax% */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               <div>
                 <label className="text-xs font-medium text-gray-600">Base price (₹) *</label>
-                <input type="number" min="0" step="0.01" className={`w-full px-2.5 py-1.5 border rounded text-sm ${isBasePriceInvalid ? 'border-red-300' : 'border-gray-200'}`} value={formData.base_price} onChange={e => setFormData({ ...formData, base_price: e.target.value })} required />
+                <input type="number" min="0" step="0.01" readOnly={readOnly} className={`w-full px-2.5 py-1.5 border rounded text-sm ${readOnly ? 'bg-gray-50' : ''} ${isBasePriceInvalid ? 'border-red-300' : 'border-gray-200'}`} value={formData.base_price} onChange={e => !readOnly && setFormData({ ...formData, base_price: e.target.value })} required />
                 {isBasePriceInvalid && <span className="text-xs text-red-500">&gt; 0</span>}
               </div>
               <div>
@@ -795,50 +817,51 @@ function ItemForm(props: ItemFormProps) {
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600">Discount %</label>
-                <input type="number" min="0" max="100" step="0.01" className={`w-full px-2.5 py-1.5 border rounded text-sm ${isOfferPercentInvalid ? 'border-red-300' : 'border-gray-200'}`} value={formData.discount_percentage} onChange={e => setFormData({ ...formData, discount_percentage: e.target.value })} />
+                <input type="number" min="0" max="100" step="0.01" readOnly={readOnly} className={`w-full px-2.5 py-1.5 border rounded text-sm ${readOnly ? 'bg-gray-50' : ''} ${isOfferPercentInvalid ? 'border-red-300' : 'border-gray-200'}`} value={formData.discount_percentage} onChange={e => !readOnly && setFormData({ ...formData, discount_percentage: e.target.value })} />
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600">Tax %</label>
-                <input type="number" min="0" max="100" step="0.01" className={`w-full px-2.5 py-1.5 border rounded text-sm ${isTaxPercentInvalid ? 'border-red-300' : 'border-gray-200'}`} value={formData.tax_percentage} onChange={e => setFormData({ ...formData, tax_percentage: e.target.value })} />
+                <input type="number" min="0" max="100" step="0.01" readOnly={readOnly} className={`w-full px-2.5 py-1.5 border rounded text-sm ${readOnly ? 'bg-gray-50' : ''} ${isTaxPercentInvalid ? 'border-red-300' : 'border-gray-200'}`} value={formData.tax_percentage} onChange={e => !readOnly && setFormData({ ...formData, tax_percentage: e.target.value })} />
               </div>
             </div>
             {/* Stock & prep */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               <div className="flex items-center gap-2">
-                <input type="checkbox" checked={formData.in_stock} onChange={e => setFormData({ ...formData, in_stock: e.target.checked })} className="h-4 w-4 text-orange-500 rounded" />
+                <input type="checkbox" checked={formData.in_stock} disabled={readOnly} onChange={e => !readOnly && setFormData({ ...formData, in_stock: e.target.checked })} className="h-4 w-4 text-orange-500 rounded" />
                 <span className="text-xs font-medium text-gray-700">In stock</span>
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600">Avail. qty</label>
-                <input type="number" min="0" className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.available_quantity || ''} onChange={e => setFormData({ ...formData, available_quantity: e.target.value || '' })} placeholder="—" />
+                <input type="number" min="0" readOnly={readOnly} className={`w-full px-2.5 py-1.5 border rounded text-sm ${readOnly ? 'bg-gray-50 border-gray-200' : 'border-gray-200'}`} value={formData.available_quantity || ''} onChange={e => !readOnly && setFormData({ ...formData, available_quantity: e.target.value || '' })} placeholder="—" />
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600">Low stock at</label>
-                <input type="number" min="0" className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.low_stock_threshold || ''} onChange={e => setFormData({ ...formData, low_stock_threshold: e.target.value || '' })} placeholder="—" />
+                <input type="number" min="0" readOnly={readOnly} className={`w-full px-2.5 py-1.5 border rounded text-sm ${readOnly ? 'bg-gray-50 border-gray-200' : 'border-gray-200'}`} value={formData.low_stock_threshold || ''} onChange={e => !readOnly && setFormData({ ...formData, low_stock_threshold: e.target.value || '' })} placeholder="—" />
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600">Prep (min)</label>
-                <input type="number" min="0" className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.preparation_time_minutes ?? 15} onChange={e => setFormData({ ...formData, preparation_time_minutes: Number(e.target.value) || 15 })} />
+                <input type="number" min="0" readOnly={readOnly} className={`w-full px-2.5 py-1.5 border rounded text-sm ${readOnly ? 'bg-gray-50 border-gray-200' : 'border-gray-200'}`} value={formData.preparation_time_minutes ?? 15} onChange={e => !readOnly && setFormData({ ...formData, preparation_time_minutes: Number(e.target.value) || 15 })} />
               </div>
               <div>
                 <label className="text-xs font-medium text-gray-600">Serves</label>
-                <input type="number" min="1" className="w-full px-2.5 py-1.5 border border-gray-200 rounded text-sm" value={formData.serves ?? 1} onChange={e => setFormData({ ...formData, serves: Number(e.target.value) || 1 })} />
+                <input type="number" min="1" readOnly={readOnly} className={`w-full px-2.5 py-1.5 border rounded text-sm ${readOnly ? 'bg-gray-50 border-gray-200' : 'border-gray-200'}`} value={formData.serves ?? 1} onChange={e => !readOnly && setFormData({ ...formData, serves: Number(e.target.value) || 1 })} />
               </div>
             </div>
             {/* Flags: popular, recommended, customizations, variants, active */}
             <div className="flex flex-wrap gap-4 pt-1 border-t border-gray-100">
-              <label className="flex items-center gap-1.5"><input type="checkbox" checked={formData.is_popular} onChange={e => setFormData({ ...formData, is_popular: e.target.checked })} className="h-3.5 w-3.5 text-orange-500 rounded" /><span className="text-xs text-gray-700">Popular</span></label>
-              <label className="flex items-center gap-1.5"><input type="checkbox" checked={formData.is_recommended} onChange={e => setFormData({ ...formData, is_recommended: e.target.checked })} className="h-3.5 w-3.5 text-orange-500 rounded" /><span className="text-xs text-gray-700">Recommended</span></label>
-              <label className="flex items-center gap-1.5"><input type="checkbox" checked={formData.has_customizations} onChange={e => setFormData({ ...formData, has_customizations: e.target.checked })} className="h-3.5 w-3.5 text-orange-500 rounded" /><span className="text-xs text-gray-700">Customizations</span></label>
-              <label className="flex items-center gap-1.5"><input type="checkbox" checked={formData.has_variants} onChange={e => setFormData({ ...formData, has_variants: e.target.checked })} className="h-3.5 w-3.5 text-orange-500 rounded" /><span className="text-xs text-gray-700">Variants</span></label>
-              <label className="flex items-center gap-1.5"><input type="checkbox" checked={formData.is_active} onChange={e => setFormData({ ...formData, is_active: e.target.checked })} className="h-3.5 w-3.5 text-orange-500 rounded" /><span className="text-xs text-gray-700">Active</span></label>
+              <label className="flex items-center gap-1.5"><input type="checkbox" checked={formData.is_popular} disabled={readOnly} onChange={e => !readOnly && setFormData({ ...formData, is_popular: e.target.checked })} className="h-3.5 w-3.5 text-orange-500 rounded" /><span className="text-xs text-gray-700">Popular</span></label>
+              <label className="flex items-center gap-1.5"><input type="checkbox" checked={formData.is_recommended} disabled={readOnly} onChange={e => !readOnly && setFormData({ ...formData, is_recommended: e.target.checked })} className="h-3.5 w-3.5 text-orange-500 rounded" /><span className="text-xs text-gray-700">Recommended</span></label>
+              <label className="flex items-center gap-1.5"><input type="checkbox" checked={formData.has_customizations} disabled={readOnly} onChange={e => !readOnly && setFormData({ ...formData, has_customizations: e.target.checked })} className="h-3.5 w-3.5 text-orange-500 rounded" /><span className="text-xs text-gray-700">Customizations</span></label>
+              <label className="flex items-center gap-1.5"><input type="checkbox" checked={formData.has_variants} disabled={readOnly} onChange={e => !readOnly && setFormData({ ...formData, has_variants: e.target.checked })} className="h-3.5 w-3.5 text-orange-500 rounded" /><span className="text-xs text-gray-700">Variants</span></label>
+              <label className="flex items-center gap-1.5"><input type="checkbox" checked={formData.is_active} disabled={readOnly} onChange={e => !readOnly && setFormData({ ...formData, is_active: e.target.checked })} className="h-3.5 w-3.5 text-orange-500 rounded" /><span className="text-xs text-gray-700">Active</span></label>
             </div>
           </div>
         )}
 
         {activeSection === 'customization' && (
           <div className="space-y-3">
-            <p className="text-xs text-gray-500">Max {CUSTOMIZATION_VARIANT_LIMIT} customizations & variants total. Current: {totalOptionsCount}/{CUSTOMIZATION_VARIANT_LIMIT}</p>
+            {!readOnly && <p className="text-xs text-gray-500">Max {CUSTOMIZATION_VARIANT_LIMIT} customizations & variants total. Current: {totalOptionsCount}/{CUSTOMIZATION_VARIANT_LIMIT}</p>}
+            {!readOnly && (
             <div className="bg-gray-50 p-3 rounded-lg">
               <h3 className="text-xs font-semibold text-gray-700 mb-2">{editingCustomizationIndex !== null ? 'Edit' : 'Add'} customization</h3>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -870,6 +893,7 @@ function ItemForm(props: ItemFormProps) {
                 </div>
               </div>
             </div>
+            )}
 
             {customizations.length > 0 ? (
               <div className="space-y-2">
@@ -882,20 +906,28 @@ function ItemForm(props: ItemFormProps) {
                         {cust.is_required && <span className="text-xs text-red-600 ml-1">Required</span>}
                         <span className="text-xs text-gray-400 ml-1">{cust.min_selection}-{cust.max_selection}</span>
                       </div>
+                      {!readOnly && (
                       <div className="flex gap-1 flex-shrink-0">
                         <button type="button" onClick={() => handleEditCustomization(custIndex)} className="p-1 text-blue-600 hover:bg-blue-50 rounded"><Edit2 size={12} /></button>
                         <button type="button" onClick={() => handleDeleteCustomization(custIndex)} className="p-1 text-red-600 hover:bg-red-50 rounded"><Trash2 size={12} /></button>
                         <button type="button" onClick={() => handleAddAddon(custIndex)} className="text-xs text-orange-600 font-medium px-1.5 py-0.5">+ Addon</button>
                       </div>
+                      )}
                     </div>
                     {cust.addons && cust.addons.length > 0 && (
                       <div className="mt-2 pl-2 border-l border-gray-200 space-y-1">
                         {cust.addons.map((addon, addonIndex) => (
                           <div key={addonIndex} className="flex items-center gap-2">
-                            <input type="text" className="flex-1 min-w-0 px-2 py-1 border border-gray-200 rounded text-xs" value={addon.addon_name} onChange={e => handleUpdateAddon(custIndex, addonIndex, 'addon_name', e.target.value)} placeholder="Name" />
-                            <span className="text-gray-500 text-xs">₹</span>
-                            <input type="number" min="0" step="0.01" className="w-14 px-2 py-1 border border-gray-200 rounded text-xs" value={addon.addon_price} onChange={e => handleUpdateAddon(custIndex, addonIndex, 'addon_price', Number(e.target.value))} />
-                            <button type="button" onClick={() => handleDeleteAddon(custIndex, addonIndex)} className="p-0.5 text-red-500"><Trash2 size={12} /></button>
+                            {readOnly ? (
+                              <span className="text-xs text-gray-800">{addon.addon_name} — ₹{addon.addon_price}</span>
+                            ) : (
+                              <>
+                                <input type="text" className="flex-1 min-w-0 px-2 py-1 border border-gray-200 rounded text-xs" value={addon.addon_name} onChange={e => handleUpdateAddon(custIndex, addonIndex, 'addon_name', e.target.value)} placeholder="Name" />
+                                <span className="text-gray-500 text-xs">₹</span>
+                                <input type="number" min="0" step="0.01" className="w-14 px-2 py-1 border border-gray-200 rounded text-xs" value={addon.addon_price} onChange={e => handleUpdateAddon(custIndex, addonIndex, 'addon_price', Number(e.target.value))} />
+                                <button type="button" onClick={() => handleDeleteAddon(custIndex, addonIndex)} className="p-0.5 text-red-500"><Trash2 size={12} /></button>
+                              </>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -916,21 +948,28 @@ function ItemForm(props: ItemFormProps) {
               </h3>
               {(formData.variants || []).map((v: Variant, idx: number) => (
                 <div key={idx} className="flex flex-wrap items-end gap-3 mb-3 p-2.5 bg-gray-50 rounded-lg border border-gray-200">
-                  <div className="min-w-[120px]">
-                    <label className="text-xs text-gray-600 block mb-0.5">Title *</label>
-                    <input type="text" className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value={v.variant_type ?? ''} onChange={e => { const vars = [...(formData.variants || [])]; vars[idx] = { ...vars[idx], variant_type: e.target.value }; setFormData({ ...formData, variants: vars }); }} placeholder="e.g. Choose Size" />
-                  </div>
-                  <div className="min-w-[100px]">
-                    <label className="text-xs text-gray-600 block mb-0.5">Name *</label>
-                    <input type="text" className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value={v.variant_name} onChange={e => { const vars = [...(formData.variants || [])]; vars[idx] = { ...vars[idx], variant_name: e.target.value }; setFormData({ ...formData, variants: vars }); }} placeholder="e.g. Medium" />
-                  </div>
-                  <div className="min-w-[80px]">
-                    <label className="text-xs text-gray-600 block mb-0.5">Price (₹) *</label>
-                    <input type="number" min="0" step="0.01" className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value={typeof v.variant_price === 'number' ? v.variant_price : ''} onChange={e => { const vars = [...(formData.variants || [])]; vars[idx] = { ...vars[idx], variant_price: Number(e.target.value) || 0 }; setFormData({ ...formData, variants: vars }); }} placeholder="0" />
-                  </div>
-                  <button type="button" onClick={() => { const vars = (formData.variants || []).filter((_: Variant, i: number) => i !== idx); setFormData({ ...formData, variants: vars, has_variants: vars.length > 0 }); }} className="p-1.5 text-red-600 hover:bg-red-50 rounded self-end"><Trash2 size={14} /></button>
+                  {readOnly ? (
+                    <span className="text-sm text-gray-800">{v.variant_type || '—'} / {v.variant_name} — ₹{typeof v.variant_price === 'number' ? v.variant_price : ''}</span>
+                  ) : (
+                    <>
+                      <div className="min-w-[120px]">
+                        <label className="text-xs text-gray-600 block mb-0.5">Title *</label>
+                        <input type="text" className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value={v.variant_type ?? ''} onChange={e => { const vars = [...(formData.variants || [])]; vars[idx] = { ...vars[idx], variant_type: e.target.value }; setFormData({ ...formData, variants: vars }); }} placeholder="e.g. Choose Size" />
+                      </div>
+                      <div className="min-w-[100px]">
+                        <label className="text-xs text-gray-600 block mb-0.5">Name *</label>
+                        <input type="text" className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value={v.variant_name} onChange={e => { const vars = [...(formData.variants || [])]; vars[idx] = { ...vars[idx], variant_name: e.target.value }; setFormData({ ...formData, variants: vars }); }} placeholder="e.g. Medium" />
+                      </div>
+                      <div className="min-w-[80px]">
+                        <label className="text-xs text-gray-600 block mb-0.5">Price (₹) *</label>
+                        <input type="number" min="0" step="0.01" className="w-full px-2 py-1.5 border border-gray-200 rounded text-sm" value={typeof v.variant_price === 'number' ? v.variant_price : ''} onChange={e => { const vars = [...(formData.variants || [])]; vars[idx] = { ...vars[idx], variant_price: Number(e.target.value) || 0 }; setFormData({ ...formData, variants: vars }); }} placeholder="0" />
+                      </div>
+                      <button type="button" onClick={() => { const vars = (formData.variants || []).filter((_: Variant, i: number) => i !== idx); setFormData({ ...formData, variants: vars, has_variants: vars.length > 0 }); }} className="p-1.5 text-red-600 hover:bg-red-50 rounded self-end"><Trash2 size={14} /></button>
+                    </>
+                  )}
                 </div>
               ))}
+              {!readOnly && (
               <button
                 type="button"
                 disabled={(formData.customizations?.length || 0) + (formData.variants?.length || 0) >= CUSTOMIZATION_VARIANT_LIMIT}
@@ -942,13 +981,14 @@ function ItemForm(props: ItemFormProps) {
               >
                 + Add Variant
               </button>
+              )}
             </div>
           </div>
         )}
 
         <div className="flex justify-between items-center mt-4 pt-3 border-t border-gray-200">
-          <button type="button" className="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-600 bg-white border border-gray-200 hover:bg-gray-100" onClick={onCancel} disabled={isSaving}>Cancel</button>
-          {activeSection === 'main' ? (
+          <button type="button" className="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-600 bg-white border border-gray-200 hover:bg-gray-100" onClick={onCancel} disabled={isSaving}>{readOnly ? 'Close' : 'Cancel'}</button>
+          {!readOnly && (activeSection === 'main' ? (
             <button
               type="submit"
               className="px-4 py-1.5 rounded-lg text-sm font-bold text-white bg-orange-500 hover:bg-orange-600 disabled:opacity-60 flex items-center gap-2"
@@ -966,7 +1006,7 @@ function ItemForm(props: ItemFormProps) {
               {isSaving && <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
               {isSaving ? 'Saving...' : 'Submit'}
             </button>
-          )}
+          ))}
         </div>
         {error && <div className="text-red-500 text-xs mt-2">{error}</div>}
       </form>
@@ -1096,19 +1136,23 @@ function MenuContent() {
     planName?: string;
   } | null>(null);
 
-  const [existingMenuSpreadsheetUrl, setExistingMenuSpreadsheetUrl] = useState<string | null>(null);
-  const [existingMenuImageUrls, setExistingMenuImageUrls] = useState<string[]>([]);
-  const [existingMenuSpreadsheetFileName, setExistingMenuSpreadsheetFileName] = useState<string | null>(null);
-  const [existingMenuImageFileNames, setExistingMenuImageFileNames] = useState<string[]>([]);
-  const [menuSpreadsheetVerificationStatus, setMenuSpreadsheetVerificationStatus] = useState<string | null>(null);
-  const [menuImageVerificationStatuses, setMenuImageVerificationStatuses] = useState<string[]>([]);
-  const [menuUploadMode, setMenuUploadMode] = useState<'csv' | 'image' | null>(null);
-  const [menuFile, setMenuFile] = useState<File | null>(null);
+  interface MenuFileEntry { id: number; url: string; fileName: string; type: 'image' | 'pdf' | 'csv'; verificationStatus: string }
+  const [menuFiles, setMenuFiles] = useState<MenuFileEntry[]>([]);
+  const [menuUploadMode, setMenuUploadMode] = useState<'csv' | 'image' | 'pdf' | null>(null);
+  const [menuPendingFiles, setMenuPendingFiles] = useState<File[]>([]);
   const [menuUploading, setMenuUploading] = useState(false);
+  const [menuDeleting, setMenuDeleting] = useState<number | null>(null);
   const [menuReplaceError, setMenuReplaceError] = useState('');
   const [csvValidationError, setCsvValidationError] = useState('');
   const [showMenuFileSection, setShowMenuFileSection] = useState(false);
   const menuFileSectionRef = React.useRef<HTMLDivElement>(null);
+  const menuImageInputRef = React.useRef<HTMLInputElement>(null);
+  const menuFileInputRef = React.useRef<HTMLInputElement>(null);
+  const MAX_MENU_IMAGES = 3;
+  const menuImages = menuFiles.filter(f => f.type === 'image');
+  const menuPdfs = menuFiles.filter(f => f.type === 'pdf');
+  const menuCsvs = menuFiles.filter(f => f.type === 'csv');
+  const hasAnyUploadedMenuFiles = menuFiles.length > 0;
 
   const refetchImageCount = React.useCallback(async () => {
     if (!storeId) return;
@@ -1130,12 +1174,9 @@ function MenuContent() {
       const menuRes = await fetch(`/api/auth/store-menu-media-signed?storeDbId=${storeDbId}`);
       if (menuRes.ok) {
         const menuData = await menuRes.json();
-        setExistingMenuSpreadsheetUrl(menuData.menuSpreadsheetUrl ?? null);
-        setExistingMenuImageUrls(Array.isArray(menuData.menuImageUrls) ? menuData.menuImageUrls : []);
-        setExistingMenuSpreadsheetFileName(menuData.menuSpreadsheetFileName ?? null);
-        setExistingMenuImageFileNames(Array.isArray(menuData.menuImageFileNames) ? menuData.menuImageFileNames : []);
-        setMenuSpreadsheetVerificationStatus(menuData.menuSpreadsheetVerificationStatus ?? null);
-        setMenuImageVerificationStatuses(Array.isArray(menuData.menuImageVerificationStatuses) ? menuData.menuImageVerificationStatuses : []);
+        if (Array.isArray(menuData.files)) {
+          setMenuFiles(menuData.files);
+        }
       }
     } catch {
       // keep previous
@@ -1143,30 +1184,29 @@ function MenuContent() {
   }, [store]);
 
   const handleMenuFileUpload = async () => {
-    if (!storeId || !menuUploadMode || !menuFile) {
-      toast.error('Select CSV or image and choose a file.');
-      return;
-    }
-    const storeDbId = (store as { id?: number })?.id;
-    if (storeDbId == null) {
-      toast.error('Store not loaded.');
+    if (!storeId || !menuUploadMode || menuPendingFiles.length === 0) {
+      toast.error('Select a file type and choose file(s).');
       return;
     }
     if (menuUploadMode === 'csv') {
-      const validation = await validateMenuCsv(menuFile);
+      const validation = await validateMenuCsv(menuPendingFiles[0]);
       if (!validation.valid) {
         setCsvValidationError(validation.error);
         return;
       }
       setCsvValidationError('');
     }
+    if (menuUploadMode === 'image' && menuImages.length + menuPendingFiles.length > MAX_MENU_IMAGES) {
+      setMenuReplaceError(`Maximum ${MAX_MENU_IMAGES} images allowed. You have ${menuImages.length}, trying to add ${menuPendingFiles.length}.`);
+      return;
+    }
     setMenuReplaceError('');
     setMenuUploading(true);
     try {
       const formData = new FormData();
-      formData.append('file', menuFile);
+      for (const f of menuPendingFiles) formData.append('file', f);
       formData.append('storeId', storeId);
-      formData.append('menuUploadMode', menuUploadMode === 'csv' ? 'CSV' : 'IMAGE');
+      formData.append('menuUploadMode', menuUploadMode === 'csv' ? 'CSV' : menuUploadMode === 'pdf' ? 'PDF' : 'IMAGE');
       const res = await fetch('/api/merchant/menu-upload', { method: 'POST', body: formData });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -1174,15 +1214,33 @@ function MenuContent() {
         toast.error(data?.error || 'Upload failed.');
         return;
       }
-      setMenuFile(null);
-      setMenuUploadMode(null);
-      toast.success('Menu file uploaded. It will replace the previous file. Our team will add items from it.');
+      setMenuPendingFiles([]);
+      toast.success(menuUploadMode === 'image' ? 'Menu image(s) uploaded.' : 'Menu file uploaded.');
       await refetchExistingMenuMedia();
-    } catch (e) {
+    } catch {
       setMenuReplaceError('Upload failed. Please try again.');
       toast.error('Upload failed.');
     } finally {
       setMenuUploading(false);
+    }
+  };
+
+  const handleMenuFileDelete = async (fileId: number) => {
+    if (!storeId) return;
+    setMenuDeleting(fileId);
+    try {
+      const res = await fetch(`/api/merchant/menu-upload?storeId=${encodeURIComponent(storeId)}&fileId=${fileId}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data?.error || 'Delete failed.');
+        return;
+      }
+      toast.success('File removed.');
+      await refetchExistingMenuMedia();
+    } catch {
+      toast.error('Delete failed.');
+    } finally {
+      setMenuDeleting(null);
     }
   };
 
@@ -1254,7 +1312,14 @@ function MenuContent() {
         }
         
         setStore(data);
-        
+
+        // Ensure plan limits are enforced (lock excess items) before loading menu items
+        try {
+          await fetch(`/api/merchant/subscription/enforce-limits?storeId=${encodeURIComponent(storeId)}`, { method: 'POST' });
+        } catch {
+          // Non-blocking; menu items will still load, locking may apply on next load
+        }
+
         const res = await fetch(`/api/merchant/menu-items?storeId=${encodeURIComponent(storeId)}`);
         const items = res.ok ? await res.json() : [];
         setMenuItems(Array.isArray(items) ? items : []);
@@ -1303,12 +1368,9 @@ function MenuContent() {
             const menuRes = await fetch(`/api/auth/store-menu-media-signed?storeDbId=${storeDbId}`);
             if (menuRes.ok) {
               const menuData = await menuRes.json();
-              setExistingMenuSpreadsheetUrl(menuData.menuSpreadsheetUrl ?? null);
-              setExistingMenuImageUrls(Array.isArray(menuData.menuImageUrls) ? menuData.menuImageUrls : []);
-              setExistingMenuSpreadsheetFileName(menuData.menuSpreadsheetFileName ?? null);
-              setExistingMenuImageFileNames(Array.isArray(menuData.menuImageFileNames) ? menuData.menuImageFileNames : []);
-              setMenuSpreadsheetVerificationStatus(menuData.menuSpreadsheetVerificationStatus ?? null);
-              setMenuImageVerificationStatuses(Array.isArray(menuData.menuImageVerificationStatuses) ? menuData.menuImageVerificationStatuses : []);
+              if (Array.isArray(menuData.files)) {
+                setMenuFiles(menuData.files);
+              }
             }
           } catch {
             // keep defaults
@@ -2333,18 +2395,9 @@ function MenuContent() {
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
             <button
-              onClick={() => {
-                if (!canAddCategory) return;
-                setCategoryModalMode('add');
-                setCategoryForm({
-                  category_name: '',
-                  is_active: true,
-                });
-                setShowCategoryModal(true);
-              }}
-              disabled={!canAddCategory}
-              title={!canAddCategory ? `Category limit reached (${planLimits?.maxMenuCategories ?? 0})` : undefined}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg transition-colors ${canAddCategory ? 'bg-white text-orange-600 border border-orange-600 hover:bg-orange-50' : 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed'}`}
+              disabled
+              title="Adding categories manually is disabled. Upload a menu file instead."
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed"
             >
               <Plus size={16} />
               Add Category
@@ -2353,16 +2406,9 @@ function MenuContent() {
               )}
             </button>
             <button
-              onClick={() => {
-                if (canAddItem) {
-                  setAddItemSaved(null);
-                  refetchImageCount();
-                  setShowAddModal(true);
-                }
-              }}
-              disabled={!canAddItem}
-              title={!canAddItem ? `Menu item limit reached (${planLimits?.maxMenuItems ?? 0})` : undefined}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg transition-colors ${canAddItem ? 'bg-orange-500 text-white hover:bg-orange-600' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
+              disabled
+              title="Adding menu items manually is disabled. Upload a menu file instead."
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg bg-gray-300 text-gray-500 cursor-not-allowed"
             >
               <Plus size={16} />
               Add Menu Item
@@ -2413,7 +2459,26 @@ function MenuContent() {
           </div>
         </div>
 
-        {/* Menu file (CSV or image) – card shown when "Menu file" button clicked; clear Close button */}
+        {/* Locked items banner – prompt to upgrade */}
+        {(() => {
+          const lockedCount = menuItems.filter((i) => !!(i as any).is_locked_by_plan).length;
+          if (lockedCount === 0) return null;
+          return (
+            <div className="mx-3 sm:mx-4 mb-3 p-3 rounded-xl bg-amber-50 border border-amber-200 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-medium text-amber-900">
+                <span className="font-bold">{lockedCount}</span> item{lockedCount !== 1 ? 's are' : ' is'} locked because your plan limit is exceeded. Upgrade to unlock and manage them.
+              </p>
+              <a
+                href="/mx/store-settings?tab=plans"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-600 text-white font-semibold text-sm hover:bg-amber-700 transition-colors"
+              >
+                Upgrade plan
+              </a>
+            </div>
+          );
+        })()}
+
+        {/* Menu file upload section — shown when "Menu file" button is clicked */}
         {showMenuFileSection && (
         <div ref={menuFileSectionRef} className="mx-3 sm:mx-4 mb-3 rounded-2xl border border-amber-200/90 bg-gradient-to-br from-amber-50/95 to-orange-50/80 shadow-sm overflow-hidden">
           <div className="flex items-start justify-between gap-3 p-4 sm:p-5">
@@ -2422,10 +2487,10 @@ function MenuContent() {
                 <span className="flex items-center justify-center w-9 h-9 rounded-xl bg-amber-100 text-amber-700">
                   <FileText size={20} />
                 </span>
-                Menu file (CSV or image)
+                Menu Files
               </h3>
               <p className="text-sm text-gray-600 mt-1.5">
-                Upload a CSV or menu card image. This replaces any file uploaded during onboarding. Our team will add items from it (pending until then).
+                Upload up to {MAX_MENU_IMAGES} images, or 1 PDF, or 1 CSV. Our team will add items from it.
               </p>
             </div>
             <button
@@ -2437,120 +2502,216 @@ function MenuContent() {
               <X size={20} strokeWidth={2} />
             </button>
           </div>
-          <div className="px-4 sm:px-5 pb-4 sm:pb-5 pt-0">
-          {(existingMenuSpreadsheetUrl || existingMenuImageUrls.length > 0) && (
-            <div className="mb-4 p-3 rounded-xl bg-white/70 border border-amber-100">
-              <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">Current file from onboarding</p>
-              <div className="flex flex-wrap gap-2 items-center">
-                {existingMenuSpreadsheetUrl && (
-                  <span className="inline-flex items-center gap-2 flex-wrap">
-                    <a
-                      href={existingMenuSpreadsheetUrl.startsWith('http') ? existingMenuSpreadsheetUrl : (typeof window !== 'undefined' ? window.location.origin : '') + existingMenuSpreadsheetUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white border border-amber-200 text-sm font-medium text-amber-800 hover:bg-amber-50 hover:border-amber-300 transition-colors shadow-sm"
-                    >
-                      <FileText size={16} />
-                      {existingMenuSpreadsheetFileName || 'View spreadsheet'}
-                    </a>
-                    {menuSpreadsheetVerificationStatus === 'PENDING' && (
-                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
-                        Pending verification
-                      </span>
-                    )}
-                    {menuSpreadsheetVerificationStatus === 'VERIFIED' && (
-                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-green-100 text-green-800 border border-green-200">
-                        Verified
-                      </span>
-                    )}
-                  </span>
-                )}
-                {existingMenuImageUrls.map((url, i) => (
-                  <span key={i} className="inline-flex items-center gap-2">
-                    <a
-                      href={url.startsWith('http') ? url : (typeof window !== 'undefined' ? window.location.origin : '') + url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-white border border-amber-200 text-sm font-medium text-amber-800 hover:bg-amber-50 hover:border-amber-300 transition-colors shadow-sm"
-                    >
-                      <ImageIcon size={16} />
-                      {existingMenuImageFileNames[i] || `Image ${i + 1}`}
-                    </a>
-                    {menuImageVerificationStatuses[i] === 'PENDING' && (
-                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
-                        Pending
-                      </span>
-                    )}
-                    {menuImageVerificationStatuses[i] === 'VERIFIED' && (
-                      <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-medium bg-green-100 text-green-800 border border-green-200">
-                        Verified
-                      </span>
-                    )}
-                  </span>
-                ))}
+
+          <div className="px-4 sm:px-5 pb-4 sm:pb-5 pt-0 space-y-4">
+            {/* Existing uploaded files with remove buttons */}
+            {hasAnyUploadedMenuFiles && (
+              <div className="rounded-xl bg-white/80 border border-amber-100 overflow-hidden">
+                <div className="px-3 pt-3 pb-2">
+                  <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide">Uploaded Files</p>
+                </div>
+                <ul className="list-none m-0 p-0 flex flex-col gap-0 divide-y divide-gray-100">
+                  {menuFiles.map((file) => {
+                    const fullUrl = file.url.startsWith('http') ? file.url : (typeof window !== 'undefined' ? window.location.origin : '') + file.url;
+                    const isDeleting = menuDeleting === file.id;
+                    return (
+                      <li key={file.id} className="flex items-center gap-3 px-3 py-2.5">
+                        {file.type === 'image' ? (
+                          <div className="w-12 h-12 rounded-lg bg-gray-100 overflow-hidden shrink-0 border border-gray-200">
+                            <img src={fullUrl} alt={file.fileName} className="w-full h-full object-cover" loading="lazy" />
+                          </div>
+                        ) : (
+                          <div className="w-12 h-12 rounded-lg bg-gray-100 flex items-center justify-center shrink-0 border border-gray-200">
+                            <span className="text-xs font-bold text-gray-500 uppercase">{file.type}</span>
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-gray-800 truncate">{file.fileName}</p>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <a href={fullUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline">View</a>
+                            {file.verificationStatus === 'VERIFIED' ? (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">Verified</span>
+                            ) : (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">Pending</span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={isDeleting}
+                          onClick={() => handleMenuFileDelete(file.id)}
+                          className="text-xs text-rose-600 hover:text-rose-700 font-medium shrink-0 px-2 py-1.5 rounded-lg hover:bg-rose-50 transition-colors disabled:opacity-50"
+                        >
+                          {isDeleting ? (
+                            <span className="inline-block w-3.5 h-3.5 border-2 border-rose-300 border-t-rose-600 rounded-full animate-spin" />
+                          ) : (
+                            <Trash2 size={15} />
+                          )}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
               </div>
-            </div>
-          )}
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => { setMenuUploadMode('csv'); setMenuFile(null); setCsvValidationError(''); setMenuReplaceError(''); }}
-                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${menuUploadMode === 'csv' ? 'bg-amber-600 text-white shadow-sm' : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'}`}
-              >
-                Upload CSV
-              </button>
-              <button
-                type="button"
-                onClick={() => { setMenuUploadMode('image'); setMenuFile(null); setMenuReplaceError(''); }}
-                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${menuUploadMode === 'image' ? 'bg-amber-600 text-white shadow-sm' : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'}`}
-              >
-                Upload image
-              </button>
-            </div>
-            {menuUploadMode && (
-              <>
-                <label className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer transition-colors">
-                  <Upload size={18} />
-                  {menuFile ? menuFile.name : 'Choose file'}
+            )}
+
+            {/* Pending files (selected but not yet uploaded) */}
+            {menuPendingFiles.length > 0 && (
+              <div className="rounded-xl bg-white/80 border border-blue-100 overflow-hidden">
+                <div className="px-3 pt-3 pb-2">
+                  <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide">Ready to Upload</p>
+                </div>
+                <ul className="list-none m-0 p-0 flex flex-col gap-0 divide-y divide-gray-100">
+                  {menuPendingFiles.map((file, idx) => (
+                    <li key={`pending-${idx}`} className="flex items-center gap-3 px-3 py-2.5">
+                      <div className="w-12 h-12 rounded-lg bg-gray-100 overflow-hidden shrink-0 border border-gray-200 flex items-center justify-center">
+                        {file.type.startsWith('image/') ? (
+                          <img src={URL.createObjectURL(file)} alt={file.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <span className="text-xs font-bold text-gray-500 uppercase">{file.name.split('.').pop()}</span>
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-gray-800 truncate">{file.name}</p>
+                        <p className="text-xs text-gray-500">{(file.size / (1024 * 1024)).toFixed(2)} MB</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setMenuPendingFiles(prev => prev.filter((_, i) => i !== idx))}
+                        className="text-xs text-rose-600 hover:text-rose-700 font-medium shrink-0 px-2 py-1.5 rounded-lg hover:bg-rose-50 transition-colors"
+                      >
+                        <X size={15} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Upload controls */}
+            <div>
+              <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">Upload New File</p>
+              <div className="flex flex-wrap items-center gap-2 mb-3">
+                {(['image', 'pdf', 'csv'] as const).map((mode) => {
+                  const label = mode === 'image' ? `Images (max ${MAX_MENU_IMAGES})` : mode === 'pdf' ? 'PDF' : 'CSV';
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => { setMenuUploadMode(mode); setMenuPendingFiles([]); setCsvValidationError(''); setMenuReplaceError(''); }}
+                      className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${menuUploadMode === mode ? 'bg-amber-600 text-white shadow-sm' : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'}`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {menuUploadMode === 'image' && (
+                <div className="space-y-3">
                   <input
+                    ref={menuImageInputRef}
                     type="file"
-                    accept={menuUploadMode === 'csv' ? '.csv,text/csv,application/csv' : 'image/*'}
+                    accept="image/jpeg,image/jpg,image/png,image/webp"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      const selected = Array.from(e.target.files || []);
+                      const remaining = MAX_MENU_IMAGES - menuImages.length - menuPendingFiles.length;
+                      if (remaining <= 0) {
+                        setMenuReplaceError(`Maximum ${MAX_MENU_IMAGES} images allowed. Remove existing images first.`);
+                        return;
+                      }
+                      const toAdd = selected.slice(0, remaining);
+                      if (toAdd.length < selected.length) {
+                        setMenuReplaceError(`Only ${remaining} more image(s) can be added. ${selected.length - toAdd.length} file(s) skipped.`);
+                      } else {
+                        setMenuReplaceError('');
+                      }
+                      setMenuPendingFiles(prev => [...prev, ...toAdd]);
+                      e.target.value = '';
+                    }}
+                  />
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => menuImageInputRef.current?.click()}
+                      disabled={menuImages.length + menuPendingFiles.length >= MAX_MENU_IMAGES}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Upload size={18} />
+                      Choose images
+                    </button>
+                    <span className="text-xs text-gray-500">
+                      {menuImages.length + menuPendingFiles.length} of {MAX_MENU_IMAGES} · JPG, PNG, WEBP · 5 MB each
+                    </span>
+                  </div>
+                  {menuPendingFiles.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleMenuFileUpload}
+                      disabled={menuUploading}
+                      className="px-5 py-2 rounded-xl bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm transition-colors"
+                    >
+                      {menuUploading ? (
+                        <><span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Uploading…</>
+                      ) : (
+                        <>Upload {menuPendingFiles.length} image{menuPendingFiles.length > 1 ? 's' : ''}</>
+                      )}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {(menuUploadMode === 'pdf' || menuUploadMode === 'csv') && (
+                <div className="space-y-3">
+                  <input
+                    ref={menuFileInputRef}
+                    type="file"
+                    accept={menuUploadMode === 'pdf' ? '.pdf,application/pdf' : '.csv,text/csv,application/csv'}
                     className="hidden"
                     onChange={(e) => {
                       const f = e.target.files?.[0];
-                      setMenuFile(f || null);
+                      if (f) setMenuPendingFiles([f]);
                       setCsvValidationError('');
                       setMenuReplaceError('');
+                      e.target.value = '';
                     }}
                   />
-                </label>
-                <button
-                  type="button"
-                  onClick={handleMenuFileUpload}
-                  disabled={!menuFile || menuUploading}
-                  className="px-4 py-2 rounded-xl bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm transition-colors"
-                >
-                  {menuUploading ? (
-                    <>
-                      <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      Uploading…
-                    </>
-                  ) : (
-                    'Replace menu file'
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => menuFileInputRef.current?.click()}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 cursor-pointer transition-colors"
+                    >
+                      <Upload size={18} />
+                      {menuPendingFiles.length > 0 ? menuPendingFiles[0].name : `Choose ${menuUploadMode.toUpperCase()} file`}
+                    </button>
+                    <span className="text-xs text-gray-500">
+                      {menuUploadMode === 'pdf' ? '1 PDF · max 5 MB' : 'CSV with item_name + price columns'}
+                    </span>
+                  </div>
+                  {menuPendingFiles.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleMenuFileUpload}
+                      disabled={menuUploading}
+                      className="px-5 py-2 rounded-xl bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm transition-colors"
+                    >
+                      {menuUploading ? (
+                        <><span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Uploading…</>
+                      ) : (
+                        <>{(menuUploadMode === 'pdf' ? menuPdfs : menuCsvs).length > 0 ? 'Replace' : 'Upload'} {menuUploadMode.toUpperCase()} file</>
+                      )}
+                    </button>
                   )}
-                </button>
-              </>
-            )}
-          </div>
-          {menuUploadMode === 'csv' && (
-            <p className="text-xs text-gray-500 mt-3">
-              CSV format: header row with at least <strong>item_name</strong> (or name) and <strong>price</strong> (or base_price / selling_price). Min {MENU_CSV_MIN_ROWS} row(s), max {MENU_CSV_MAX_ROWS} rows.
-            </p>
-          )}
-          {(csvValidationError || menuReplaceError) && (
-            <p className="text-sm text-red-600 mt-2" role="alert">{csvValidationError || menuReplaceError}</p>
-          )}
+                </div>
+              )}
+
+              {(csvValidationError || menuReplaceError) && (
+                <p className="text-sm text-red-600 mt-2" role="alert">{csvValidationError || menuReplaceError}</p>
+              )}
+            </div>
           </div>
         </div>
         )}
@@ -2638,38 +2799,49 @@ function MenuContent() {
               const discount = Number(item.discount_percentage);
               const hasDiscount = discount > 0;
               
+              const isLockedByPlan = !!(item as any).is_locked_by_plan;
               return (
-                <div key={item.item_id} className="bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all overflow-hidden">
+                <div key={item.item_id} className={`rounded-xl border shadow-sm hover:shadow-md transition-all overflow-hidden ${isLockedByPlan ? 'bg-gray-50 border-gray-300 opacity-75' : 'bg-white border-gray-200'}`}>
                   <div className="flex p-2.5 h-full gap-2.5">
-                    <div className="w-14 h-14 flex-shrink-0 rounded-lg border border-gray-200 overflow-hidden bg-gray-100">
+                    <div className={`w-14 h-14 flex-shrink-0 rounded-lg border overflow-hidden ${isLockedByPlan ? 'border-gray-300 bg-gray-200' : 'border-gray-200 bg-gray-100'}`}>
                       <R2Image
                         src={item.item_image_url}
                         alt={item.item_name}
-                        className="w-full h-full object-cover"
+                        className={`w-full h-full object-cover ${isLockedByPlan ? 'grayscale' : ''}`}
                         fallbackSrc={ITEM_PLACEHOLDER_SVG}
                       />
                     </div>
                     <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
                       <div className="flex items-start justify-between gap-1 mb-0.5">
                         <div className="flex-1 min-w-0">
-                          <div className="font-bold text-sm text-gray-900 truncate">
+                          <div className="font-bold text-sm text-gray-900 truncate flex items-center gap-1.5">
                             {item.item_name}
+                            {isLockedByPlan && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-100 text-red-700 border border-red-200 whitespace-nowrap" title="This item is locked because your plan limit is exceeded. Upgrade to unlock.">
+                                🔒 Locked
+                              </span>
+                            )}
                           </div>
                           <div className="text-[10px] text-gray-500 font-semibold uppercase tracking-wide">
                             {category?.category_name || 'Uncategorized'}
                           </div>
                         </div>
-                        <label className="inline-flex items-center cursor-pointer flex-shrink-0">
+                        <label className={`inline-flex items-center flex-shrink-0 ${isLockedByPlan ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
                           <input
                             type="checkbox"
                             checked={item.in_stock}
+                            disabled={isLockedByPlan}
                             onChange={() => {
+                              if (isLockedByPlan) {
+                                toast.error('This item is locked. Upgrade your plan to unlock and manage it.');
+                                return;
+                              }
                               setStockToggleItem({ item_id: item.item_id, newStatus: !item.in_stock });
                               setShowStockModal(true);
                             }}
                             className="sr-only peer"
                           />
-                          <div className={`w-7 h-4 bg-gray-200 rounded-full peer peer-checked:bg-green-500 transition-all relative`}>
+                          <div className={`w-7 h-4 bg-gray-200 rounded-full peer peer-checked:bg-green-500 transition-all relative ${isLockedByPlan ? '!bg-gray-300' : ''}`}>
                             <div className={`absolute left-0.5 top-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform ${item.in_stock ? 'translate-x-3' : ''}`}></div>
                           </div>
                         </label>
@@ -2735,20 +2907,10 @@ function MenuContent() {
                         ) : null}
                         <button
                           onClick={() => handleOpenEditModal(item)}
-                          className="min-w-0 flex-1 flex items-center justify-center gap-0.5 px-1 py-1 bg-blue-50 text-blue-600 font-bold rounded-md border border-blue-200 hover:bg-blue-100 transition-all text-[10px]"
+                          className="min-w-0 flex-1 flex items-center justify-center gap-0.5 px-1 py-1 bg-gray-100 text-gray-700 font-bold rounded-md border border-gray-200 hover:bg-gray-200 transition-all text-[10px]"
                         >
-                          <Edit2 size={10} />
-                          <span className="truncate">Edit</span>
-                        </button>
-                        <button
-                          onClick={() => {
-                            setDeleteItemId(item.item_id);
-                            setShowDeleteModal(true);
-                          }}
-                          className="min-w-0 flex-1 flex items-center justify-center gap-0.5 px-1 py-1 bg-red-50 text-red-600 font-bold rounded-md border border-red-200 hover:bg-red-100 transition-all text-[10px]"
-                        >
-                          <Trash2 size={10} />
-                          <span className="truncate">Delete</span>
+                          <Eye size={10} />
+                          <span className="truncate">View Full Details</span>
                         </button>
                       </div>
                     </div>
@@ -2848,9 +3010,25 @@ function MenuContent() {
       {/* Edit Item Modal */}
       {showEditModal && typeof document !== 'undefined' && createPortal(
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-md" onClick={() => setShowEditModal(false)}>
-          <div onClick={e => e.stopPropagation()}>
+          <div onClick={e => e.stopPropagation()} className="max-h-[90vh] overflow-y-auto">
+            {(() => {
+              const editingItem = menuItems.find((m) => m.item_id === editingId);
+              const isEditingLocked = !!(editingItem as any)?.is_locked_by_plan;
+              if (!isEditingLocked) return null;
+              return (
+                <div className="bg-amber-50 border-b border-amber-200 px-4 py-3 flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium text-amber-900">
+                    This item is locked. Upgrade your plan to edit it.
+                  </p>
+                  <a href="/mx/store-settings?tab=plans" className="shrink-0 px-3 py-1.5 rounded-lg bg-amber-600 text-white font-semibold text-sm hover:bg-amber-700">
+                    Upgrade
+                  </a>
+                </div>
+              );
+            })()}
             <ItemForm
               isEdit={true}
+              readOnly={true}
               formData={editForm}
               setFormData={setEditForm}
               imagePreview={editImagePreview}

@@ -68,43 +68,65 @@ export async function GET(req: NextRequest) {
 
     const { data: menuMedia } = await db
       .from("merchant_store_media_files")
-      .select("public_url, r2_key, source_entity, verification_status, created_at, uploaded_by, original_file_name")
+      .select("id, public_url, r2_key, source_entity, verification_status, created_at, uploaded_by, original_file_name")
       .eq("store_id", storeId)
       .eq("media_scope", "MENU_REFERENCE")
       .eq("is_active", true);
 
+    type MediaRow = { id: number; public_url?: string; r2_key?: string; source_entity?: string; verification_status?: string; created_at?: string; original_file_name?: string };
+
+    const emptyResponse = {
+      success: true,
+      files: [] as { id: number; url: string; fileName: string; type: "image" | "pdf" | "csv"; verificationStatus: string }[],
+      menuSpreadsheetUrl: null as string | null,
+      menuImageUrls: [] as string[],
+      menuPdfUrls: [] as string[],
+      menuSpreadsheetFileName: null as string | null,
+      menuImageFileNames: [] as string[],
+      menuPdfFileNames: [] as string[],
+      menuSpreadsheetId: null as number | null,
+      menuImageIds: [] as number[],
+      menuPdfIds: [] as number[],
+      menuSpreadsheetVerificationStatus: null as string | null,
+      menuImageVerificationStatuses: [] as string[],
+      menuPdfVerificationStatuses: [] as string[],
+      menuSpreadsheetUploadedAt: null as string | null,
+    };
+
     if (!menuMedia || menuMedia.length === 0) {
-      return NextResponse.json({
-        success: true,
-        menuSpreadsheetUrl: null,
-        menuImageUrls: [],
-        menuSpreadsheetFileName: null,
-        menuImageFileNames: [],
-        menuSpreadsheetVerificationStatus: null,
-        menuImageVerificationStatuses: [],
-        menuSpreadsheetUploadedAt: null,
-      });
+      return NextResponse.json(emptyResponse);
     }
 
-    const sheetRow = menuMedia.find((m: { source_entity?: string }) => m.source_entity === "ONBOARDING_MENU_SHEET");
-    const imageRows = menuMedia.filter((m: { source_entity?: string }) => m.source_entity === "ONBOARDING_MENU_IMAGE");
-    const rawSheet = sheetRow?.r2_key || sheetRow?.public_url || null;
-    const rawImages = imageRows.map((r: { public_url?: string; r2_key?: string }) => r.r2_key || r.public_url).filter(Boolean) as string[];
+    const sheetRow = menuMedia.find((m: MediaRow) => m.source_entity === "ONBOARDING_MENU_SHEET") as MediaRow | undefined;
+    const imageRows = menuMedia.filter((m: MediaRow) => m.source_entity === "ONBOARDING_MENU_IMAGE") as MediaRow[];
+    const pdfRows = menuMedia.filter((m: MediaRow) => m.source_entity === "ONBOARDING_MENU_PDF") as MediaRow[];
 
-    const menuSpreadsheetUrl = toProxyUrl(rawSheet);
-    const menuImageUrls = rawImages.map((u) => toProxyUrl(u)).filter((u): u is string => !!u);
-    const menuSpreadsheetFileName = (sheetRow as { original_file_name?: string })?.original_file_name ?? null;
-    const menuImageFileNames = imageRows.map((r: { original_file_name?: string }) => r.original_file_name ?? "Menu image");
+    const toUrl = (r: MediaRow) => toProxyUrl(r.r2_key || r.public_url || null);
+
+    const files = (menuMedia as MediaRow[]).map((r) => ({
+      id: r.id,
+      url: toProxyUrl(r.r2_key || r.public_url || null) ?? "",
+      fileName: r.original_file_name ?? "File",
+      type: (r.source_entity === "ONBOARDING_MENU_IMAGE" ? "image" : r.source_entity === "ONBOARDING_MENU_PDF" ? "pdf" : "csv") as "image" | "pdf" | "csv",
+      verificationStatus: r.verification_status ?? "PENDING",
+    })).filter((f) => f.url);
 
     return NextResponse.json({
       success: true,
-      menuSpreadsheetUrl: menuSpreadsheetUrl ?? null,
-      menuImageUrls: menuImageUrls.filter((u): u is string => !!u),
-      menuSpreadsheetFileName,
-      menuImageFileNames,
-      menuSpreadsheetVerificationStatus: (sheetRow as { verification_status?: string })?.verification_status ?? null,
-      menuImageVerificationStatuses: imageRows.map((r: { verification_status?: string }) => r.verification_status ?? "PENDING"),
-      menuSpreadsheetUploadedAt: (sheetRow as { created_at?: string })?.created_at ?? null,
+      files,
+      menuSpreadsheetUrl: sheetRow ? toUrl(sheetRow) : null,
+      menuImageUrls: imageRows.map(toUrl).filter((u): u is string => !!u),
+      menuPdfUrls: pdfRows.map(toUrl).filter((u): u is string => !!u),
+      menuSpreadsheetFileName: sheetRow?.original_file_name ?? null,
+      menuImageFileNames: imageRows.map((r) => r.original_file_name ?? "Menu image"),
+      menuPdfFileNames: pdfRows.map((r) => r.original_file_name ?? "Menu PDF"),
+      menuSpreadsheetId: sheetRow?.id ?? null,
+      menuImageIds: imageRows.map((r) => r.id),
+      menuPdfIds: pdfRows.map((r) => r.id),
+      menuSpreadsheetVerificationStatus: sheetRow?.verification_status ?? null,
+      menuImageVerificationStatuses: imageRows.map((r) => r.verification_status ?? "PENDING"),
+      menuPdfVerificationStatuses: pdfRows.map((r) => r.verification_status ?? "PENDING"),
+      menuSpreadsheetUploadedAt: sheetRow?.created_at ?? null,
     });
   } catch (e) {
     console.error("[store-menu-media-signed]", e);

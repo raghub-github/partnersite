@@ -50,10 +50,10 @@ export async function GET(req: NextRequest) {
       console.error('Error fetching status logs:', statusError);
     }
 
-    // Fetch audit logs (settings changes, etc.)
+    // Fetch audit logs (settings changes, etc.) — STORE entity
     const { data: auditLogs, error: auditError } = await db
       .from('merchant_audit_logs')
-      .select('id, action, action_field, performed_by_id, performed_by_email, performed_by_name, created_at, audit_metadata')
+      .select('id, entity_type, action, action_field, entity_id, performed_by_id, performed_by_email, performed_by_name, created_at, audit_metadata')
       .eq('entity_type', 'STORE')
       .eq('entity_id', internalId)
       .order('created_at', { ascending: false })
@@ -61,6 +61,24 @@ export async function GET(req: NextRequest) {
 
     if (auditError) {
       console.error('Error fetching audit logs:', auditError);
+    }
+
+    // Fetch offer IDs for this store, then audit logs for those offers
+    const { data: offerRows } = await db
+      .from('merchant_offers')
+      .select('id')
+      .eq('store_id', internalId);
+    const offerIds = (offerRows || []).map((r: { id: number }) => r.id);
+    let offerLogs: any[] = [];
+    if (offerIds.length > 0) {
+      const { data: offerAuditData } = await db
+        .from('merchant_audit_logs')
+        .select('id, entity_type, action, action_field, entity_id, performed_by_id, performed_by_email, performed_by_name, created_at, audit_metadata')
+        .eq('entity_type', 'OFFER')
+        .in('entity_id', offerIds)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      offerLogs = offerAuditData || [];
     }
 
     // Combine and format logs
@@ -84,23 +102,44 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // Format audit logs (settings changes)
+    // Format audit logs (settings changes — STORE)
     if (auditLogs) {
       auditLogs.forEach((log: any) => {
         const metadata = log.audit_metadata || {};
         const description = metadata.description || (log.action_field ? `${log.action_field} updated` : `${log.action} updated`);
-        
         combinedLogs.push({
-          id: `audit-${log.id}`, // Prefix with type to ensure uniqueness
+          id: `audit-${log.id}`,
           originalId: log.id,
           action: description,
           action_field: log.action_field || null,
-          restriction_type: null, // For compatibility with old interface
+          restriction_type: null,
           performed_by_id: log.performed_by_id,
           performed_by_email: log.performed_by_email,
           performed_by_name: log.performed_by_name,
           created_at: log.created_at,
           type: 'settings',
+        });
+      });
+    }
+
+    // Format offer audit logs (created/updated/deleted by whom)
+    if (offerLogs.length > 0) {
+      offerLogs.forEach((log: any) => {
+        const metadata = log.audit_metadata || {};
+        const description = metadata.description || `Offer ${log.action.toLowerCase()}`;
+        combinedLogs.push({
+          id: `offer-audit-${log.id}`,
+          originalId: log.id,
+          action: description,
+          action_field: log.action_field || null,
+          restriction_type: null,
+          performed_by_id: log.performed_by_id,
+          performed_by_email: log.performed_by_email,
+          performed_by_name: log.performed_by_name,
+          created_at: log.created_at,
+          type: 'offer',
+          entity_type: 'OFFER',
+          entity_id: log.entity_id,
         });
       });
     }

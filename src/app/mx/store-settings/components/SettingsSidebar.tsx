@@ -1,6 +1,6 @@
 'use client'
 
-import { Crown, Clock, Power, ChefHat, Package, Smartphone, Bell, Activity, Users } from 'lucide-react'
+import { Crown, Clock, Power, ChefHat, Layers, Package, Smartphone, Bell, Activity, Users } from 'lucide-react'
 
 interface SettingsSidebarProps {
   activeTab: string
@@ -13,8 +13,7 @@ export function SettingsSidebar({ activeTab, onTabChange }: SettingsSidebarProps
     { id: 'timings', label: 'Outlet Timings', icon: Clock },
     { id: 'operations', label: 'Store Operations', icon: Power },
     { id: 'menu-capacity', label: 'Menu & Capacity', icon: ChefHat },
-    { id: 'delivery', label: 'Delivery Settings', icon: Package },
-    { id: 'riders', label: 'Self-Delivery Riders', icon: Users },
+    { id: 'delivery', label: 'Delivery & Riders', icon: Package },
     { id: 'pos', label: 'POS Integration', icon: Smartphone },
     { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'audit', label: 'Audit & Activity', icon: Activity },

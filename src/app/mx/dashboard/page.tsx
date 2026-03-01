@@ -292,6 +292,7 @@ function DashboardContent() {
   const [chartDateFrom, setChartDateFrom] = useState('')
   const [chartDateTo, setChartDateTo] = useState('')
   const [chartOrderType, setChartOrderType] = useState('all')
+  const [mobileGraphsOpen, setMobileGraphsOpen] = useState(false)
   const [statusLog, setStatusLog] = useState<{ id: string | number; action: string; action_field?: string | null; restriction_type?: string | null; close_reason?: string | null; performed_by_name: string | null; performed_by_id: string | number | null; performed_by_email: string | null; created_at: string; type?: 'status' | 'settings' }[]>([])
 
   const { data: walletData, isLoading: walletLoading } = useMerchantWallet(storeId)
@@ -1065,8 +1066,8 @@ function DashboardContent() {
         restaurantId={storeId || DEMO_STORE_ID}
       >
         <div className="flex-1 flex flex-col min-h-0 bg-[#f8fafc] overflow-hidden w-full">
-          <div className="dashboard-scroll hide-scrollbar flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 sm:px-6 lg:px-8 py-5">
-            <div className="max-w-[1600px] mx-auto space-y-5">
+          <div className="dashboard-scroll hide-scrollbar flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-3 sm:px-5 lg:px-8 py-4 sm:py-6">
+            <div className="max-w-[1600px] mx-auto space-y-6 sm:space-y-8">
               {/* Compact header – minimal height */}
               <div className="shrink-0 -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 py-2.5 sm:py-3 bg-white border-b border-gray-200 shadow-sm">
                 <div className="flex items-center gap-3">
@@ -1081,7 +1082,7 @@ function DashboardContent() {
               </div>
 
               {/* Three compact cards: Wallet (replaces Ordering mode) | Store Status | Delivery status */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-5 lg:gap-6">
                 {/* Wallet & Earnings – in place of Ordering mode card */}
                 <div className="bg-gradient-to-br from-emerald-50/90 to-green-50/70 rounded-xl border border-emerald-200/80 shadow-sm hover:shadow-md transition-shadow p-4">
                   <div className="flex items-center gap-2 mb-3">
@@ -1257,7 +1258,7 @@ function DashboardContent() {
                         <>
                           <p className="text-xs text-amber-700 mb-1">Add your first rider to use self delivery.</p>
                           <Link
-                            href={storeId ? `/mx/store-settings?storeId=${encodeURIComponent(storeId)}&tab=riders` : '/mx/store-settings'}
+                            href={storeId ? `/mx/store-settings?storeId=${encodeURIComponent(storeId)}&tab=delivery` : '/mx/store-settings'}
                             className="text-xs font-medium text-orange-600 hover:text-orange-700"
                           >
                             Add rider in Settings →
@@ -1278,7 +1279,7 @@ function DashboardContent() {
                             <p className="text-[10px] text-gray-500 mt-1">+{selfDeliveryRiders.length - 2} more</p>
                           )}
                           <Link
-                            href={storeId ? `/mx/store-settings?storeId=${encodeURIComponent(storeId)}&tab=riders` : '/mx/store-settings'}
+                            href={storeId ? `/mx/store-settings?storeId=${encodeURIComponent(storeId)}&tab=delivery` : '/mx/store-settings'}
                             className="text-[10px] font-medium text-orange-600 hover:text-orange-700 mt-1 inline-block"
                           >
                             Manage all riders →
@@ -1342,9 +1343,26 @@ function DashboardContent() {
                 <StatCard title="Acceptance %" value={`${acceptanceRate}%`} icon={<CheckCircle2 size={18} />} color="emerald" />
               </div>
 
+              {/* Mobile/small: button to show graphs (hidden on md+) */}
+              <div className="md:hidden mb-3">
+                <button
+                  type="button"
+                  onClick={() => setMobileGraphsOpen((prev) => !prev)}
+                  className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border-2 border-dashed border-orange-200 bg-orange-50/80 text-orange-700 font-semibold text-sm hover:bg-orange-100/80 transition-colors"
+                  aria-expanded={mobileGraphsOpen}
+                >
+                  <BarChart3 size={18} aria-hidden />
+                  {mobileGraphsOpen ? 'Hide graphs & analytics' : 'View graphs & analytics'}
+                  <ChevronUp size={16} className={mobileGraphsOpen ? '' : 'rotate-180'} aria-hidden />
+                </button>
+              </div>
+
+              {/* ═══ GRAPHS SECTION: on md+ always visible; on small/mobile only when toggle is open ═══ */}
+              <div className={mobileGraphsOpen ? 'block' : 'hidden md:block'}>
+              <div className="space-y-6 sm:space-y-8">
               {/* ═══ SALES & VIEWS (image-style advanced charts) ═══ */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5 lg:gap-6">
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-md hover:shadow-lg transition-shadow p-4 sm:p-5 lg:p-6">
                   <div className="relative">
                     <ChartCardHeader
                       title="Sales"
@@ -1382,7 +1400,7 @@ function DashboardContent() {
                     </ResponsiveContainer>
                   </div>
                 </div>
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4">
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-md hover:shadow-lg transition-shadow p-4 sm:p-5 lg:p-6">
                   <div className="relative">
                     <ChartCardHeader
                       title="Views"
@@ -1423,8 +1441,8 @@ function DashboardContent() {
               </div>
 
               {/* ═══ ANALYTICS & GRAPHS (from orders_food) ═══ */}
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-5 lg:gap-6">
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-md hover:shadow-lg transition-shadow p-4 sm:p-5 lg:p-6 relative">
                   <ChartCardHeader
                     title="Orders trend"
                     dateRange={dateRangeLabel || '—'}
@@ -1456,7 +1474,7 @@ function DashboardContent() {
                     </ResponsiveContainer>
                   </div>
                 </div>
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-md hover:shadow-lg transition-shadow p-4 sm:p-5 lg:p-6 relative">
                   <ChartCardHeader
                     title="Revenue analytics"
                     dateRange={dateRangeLabel || '—'}
@@ -1490,8 +1508,8 @@ function DashboardContent() {
                   </div>
                 </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-5 lg:gap-6">
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-md hover:shadow-lg transition-shadow p-4 sm:p-5 lg:p-6 relative">
                   <ChartCardHeader
                     title="Order category (Veg/Non-Veg)"
                     dateRange={dateRangeLabel || '—'}
@@ -1522,7 +1540,7 @@ function DashboardContent() {
                     </ResponsiveContainer>
                   </div>
                 </div>
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-md hover:shadow-lg transition-shadow p-4 sm:p-5 lg:p-6 relative min-w-0 overflow-hidden">
                   <ChartCardHeader
                     title="Hourly order heatmap"
                     dateRange={dateRangeLabel || '—'}
@@ -1542,16 +1560,16 @@ function DashboardContent() {
                       onApply={() => fetchCharts()}
                     />
                   )}
-                  <div className="flex items-end gap-1 h-[100px]">
+                  <div className="flex items-end gap-1 sm:gap-1.5 h-[100px] min-h-[100px] overflow-x-auto overflow-y-hidden pb-1">
                     {(hourlyHeatmap.length ? hourlyHeatmap : [10,11,12,13,14,15,16,17,18,19,20,21].map((hour) => ({ hour, count: 0, pct: 0 }))).map((item, i) => (
-                      <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1 h-full">
+                      <div key={i} className="flex-1 min-w-[28px] sm:min-w-0 flex flex-col items-center justify-end gap-1 h-full">
                         <div className="w-full rounded-t bg-orange-400 min-h-[6px]" style={{ height: `${item.pct || 0}%` }} title={`${item.hour}:00 · ${item.count || 0} orders`} />
                         <span className="text-[9px] text-gray-500">{item.hour}</span>
                       </div>
                     ))}
                   </div>
                 </div>
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-md hover:shadow-lg transition-shadow p-4 sm:p-5 lg:p-6 relative">
                   <ChartCardHeader
                     title="Weekly performance"
                     dateRange={dateRangeLabel || '—'}
@@ -1583,7 +1601,7 @@ function DashboardContent() {
                   </div>
                 </div>
               </div>
-              <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+              <div className="bg-white rounded-2xl border border-gray-200 shadow-md hover:shadow-lg transition-shadow p-4 sm:p-5 lg:p-6 relative">
                 <ChartCardHeader
                   title="Delivery success rate"
                   dateRange={dateRangeLabel || '—'}
@@ -1617,8 +1635,8 @@ function DashboardContent() {
               </div>
 
               {/* ═══ ADVANCED ANALYTICS (Stacked Area, Exploded Pie, Donut, Funnel) ═══ */}
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-5 lg:gap-6">
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-md hover:shadow-lg transition-shadow p-4 sm:p-5 lg:p-6 relative">
                   <ChartCardHeader
                     title="Multi-metric trends"
                     dateRange={dateRangeLabel || '—'}
@@ -1659,7 +1677,7 @@ function DashboardContent() {
                     </ResponsiveContainer>
                   </div>
                 </div>
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-md hover:shadow-lg transition-shadow p-4 sm:p-5 lg:p-6 relative">
                   <ChartCardHeader
                     title="Order type distribution"
                     dateRange={dateRangeLabel || '—'}
@@ -1701,8 +1719,8 @@ function DashboardContent() {
                   </div>
                 </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-4">
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-4 sm:gap-5 lg:gap-6">
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-md hover:shadow-lg transition-shadow p-4 sm:p-5 lg:p-6 relative">
                   <ChartCardHeader
                     title="Veg / Non-Veg breakdown"
                     dateRange={dateRangeLabel || '—'}
@@ -1744,7 +1762,7 @@ function DashboardContent() {
                     </ResponsiveContainer>
                   </div>
                 </div>
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4 relative">
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-md hover:shadow-lg transition-shadow p-4 sm:p-5 lg:p-6 relative">
                   <ChartCardHeader
                     title="Order lifecycle funnel"
                     dateRange={dateRangeLabel || '—'}
@@ -1796,9 +1814,13 @@ function DashboardContent() {
                 </div>
               </div>
 
+              </div>
+              </div>
+              {/* End graphs section (mobile collapse wrapper) */}
+
               {/* ═══ RECENT ACTIVITIES (from merchant_store_status_log) ═══ */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5 lg:gap-6">
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-md hover:shadow-lg transition-shadow p-4 sm:p-5 lg:p-6">
                   <h3 className="text-sm font-bold text-gray-900 mb-3">Recent activities</h3>
                   <div className="overflow-x-auto max-h-[260px] overflow-y-auto hide-scrollbar">
                     <table className="w-full text-left text-xs">
@@ -1832,7 +1854,7 @@ function DashboardContent() {
                     </table>
                   </div>
                 </div>
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4">
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-md hover:shadow-lg transition-shadow p-4 sm:p-5 lg:p-6">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-sm font-bold text-gray-900">Audit log snapshot</h3>
                     <Link href={storeId ? `/mx/audit-logs?storeId=${encodeURIComponent(storeId)}` : '/mx/audit-logs'} className="text-xs font-semibold text-orange-600 hover:text-orange-700">View full audit logs</Link>
@@ -1869,7 +1891,7 @@ function DashboardContent() {
 
               {/* ═══ PERFORMANCE INSIGHTS (from orders_food KPIs) ═══ */}
               <div>
-                <div className="bg-white rounded-xl border border-gray-200/80 shadow-sm p-4">
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-md hover:shadow-lg transition-shadow p-4 sm:p-5 lg:p-6">
                   <h3 className="text-sm font-bold text-gray-900 mb-3">Performance insights</h3>
                   <div className="overflow-x-auto">
                     <table className="w-full text-xs">

@@ -3,38 +3,20 @@
 import React, { useState, useEffect, Suspense, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { MXLayoutWhite } from '@/components/MXLayoutWhite'
-import { fetchStoreById, fetchStoreByName, fetchAllOffers, createOffer, updateOffer, deleteOffer, uploadOfferImage, fetchMenuItems } from '@/lib/database'
-import { Plus, Edit2, Trash2, Zap, X, Calendar, Percent, DollarSign, Tag, Gift, User, Clock, ShoppingBag, CheckCircle, ChevronDown, Copy, Search, Check, Sparkles, ExternalLink, ChevronRight, Star, Shield, Award, Target, TrendingUp } from 'lucide-react'
+import { fetchStoreById, fetchStoreByName, fetchAllOffers, fetchMenuCategories } from '@/lib/database'
+import type { Offer as DbOffer, OfferType, ApplicabilityType } from '@/lib/database'
+import { Plus, Edit2, Trash2, Zap, X, Calendar, Percent, DollarSign, Tag, Gift, User, Clock, ShoppingBag, ChevronDown, Copy, Search, Check, Sparkles, Truck, Layers, Package } from 'lucide-react'
 import { PageSkeletonGeneric } from '@/components/PageSkeleton'
 import { Toaster, toast } from 'sonner'
 import { MobileHamburgerButton } from '@/components/MobileHamburgerButton'
 
 export const dynamic = 'force-dynamic'
 
+type Offer = DbOffer
+
 interface MerchantStore {
   id: string;
   store_name: string;
-}
-
-interface Offer {
-  offer_id: string;
-  store_id: number; // bigint
-  offer_title: string;
-  offer_description: string | null;
-  offer_type: 'BUY_N_GET_M' | 'PERCENTAGE' | 'FLAT' | 'COUPON' | 'FREE_ITEM';
-  offer_sub_type: 'ALL_ORDERS' | 'SPECIFIC_ITEM';
-  menu_item_ids: string[] | null;
-  discount_value: string | null; // numeric(10,2) comes as string
-  min_order_amount: string | null; // numeric(10,2) comes as string
-  buy_quantity: number | null;
-  get_quantity: number | null;
-  coupon_code: string | null;
-  image_url: string | null;
-  valid_from: string;
-  valid_till: string;
-  is_active: boolean | null;
-  created_at: string;
-  updated_at: string;
 }
 
 interface MenuItem {
@@ -44,7 +26,81 @@ interface MenuItem {
   food_category_item: string;
   actual_price: number;
   in_stock: boolean;
+  category_id?: number;
 }
+
+/** Upload offer banner image to R2 via API (one image per offer; design path docs/merchants/{parent}/stores/{storeId}/offers/{offerId}.ext) */
+async function uploadOfferImageViaApi(
+  storeId: string,
+  offerId: string,
+  file: File,
+  currentImageUrl?: string | null
+): Promise<string | null> {
+  const form = new FormData();
+  form.set('file', file);
+  form.set('storeId', storeId);
+  form.set('offerId', offerId);
+  if (currentImageUrl) form.set('currentImageUrl', currentImageUrl);
+  const res = await fetch('/api/merchant/offers/upload-image', {
+    method: 'POST',
+    body: form,
+    credentials: 'include',
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data?.url ?? null;
+}
+
+/** Fetch menu items via API (same as menu page; bypasses RLS and returns consistent shape) */
+async function fetchMenuItemsForOffers(storeId: string): Promise<MenuItem[]> {
+  try {
+    const res = await fetch(`/api/merchant/menu-items?storeId=${encodeURIComponent(storeId)}`, { credentials: 'include' });
+    if (!res.ok) return [];
+    const raw = await res.json();
+    const list = Array.isArray(raw) ? raw : [];
+    return list.map((item: Record<string, unknown>) => ({
+      item_id: String(item.item_id ?? item.id ?? ''),
+      item_name: String(item.item_name ?? ''),
+      category_type: String(item.food_type ?? item.category_type ?? 'VEG'),
+      food_category_item: String(item.food_type ?? item.cuisine_type ?? '-'),
+      actual_price: Number(item.selling_price ?? item.base_price ?? 0),
+      in_stock: item.in_stock !== false,
+      category_id: item.category_id != null ? Number(item.category_id) : undefined,
+    })).filter((m: MenuItem) => m.item_id);
+  } catch {
+    return [];
+  }
+}
+
+interface MenuCategory {
+  id: number;
+  category_name: string;
+  display_order?: number;
+}
+
+const OFFER_TYPES: { type: OfferType | 'BUY_N_GET_M' | 'COUPON'; label: string; icon: React.ReactNode }[] = [
+  { type: 'PERCENTAGE', label: 'Percentage discount', icon: <Percent size={18} className="text-emerald-600" /> },
+  { type: 'FLAT', label: 'Flat discount', icon: <DollarSign size={18} className="text-blue-600" /> },
+  { type: 'BUY_X_GET_Y', label: 'Buy X Get Y', icon: <Gift size={18} className="text-violet-600" /> },
+  { type: 'BUY_N_GET_M', label: 'Buy N Get M', icon: <Gift size={18} className="text-purple-600" /> },
+  { type: 'TIERED', label: 'Tiered (spend more, save more)', icon: <Layers size={18} className="text-amber-600" /> },
+  { type: 'FREE_DELIVERY', label: 'Free delivery', icon: <Truck size={18} className="text-teal-600" /> },
+  { type: 'FREE_ITEM', label: 'Free item', icon: <Package size={18} className="text-orange-600" /> },
+  { type: 'COUPON', label: 'Coupon code', icon: <Tag size={18} className="text-rose-600" /> },
+]
+
+const APPLICABILITY_OPTIONS: { value: ApplicabilityType | 'ALL_ORDERS' | 'SPECIFIC_ITEM'; label: string }[] = [
+  { value: 'ALL', label: 'All items' },
+  { value: 'SPECIFIC_ITEMS_SET', label: 'Specific items' },
+  { value: 'CATEGORY', label: 'Categories' },
+  { value: 'CART', label: 'Cart level' },
+  { value: 'DELIVERY', label: 'Delivery' },
+]
+
+const DAYS_OF_WEEK = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'] as const
+type Step = 'basic' | 'type' | 'applicability' | 'conditions' | 'stackability'
+const STEPS: Step[] = ['basic', 'type', 'applicability', 'conditions', 'stackability']
+const STEP_LABELS: Record<Step, string> = { basic: 'Basic info', type: 'Offer type', applicability: 'Where it applies', conditions: 'Conditions', stackability: 'Stacking & priority' }
 
 function OffersContent() {
   const searchParams = useSearchParams()
@@ -54,44 +110,50 @@ function OffersContent() {
   const [offers, setOffers] = useState<Offer[]>([])
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
   
-  // Modal states
+  const [menuCategories, setMenuCategories] = useState<MenuCategory[]>([])
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
-  const [activeTab, setActiveTab] = useState<'basic' | 'details' | 'validity'>('basic')
+  const [step, setStep] = useState<Step>('basic')
+  const [activeTab, setActiveTab] = useState<'basic' | 'type' | 'applicability' | 'conditions' | 'stackability'>('basic')
   
-  // Form state - FIX: Use controlled components with proper state management
   const [formData, setFormData] = useState({
     offer_title: '',
     offer_description: '',
-    offer_type: 'PERCENTAGE' as Offer['offer_type'],
-    offer_sub_type: 'ALL_ORDERS' as Offer['offer_sub_type'],
+    offer_type: 'PERCENTAGE' as OfferType | 'BUY_N_GET_M' | 'COUPON',
+    offer_sub_type: 'ALL_ORDERS' as string,
+    applicability_type: 'ALL' as ApplicabilityType,
     menu_item_ids: [] as string[],
+    category_ids: [] as number[],
     discount_value: '',
+    discount_percentage: '',
+    max_discount_amount: '',
     min_order_amount: '',
+    max_order_amount: '',
     buy_quantity: '',
     get_quantity: '',
     valid_from: '',
-    valid_till: ''
+    valid_till: '',
+    coupon_code: '',
+    auto_apply: true,
+    first_order_only: false,
+    max_uses_total: '',
+    max_uses_per_user: '',
+    applicable_on_days: [] as string[],
+    applicable_time_start: '',
+    applicable_time_end: '',
+    is_stackable: false,
+    priority: '0',
+    tiered_tiers: [] as { min: string; discount: string }[],
   })
   
-  // Track if form is initialized from an existing offer
-  const [formInitialized, setFormInitialized] = useState(false)
-  
-  // Image state
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
-  
-  // Dropdown states
   const [showOfferTypeDropdown, setShowOfferTypeDropdown] = useState(false)
   const [showApplyToDropdown, setShowApplyToDropdown] = useState(false)
-  
-  // Menu items search state
   const [menuItemSearch, setMenuItemSearch] = useState('')
   const [showMenuItemSuggestions, setShowMenuItemSuggestions] = useState(false)
   const [filteredMenuItems, setFilteredMenuItems] = useState<MenuItem[]>([])
-  
-  // Coupon code state
   const [generatedCouponCode, setGeneratedCouponCode] = useState<string>('')
   const [isGeneratingCoupon, setIsGeneratingCoupon] = useState(false)
   
@@ -150,11 +212,14 @@ function OffersContent() {
         const offersData = await fetchAllOffers(storeId)
         setOffers(offersData || [])
         
-        // Load menu items for selection
-        const items = await fetchMenuItems(storeId)
+        // Load menu items (via API for auth/RLS) and categories for selection
+        const [items, categories] = await Promise.all([
+          fetchMenuItemsForOffers(storeId),
+          fetchMenuCategories(storeId),
+        ])
         setMenuItems(items || [])
         setFilteredMenuItems(items || [])
-        
+        setMenuCategories(categories || [])
       } catch (error) {
         console.error('Error loading offers:', error)
         toast.error('Failed to load offers')
@@ -245,6 +310,8 @@ function OffersContent() {
     }, 500)
   }
 
+  const offerImageInputRef = useRef<HTMLInputElement>(null)
+
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
@@ -255,29 +322,52 @@ function OffersContent() {
       }
       reader.readAsDataURL(file)
     }
+    e.target.value = ''
+  }
+
+  const handleRemoveOfferImage = () => {
+    setImageFile(null)
+    setImagePreview(null)
+    offerImageInputRef.current?.value && (offerImageInputRef.current.value = '')
   }
 
   const handleOpenModal = (offer?: Offer) => {
     if (offer) {
       setEditingId(offer.offer_id)
+      const meta = (offer.offer_metadata || {}) as { category_ids?: number[]; tiers?: { min: number; discount: number }[]; menu_item_ids?: string[] }
       setFormData({
         offer_title: offer.offer_title,
         offer_description: offer.offer_description || '',
-        offer_type: offer.offer_type,
-        offer_sub_type: offer.offer_sub_type,
-        menu_item_ids: offer.menu_item_ids || [],
-        discount_value: offer.discount_value?.toString() || '',
-        min_order_amount: offer.min_order_amount?.toString() || '',
-        buy_quantity: offer.buy_quantity?.toString() || '',
-        get_quantity: offer.get_quantity?.toString() || '',
+        offer_type: offer.offer_type as Offer['offer_type'],
+        offer_sub_type: offer.offer_sub_type || 'ALL_ORDERS',
+        applicability_type: (offer.offer_sub_type === 'SPECIFIC_ITEM' ? 'SPECIFIC_ITEMS_SET' : offer.offer_sub_type === 'ALL_ORDERS' ? 'ALL' : (offer as any).applicability_type) || 'ALL',
+        menu_item_ids: offer.menu_item_ids ?? meta.menu_item_ids ?? [],
+        category_ids: meta.category_ids || [],
+        discount_value: offer.discount_value?.toString() ?? '',
+        discount_percentage: offer.discount_percentage?.toString() ?? '',
+        max_discount_amount: offer.max_discount_amount?.toString() ?? '',
+        min_order_amount: offer.min_order_amount?.toString() ?? '',
+        max_order_amount: offer.max_order_amount?.toString() ?? '',
+        buy_quantity: offer.buy_quantity?.toString() ?? '',
+        get_quantity: offer.get_quantity?.toString() ?? '',
         valid_from: offer.valid_from.split('T')[0],
-        valid_till: offer.valid_till.split('T')[0]
+        valid_till: offer.valid_till.split('T')[0],
+        coupon_code: offer.coupon_code ?? '',
+        auto_apply: offer.auto_apply ?? true,
+        first_order_only: offer.first_order_only ?? false,
+        max_uses_total: offer.max_uses_total?.toString() ?? '',
+        max_uses_per_user: offer.max_uses_per_user?.toString() ?? '',
+        applicable_on_days: offer.applicable_on_days || [],
+        applicable_time_start: offer.applicable_time_start ?? '',
+        applicable_time_end: offer.applicable_time_end ?? '',
+        is_stackable: offer.is_stackable ?? false,
+        priority: offer.priority?.toString() ?? '0',
+        tiered_tiers: (meta.tiers || []).map((t: { min: number; discount: number }) => ({ min: String(t.min), discount: String(t.discount) })),
       })
-      setImagePreview(offer.image_url)
-      if (offer.offer_type === 'COUPON') {
+      setImagePreview(offer.image_url ?? offer.offer_image_url ?? null)
+      if (offer.offer_type === 'COUPON' || offer.coupon_code) {
         setGeneratedCouponCode(offer.coupon_code || '')
       }
-      setFormInitialized(true)
     } else {
       setEditingId(null)
       setFormData({
@@ -285,17 +375,32 @@ function OffersContent() {
         offer_description: '',
         offer_type: 'PERCENTAGE',
         offer_sub_type: 'ALL_ORDERS',
+        applicability_type: 'ALL',
         menu_item_ids: [],
+        category_ids: [],
         discount_value: '',
+        discount_percentage: '',
+        max_discount_amount: '',
         min_order_amount: '',
+        max_order_amount: '',
         buy_quantity: '',
         get_quantity: '',
         valid_from: '',
-        valid_till: ''
+        valid_till: '',
+        coupon_code: '',
+        auto_apply: true,
+        first_order_only: false,
+        max_uses_total: '',
+        max_uses_per_user: '',
+        applicable_on_days: [],
+        applicable_time_start: '',
+        applicable_time_end: '',
+        is_stackable: false,
+        priority: '0',
+        tiered_tiers: [],
       })
       setImagePreview(null)
       setGeneratedCouponCode('')
-      setFormInitialized(true)
     }
     setImageFile(null)
     setShowOfferTypeDropdown(false)
@@ -304,6 +409,14 @@ function OffersContent() {
     setMenuItemSearch('')
     setShowModal(true)
     setActiveTab('basic')
+    setStep('basic')
+    // Refetch menu items when opening modal so "Specific items" selection has fresh data
+    if (storeId) {
+      fetchMenuItemsForOffers(storeId).then((items) => {
+        setMenuItems(items)
+        setFilteredMenuItems(items)
+      }).catch(() => {})
+    }
   }
 
   const handleSaveOffer = async () => {
@@ -336,9 +449,14 @@ function OffersContent() {
       return
     }
 
-    // Specific items validation
-    if (formData.offer_sub_type === 'SPECIFIC_ITEM' && formData.menu_item_ids.length === 0) {
+    // Applicability validation
+    const applicabilityType = formData.applicability_type || (formData.offer_sub_type === 'SPECIFIC_ITEM' ? 'SPECIFIC_ITEMS_SET' : 'ALL')
+    if ((applicabilityType === 'SPECIFIC_ITEMS_SET' || formData.offer_sub_type === 'SPECIFIC_ITEM') && formData.menu_item_ids.length === 0) {
       toast.error('Please select at least one menu item when applying to specific items')
+      return
+    }
+    if (applicabilityType === 'CATEGORY' && formData.category_ids.length === 0) {
+      toast.error('Please select at least one category when applying to categories')
       return
     }
 
@@ -380,6 +498,12 @@ function OffersContent() {
           errorMessage = 'Minimum order amount is required for free item offers'
         }
         break
+      case 'TIERED':
+        if (!formData.tiered_tiers.length || formData.tiered_tiers.some(t => !t.min || !t.discount)) {
+          isValid = false
+          errorMessage = 'Add at least one tier (min amount and discount) for tiered offers'
+        }
+        break
     }
 
     // Coupon validation
@@ -396,42 +520,93 @@ function OffersContent() {
     setIsSaving(true)
 
     try {
-      // Prepare offer data
+      const applicabilityType = formData.applicability_type || (formData.offer_sub_type === 'SPECIFIC_ITEM' ? 'SPECIFIC_ITEMS_SET' : 'ALL')
       const offerPayload: any = {
-        store_id: store.id,
+        store_id: storeId || store.id,
         offer_title: formData.offer_title,
         offer_description: formData.offer_description || null,
         offer_type: formData.offer_type,
         offer_sub_type: formData.offer_sub_type,
-        menu_item_ids: formData.offer_sub_type === 'SPECIFIC_ITEM' && formData.menu_item_ids.length > 0 
-          ? formData.menu_item_ids 
-          : null,
+        menu_item_ids: (applicabilityType === 'SPECIFIC_ITEMS_SET' || formData.offer_sub_type === 'SPECIFIC_ITEM') && formData.menu_item_ids.length > 0 ? formData.menu_item_ids : null,
         discount_value: formData.discount_value !== '' ? formData.discount_value : null,
+        discount_percentage: formData.offer_type === 'PERCENTAGE' && formData.discount_value !== '' ? formData.discount_value : null,
+        max_discount_amount: formData.max_discount_amount !== '' ? formData.max_discount_amount : null,
         min_order_amount: formData.min_order_amount !== '' ? formData.min_order_amount : null,
-        buy_quantity: formData.buy_quantity ? parseInt(formData.buy_quantity) : null,
-        get_quantity: formData.get_quantity ? parseInt(formData.get_quantity) : null,
-        coupon_code: formData.offer_type === 'COUPON' ? generatedCouponCode : null,
+        max_order_amount: formData.max_order_amount !== '' ? formData.max_order_amount : null,
+        buy_quantity: formData.buy_quantity ? parseInt(formData.buy_quantity, 10) : null,
+        get_quantity: formData.get_quantity ? parseInt(formData.get_quantity, 10) : null,
+        coupon_code: (formData.offer_type === 'COUPON' ? generatedCouponCode : formData.coupon_code) || null,
         valid_from: new Date(formData.valid_from).toISOString(),
         valid_till: new Date(formData.valid_till).toISOString(),
-        is_active: true
+        is_active: true,
+        auto_apply: formData.auto_apply,
+        is_stackable: formData.is_stackable,
+        priority: parseInt(formData.priority, 10) || 0,
+        per_order_limit: 1,
+        first_order_only: formData.first_order_only,
+        max_uses_total: formData.max_uses_total !== '' ? parseInt(formData.max_uses_total, 10) : null,
+        max_uses_per_user: formData.max_uses_per_user !== '' ? parseInt(formData.max_uses_per_user, 10) : null,
+        applicable_on_days: formData.applicable_on_days.length > 0 ? formData.applicable_on_days : null,
+        applicable_time_start: formData.applicable_time_start || null,
+        applicable_time_end: formData.applicable_time_end || null,
+        max_discount_per_order: formData.max_discount_amount !== '' ? formData.max_discount_amount : null,
+        offer_metadata: formData.offer_type === 'TIERED' && formData.tiered_tiers.length > 0
+          ? { tiers: formData.tiered_tiers.map(t => ({ min: Number(t.min), discount: Number(t.discount) })), category_ids: formData.category_ids.length ? formData.category_ids : undefined }
+          : (formData.category_ids.length ? { category_ids: formData.category_ids } : {}),
       }
 
       let result: Offer | null = null
 
-      // Handle image upload if new image selected
-      if (imageFile && storeId) {
-        const imageUrl = await uploadOfferImage(storeId, editingId || 'temp', imageFile)
-        if (imageUrl) {
-          offerPayload.image_url = imageUrl
-        }
-      }
-
       if (editingId) {
-        // Update existing offer
-        result = await updateOffer(editingId, offerPayload)
+        // Edit: upload new image first if selected (one image per offer; API replaces/deletes old in R2)
+        if (imageFile && storeId) {
+          const existingOffer = offers.find((o) => o.offer_id === editingId)
+          const currentImageUrl = existingOffer?.offer_image_url ?? existingOffer?.image_url ?? null
+          const imageUrl = await uploadOfferImageViaApi(storeId, editingId, imageFile, currentImageUrl)
+          if (imageUrl) offerPayload.offer_image_url = imageUrl
+        } else {
+          // No new file: keep current or clear (when user removed image, imagePreview is null)
+          offerPayload.offer_image_url = imagePreview ?? null
+        }
+        const res = await fetch(`/api/merchant/offers/${encodeURIComponent(editingId)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(offerPayload),
+          credentials: 'include',
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          throw new Error(err.error || 'Update failed')
+        }
+        result = (await res.json()) as Offer
       } else {
-        // Create new offer
-        result = await createOffer(offerPayload)
+        // Create: save offer first, then upload image and PATCH offer_image_url (design: one image per offer)
+        const res = await fetch('/api/merchant/offers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(offerPayload),
+          credentials: 'include',
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          throw new Error(err.error || 'Create failed')
+        }
+        result = (await res.json()) as Offer
+        if (result && imageFile && storeId) {
+          const imageUrl = await uploadOfferImageViaApi(storeId, result.offer_id, imageFile)
+          if (imageUrl) {
+            const patchRes = await fetch(`/api/merchant/offers/${encodeURIComponent(result.offer_id)}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ offer_image_url: imageUrl }),
+              credentials: 'include',
+            })
+            if (patchRes.ok) {
+              const patched = (await patchRes.json()) as Offer
+              result = { ...result, ...patched, offer_image_url: imageUrl }
+            }
+          }
+        }
       }
 
       if (result) {
@@ -460,14 +635,21 @@ function OffersContent() {
   }
 
   const handleDeleteOffer = async (offerId: string) => {
-    if (confirm('Are you sure you want to delete this offer?')) {
-      const success = await deleteOffer(offerId)
-      if (success) {
-        setOffers(prev => prev.filter(offer => offer.offer_id !== offerId))
-        toast.success('Offer deleted successfully!')
-      } else {
-        toast.error('Failed to delete offer')
+    if (!confirm('Are you sure you want to delete this offer?')) return
+    try {
+      const res = await fetch(`/api/merchant/offers/${encodeURIComponent(offerId)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Delete failed')
       }
+      setOffers(prev => prev.filter(offer => offer.offer_id !== offerId))
+      toast.success('Offer deleted successfully!')
+    } catch (e) {
+      console.error('Delete offer:', e)
+      toast.error('Failed to delete offer')
     }
   }
 
@@ -477,24 +659,40 @@ function OffersContent() {
       offer_description: '',
       offer_type: 'PERCENTAGE',
       offer_sub_type: 'ALL_ORDERS',
+      applicability_type: 'ALL',
       menu_item_ids: [],
+      category_ids: [],
       discount_value: '',
+      discount_percentage: '',
+      max_discount_amount: '',
       min_order_amount: '',
+      max_order_amount: '',
       buy_quantity: '',
       get_quantity: '',
       valid_from: '',
-      valid_till: ''
+      valid_till: '',
+      coupon_code: '',
+      auto_apply: true,
+      first_order_only: false,
+      max_uses_total: '',
+      max_uses_per_user: '',
+      applicable_on_days: [],
+      applicable_time_start: '',
+      applicable_time_end: '',
+      is_stackable: false,
+      priority: '0',
+      tiered_tiers: [],
     })
     setImageFile(null)
     setImagePreview(null)
     setEditingId(null)
     setActiveTab('basic')
+    setStep('basic')
     setShowOfferTypeDropdown(false)
     setShowApplyToDropdown(false)
     setShowMenuItemSuggestions(false)
     setMenuItemSearch('')
     setGeneratedCouponCode('')
-    setFormInitialized(false)
   }
 
   const toggleMenuItemSelection = (itemId: string) => {
@@ -521,7 +719,7 @@ function OffersContent() {
 
   const getOfferIcon = (offerType: Offer['offer_type']) => {
     switch (offerType) {
-      case 'BUY_N_GET_M':
+      case 'BUY_N_GET_M': case 'BUY_X_GET_Y':
         return <Gift size={16} className="text-purple-600" />
       case 'PERCENTAGE':
         return <Percent size={16} className="text-green-600" />
@@ -530,7 +728,11 @@ function OffersContent() {
       case 'COUPON':
         return <Tag size={16} className="text-red-600" />
       case 'FREE_ITEM':
-        return <User size={16} className="text-orange-600" />
+        return <Package size={16} className="text-orange-600" />
+      case 'TIERED':
+        return <Layers size={16} className="text-amber-600" />
+      case 'FREE_DELIVERY':
+        return <Truck size={16} className="text-teal-600" />
       default:
         return <Zap size={16} className="text-yellow-600" />
     }
@@ -555,21 +757,71 @@ function OffersContent() {
 
   const getOfferTypeDisplay = (type: Offer['offer_type']) => {
     switch (type) {
-      case 'PERCENTAGE': return 'Percentage Discount'
-      case 'FLAT': return 'Flat Amount Discount'
-      case 'COUPON': return 'Coupon Discount'
-      case 'BUY_N_GET_M': return 'Buy N Get M'
-      case 'FREE_ITEM': return 'Free Item'
-      default: return 'Percentage Discount'
+      case 'PERCENTAGE': return 'Percentage discount'
+      case 'FLAT': return 'Flat discount'
+      case 'COUPON': return 'Coupon code'
+      case 'BUY_N_GET_M': case 'BUY_X_GET_Y': return 'Buy X Get Y'
+      case 'FREE_ITEM': return 'Free item'
+      case 'TIERED': return 'Tiered (spend more, save more)'
+      case 'FREE_DELIVERY': return 'Free delivery'
+      default: return String(type)
     }
   }
 
-  const getApplyToDisplay = (type: Offer['offer_sub_type']) => {
+  const getApplyToDisplay = (type: Offer['offer_sub_type'] | ApplicabilityType) => {
     switch (type) {
-      case 'ALL_ORDERS': return 'All Orders'
-      case 'SPECIFIC_ITEM': return 'Specific Items'
-      default: return 'All Orders'
+      case 'ALL_ORDERS': case 'ALL': return 'All items'
+      case 'SPECIFIC_ITEM': case 'SPECIFIC_ITEMS_SET': return 'Specific items'
+      case 'CATEGORY': return 'Categories'
+      case 'CART': return 'Cart level'
+      case 'DELIVERY': return 'Delivery'
+      default: return 'All items'
     }
+  }
+
+  const toggleApplicability = (value: ApplicabilityType) => {
+    setFormData(prev => ({
+      ...prev,
+      applicability_type: value,
+      offer_sub_type: value === 'ALL' ? 'ALL_ORDERS' : value === 'SPECIFIC_ITEMS_SET' ? 'SPECIFIC_ITEM' : prev.offer_sub_type,
+    }))
+    setShowApplyToDropdown(false)
+  }
+
+  const toggleCategory = (id: number) => {
+    setFormData(prev => ({
+      ...prev,
+      category_ids: prev.category_ids.includes(id) ? prev.category_ids.filter(c => c !== id) : [...prev.category_ids, id],
+    }))
+  }
+
+  const addTieredTier = () => {
+    setFormData(prev => ({
+      ...prev,
+      tiered_tiers: [...prev.tiered_tiers, { min: '', discount: '' }],
+    }))
+  }
+  const removeTieredTier = (index: number) => {
+    setFormData(prev => ({
+      ...prev,
+      tiered_tiers: prev.tiered_tiers.filter((_, i) => i !== index),
+    }))
+  }
+  const updateTieredTier = (index: number, field: 'min' | 'discount', value: string) => {
+    setFormData(prev => {
+      const next = [...prev.tiered_tiers]
+      next[index] = { ...next[index], [field]: value }
+      return { ...prev, tiered_tiers: next }
+    })
+  }
+
+  const toggleDay = (day: string) => {
+    setFormData(prev => ({
+      ...prev,
+      applicable_on_days: prev.applicable_on_days.includes(day)
+        ? prev.applicable_on_days.filter(d => d !== day)
+        : [...prev.applicable_on_days, day],
+    }))
   }
 
   const copyToClipboard = (text: string) => {
@@ -628,50 +880,49 @@ function OffersContent() {
     <>
       <Toaster position="top-right" richColors />
       <MXLayoutWhite restaurantName={store?.store_name || "Offers"} restaurantId={storeId || ""}>
-        <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-          {/* Header */}
-          <div className="bg-white border-b border-gray-200 shadow-sm px-4 md:px-6 py-4 md:py-5">
-            <div className="flex items-center gap-3 md:gap-4">
-              {/* Hamburger menu on left (mobile) */}
+        <div className="min-h-screen bg-gradient-to-br from-slate-50 via-gray-50 to-orange-50/30">
+          {/* Header — compact title, responsive layout */}
+          <div className="bg-white/95 backdrop-blur-sm border-b border-gray-200/80 shadow-sm px-4 sm:px-5 md:px-6 py-3 sm:py-4">
+            <div className="flex flex-wrap items-center gap-3 sm:gap-4">
               <MobileHamburgerButton />
-              {/* Heading - properly aligned */}
               <div className="flex-1 min-w-0">
-                <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-900 bg-gradient-to-r from-orange-600 to-red-600 bg-clip-text text-transparent">
-                  Offers & Promotions
+                <h1 className="text-lg sm:text-xl md:text-2xl font-bold text-gray-900 tracking-tight">
+                  <span className="bg-gradient-to-r from-orange-600 to-red-500 bg-clip-text text-transparent">Offers & Promotions</span>
                 </h1>
-                <p className="text-gray-600 mt-1 text-sm md:text-base flex items-center gap-2">
-                  <ShoppingBag size={16} />
-                  Manage offers for <span className="font-semibold text-orange-600">{store?.store_name || 'your store'}</span>
+                <p className="text-gray-500 mt-0.5 text-xs sm:text-sm flex items-center gap-1.5 flex-wrap">
+                  <ShoppingBag size={14} className="shrink-0 text-gray-400" />
+                  <span>Manage offers for <span className="font-medium text-orange-600">{store?.store_name || 'your store'}</span></span>
                 </p>
               </div>
-            <button
-              onClick={() => handleOpenModal()}
-              className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-orange-500 to-red-500 text-white font-bold rounded-lg hover:from-orange-600 hover:to-red-600 transition-all text-sm shadow-lg hover:shadow-xl"
-            >
-              <Plus size={18} />
-              Create Offer
-            </button>
+              <button
+                onClick={() => handleOpenModal()}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-orange-500 to-red-500 text-white font-semibold rounded-xl hover:from-orange-600 hover:to-red-600 transition-all text-sm shadow-md hover:shadow-lg active:scale-[0.98]"
+              >
+                <Plus size={18} className="shrink-0" />
+                Create Offer
+              </button>
             </div>
           </div>
 
-          {/* Offers Grid - REDESIGNED CARDS */}
-          <div className="px-4 md:px-6 py-6">
+          {/* Content — responsive padding and max-width */}
+          <div className="px-4 sm:px-5 md:px-6 py-4 sm:py-6 max-w-7xl mx-auto">
             {offers.length === 0 ? (
-              <div className="bg-white rounded-2xl border-2 border-dashed border-gray-300 p-8 md:p-12 text-center max-w-2xl mx-auto">
-                <div className="w-20 h-20 bg-gradient-to-br from-orange-100 to-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
-                  <Zap size={32} className="text-orange-500" />
+              <div className="bg-white/80 backdrop-blur-sm rounded-2xl border border-gray-200/90 border-dashed shadow-sm p-6 sm:p-8 md:p-10 text-center max-w-xl mx-auto">
+                <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gradient-to-br from-orange-100 to-red-50 rounded-2xl flex items-center justify-center mx-auto mb-4 sm:mb-5">
+                  <Zap size={28} className="sm:w-8 sm:h-8 text-orange-500" />
                 </div>
-                <h3 className="text-xl font-bold text-gray-900 mb-3">No offers created yet</h3>
-                <p className="text-gray-600 mb-8 max-w-md mx-auto">Create your first offer to attract more customers and boost your sales</p>
+                <h3 className="text-base sm:text-lg font-bold text-gray-900 mb-2">No offers created yet</h3>
+                <p className="text-gray-500 text-sm sm:text-base mb-6 sm:mb-8 max-w-sm mx-auto">Create your first offer to attract more customers and boost sales.</p>
                 <button
                   onClick={() => handleOpenModal()}
-                  className="px-6 py-3 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-xl hover:from-orange-600 hover:to-red-600 font-semibold shadow-lg hover:shadow-xl transition-all"
+                  className="inline-flex items-center justify-center gap-2 px-5 py-2.5 sm:px-6 sm:py-3 bg-gradient-to-r from-orange-500 to-red-500 text-white rounded-xl hover:from-orange-600 hover:to-red-600 font-semibold text-sm shadow-md hover:shadow-lg transition-all active:scale-[0.98]"
                 >
+                  <Plus size={18} />
                   Create First Offer
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
                 {offers.map(offer => {
                   const now = new Date();
                   const validFrom = new Date(offer.valid_from);
@@ -749,9 +1000,9 @@ function OffersContent() {
                                     transform: 'translateX(-50%)',
                                   }}
                                 >
-                                  {offer.menu_item_ids && offer.menu_item_ids.length > 0
-                                    ? offer.menu_item_ids.map(
-                                        id => {
+                                  {((offer.menu_item_ids ?? (offer.offer_metadata as { menu_item_ids?: string[] })?.menu_item_ids) || []).length > 0
+                                    ? (offer.menu_item_ids ?? (offer.offer_metadata as { menu_item_ids?: string[] })?.menu_item_ids ?? []).map(
+                                        (id: string) => {
                                           const item = menuItems.find(m => m.item_id === id);
                                           return item ? `• ${item.item_name}` : null;
                                         }
@@ -853,9 +1104,16 @@ function OffersContent() {
                           )}
                         </div>
 
-                        {/* Actions */}
+                        {/* Actions + audit */}
                         <div className="flex items-center justify-between pt-1.5 border-t border-gray-100">
-                          <div className="flex items-center gap-1">
+                          <div className="flex flex-col gap-0.5 min-w-0">
+                            {(offer.created_by_name || offer.updated_by_name) && (
+                              <span className="text-[9px] text-gray-500 truncate" title={[offer.created_by_name && `Created by ${offer.created_by_name}`, offer.updated_by_name && `Updated by ${offer.updated_by_name}`].filter(Boolean).join(' • ')}>
+                                {offer.created_by_name && <>Created by {offer.created_by_name}</>}
+                                {offer.created_by_name && offer.updated_by_name && ' • '}
+                                {offer.updated_by_name && <>Updated by {offer.updated_by_name}</>}
+                              </span>
+                            )}
                             <span className="text-[9px] text-gray-400">
                               Updated: {new Date(offer.updated_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
                             </span>
@@ -886,250 +1144,279 @@ function OffersContent() {
           </div>
         </div>
 
-        {/* Create/Edit Modal - FIX: Updated input handlers to prevent overwriting */}
+        {/* Create/Edit Modal — 5-step enterprise offer wizard */}
         {showModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 md:p-4 backdrop-blur-[2px]">
-            <div 
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-2 md:p-4 backdrop-blur-sm">
+            <div
               ref={modalRef}
-              className="bg-white w-full max-w-md border border-gray-200 shadow-2xl flex flex-col max-h-[90vh]"
-              style={{ borderRadius: '20px', overflow: 'hidden' }}
+              className="bg-white w-full max-w-lg border border-gray-200 shadow-2xl flex flex-col max-h-[92vh] rounded-2xl overflow-hidden"
             >
-              {/* Header - Fixed */}
-              <div className="flex-shrink-0 flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-gray-50 to-white">
+              {/* Header */}
+              <div className="flex-shrink-0 flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-gradient-to-r from-slate-50 to-white">
                 <div>
-                  <h2 className="text-lg font-bold text-gray-900">{editingId ? 'Edit Offer' : 'Create New Offer'}</h2>
-                  <p className="text-xs text-gray-500 mt-0.5">Enter details for the offer</p>
+                  <h2 className="text-lg font-bold text-gray-900">{editingId ? 'Edit Offer' : 'Create Offer'}</h2>
+                  <p className="text-xs text-gray-500 mt-0.5">Step {STEPS.indexOf(activeTab) + 1} of {STEPS.length}: {STEP_LABELS[activeTab]}</p>
                 </div>
                 <button
-                  onClick={() => {
-                    setShowModal(false)
-                    resetForm()
-                  }}
-                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                  onClick={() => { setShowModal(false); resetForm(); }}
+                  className="p-2 hover:bg-gray-100 rounded-xl transition-colors"
                   aria-label="Close"
                 >
                   <X size={20} className="text-gray-600" />
                 </button>
               </div>
 
-              {/* Compact Tabs - Fixed */}
-              <div className="flex-shrink-0 border-b border-gray-200 bg-white">
-                <div className="flex">
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('basic')}
-                    className={`flex-1 px-3 py-3 text-xs font-semibold border-b-2 transition-colors ${activeTab === 'basic' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                  >
-                    Basic Info
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('details')}
-                    className={`flex-1 px-3 py-3 text-xs font-semibold border-b-2 transition-colors ${activeTab === 'details' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                  >
-                    Offer Details
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('validity')}
-                    className={`flex-1 px-3 py-3 text-xs font-semibold border-b-2 transition-colors ${activeTab === 'validity' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
-                  >
-                    Validity
-                  </button>
+              {/* Step progress */}
+              <div className="flex-shrink-0 px-4 pt-3 pb-2 bg-white border-b border-gray-100">
+                <div className="flex justify-between gap-1">
+                  {STEPS.map((s, i) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => {
+                        setActiveTab(s)
+                        // Refetch menu items when entering applicability step so selection list is current
+                        if (s === 'applicability' && storeId) {
+                          fetchMenuItemsForOffers(storeId).then((items) => {
+                            setMenuItems(items)
+                            setFilteredMenuItems(items)
+                          }).catch(() => {})
+                        }
+                      }}
+                      className={`flex-1 py-2 rounded-lg text-[10px] font-semibold transition-all ${
+                        activeTab === s
+                          ? 'bg-orange-500 text-white shadow-md'
+                          : i < STEPS.indexOf(activeTab)
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-gray-100 text-gray-500'
+                      }`}
+                    >
+                      {i + 1}. {STEP_LABELS[s]}
+                    </button>
+                  ))}
                 </div>
               </div>
 
               {/* Form Content - Scrollable */}
-              <div 
-                ref={modalContentRef}
-                className="flex-1 overflow-y-auto hide-scrollbar"
-              >
+              <div ref={modalContentRef} className="flex-1 overflow-y-auto hide-scrollbar">
                 <form className="px-5 py-4" autoComplete="off" onSubmit={e => { e.preventDefault(); handleSaveOffer(); }}>
+                  {/* Step 1: Basic info */}
                   {activeTab === 'basic' && (
                     <div className="space-y-4">
-                      <div className="bg-gradient-to-r from-blue-50 to-blue-100 border border-blue-200 rounded-lg p-3 mb-2">
-                        <h3 className="text-sm font-bold text-blue-800 mb-1">Basic Information</h3>
-                        <p className="text-xs text-blue-600">Fill in the basic details of your offer</p>
+                      <div className="rounded-xl bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/80 p-3 mb-2">
+                        <h3 className="text-sm font-bold text-amber-900 mb-0.5">Basic information</h3>
+                        <p className="text-xs text-amber-700">Title, description, image, and validity</p>
                       </div>
-                      
                       <div>
-                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                          Offer Title *
-                        </label>
-                        <input
-                          type="text"
-                          value={formData.offer_title}
-                          onChange={handleInputChange('offer_title')}
-                          className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-100 text-sm transition-all"
-                          placeholder="e.g., Summer Special, Weekend Discount"
-                          required
-                        />
+                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">Offer title *</label>
+                        <input type="text" value={formData.offer_title} onChange={handleInputChange('offer_title')} className="w-full px-3 py-2.5 border border-gray-300 rounded-xl focus:border-orange-500 focus:ring-2 focus:ring-orange-100 text-sm" placeholder="e.g. Summer Special" required />
                       </div>
-                      
                       <div>
-                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                          Description (Optional)
-                        </label>
-                        <textarea
-                          value={formData.offer_description}
-                          onChange={handleInputChange('offer_description')}
-                          className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-100 text-sm transition-all"
-                          placeholder="Describe your offer..."
-                          rows={2}
-                        />
+                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">Description (optional)</label>
+                        <textarea value={formData.offer_description} onChange={handleInputChange('offer_description')} className="w-full px-3 py-2.5 border border-gray-300 rounded-xl focus:border-orange-500 focus:ring-2 focus:ring-orange-100 text-sm" placeholder="Describe your offer" rows={2} />
                       </div>
-                      
                       <div>
-                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                          Offer Image (Optional)
-                        </label>
-                        <div className="flex items-center gap-3">
-                          <label className="cursor-pointer">
-                            <input
-                              type="file"
-                              accept="image/*"
-                              onChange={handleImageChange}
-                              className="hidden"
-                            />
-                            <div className="px-4 py-2 bg-gradient-to-r from-orange-500 to-red-500 text-white text-xs font-bold rounded-lg hover:from-orange-600 hover:to-red-600 transition-all shadow-md">
-                              Choose Image
+                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">Offer image (optional)</label>
+                        {imagePreview ? (
+                          <div className="space-y-2">
+                            <div className="relative rounded-xl overflow-hidden border-2 border-gray-200 bg-gray-100" style={{ aspectRatio: '800/400', maxHeight: 200 }}>
+                              <img src={imagePreview} alt="Offer banner" className="w-full h-full object-contain" />
                             </div>
-                          </label>
-                          {imagePreview && (
-                            <div className="relative w-14 h-14 rounded-lg overflow-hidden border-2 border-gray-200">
-                              <img 
-                                src={imagePreview} 
-                                alt="Preview" 
-                                className="w-full h-full object-cover"
-                              />
+                            <div className="flex flex-wrap items-center gap-2">
+                              <input ref={offerImageInputRef} type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
+                              <button type="button" onClick={() => offerImageInputRef.current?.click()} className="inline-flex items-center gap-1.5 px-3 py-2 bg-amber-100 text-amber-800 text-xs font-semibold rounded-xl hover:bg-amber-200 transition-colors border border-amber-200">
+                                Replace image
+                              </button>
+                              <button type="button" onClick={handleRemoveOfferImage} className="inline-flex items-center gap-1.5 px-3 py-2 bg-red-50 text-red-700 text-xs font-semibold rounded-xl hover:bg-red-100 transition-colors border border-red-200">
+                                Remove image
+                              </button>
                             </div>
-                          )}
+                            <p className="text-xs text-gray-400">One image per offer. Recommended: 800×400px</p>
+                          </div>
+                        ) : (
+                          <div>
+                            <input ref={offerImageInputRef} type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
+                            <button type="button" onClick={() => offerImageInputRef.current?.click()} className="inline-flex px-4 py-2 bg-gradient-to-r from-orange-500 to-red-500 text-white text-xs font-bold rounded-xl hover:from-orange-600 hover:to-red-600 transition-all shadow-md">
+                              Choose image
+                            </button>
+                            <p className="text-xs text-gray-400 mt-1">Recommended: 800×400px. One image per offer.</p>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200">
+                        <span className="text-xs font-semibold text-gray-700">Auto-apply (no code needed)</span>
+                        <button type="button" onClick={() => setFormData(prev => ({ ...prev, auto_apply: !prev.auto_apply }))} className={`relative w-11 h-6 rounded-full transition-colors ${formData.auto_apply ? 'bg-orange-500' : 'bg-gray-300'}`}>
+                          <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${formData.auto_apply ? 'translate-x-5' : 'translate-x-0'}`} />
+                        </button>
+                      </div>
+                      {!formData.auto_apply && (
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1.5">Coupon code (optional)</label>
+                          <input type="text" value={formData.coupon_code || (formData.offer_type === 'COUPON' ? generatedCouponCode : '')} onChange={e => { if (formData.offer_type === 'COUPON') setGeneratedCouponCode(e.target.value); else setFormData(prev => ({ ...prev, coupon_code: e.target.value })); }} className="w-full px-3 py-2.5 border border-gray-300 rounded-xl focus:border-orange-500 text-sm font-mono" placeholder="e.g. SAVE20" />
                         </div>
-                        <p className="text-xs text-gray-400 mt-1.5">
-                          Recommended: 800x400px
-                        </p>
+                      )}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1.5">Start date *</label>
+                          <input type="date" value={formData.valid_from} onChange={handleInputChange('valid_from')} className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm" min={new Date().toISOString().split('T')[0]} required />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1.5">End date *</label>
+                          <input type="date" value={formData.valid_till} onChange={handleInputChange('valid_till')} className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm" min={formData.valid_from || new Date().toISOString().split('T')[0]} required />
+                        </div>
                       </div>
                     </div>
                   )}
                   
-                  {activeTab === 'details' && (
+                  {/* Step 2: Offer type */}
+                  {activeTab === 'type' && (
                     <div className="space-y-4">
-                      <div className="bg-gradient-to-r from-blue-50 to-blue-100 border border-blue-200 rounded-lg p-3 mb-2">
-                        <h3 className="text-sm font-bold text-blue-800 mb-1">Offer Configuration</h3>
-                        <p className="text-xs text-blue-600">Configure the type and rules of your offer</p>
+                      <div className="rounded-xl bg-gradient-to-r from-violet-50 to-purple-50 border border-violet-200/80 p-3 mb-2">
+                        <h3 className="text-sm font-bold text-violet-900 mb-0.5">Offer type</h3>
+                        <p className="text-xs text-violet-700">Choose how the discount is applied</p>
                       </div>
-                      
-                      {/* Offer Type Dropdown */}
-                      <div className="space-y-3">
-                        <div>
-                          <label className="block text-xs font-bold text-gray-700 mb-1.5">
-                            Offer Type *
-                          </label>
-                          <div className="relative" ref={offerTypeRef}>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setShowOfferTypeDropdown(!showOfferTypeDropdown)
-                                setShowApplyToDropdown(false)
-                                setShowMenuItemSuggestions(false)
-                              }}
-                              className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-left flex items-center justify-between bg-white hover:bg-gray-50 transition-colors"
-                            >
-                              <div className="flex items-center gap-2">
-                                <div className="p-1.5 rounded-full bg-gray-100">
-                                  {getOfferIcon(formData.offer_type)}
-                                </div>
-                                <span className="text-sm font-medium text-gray-900">{getOfferTypeDisplay(formData.offer_type)}</span>
+                      <div className="relative" ref={offerTypeRef}>
+                        <label className="block text-xs font-bold text-gray-700 mb-1.5">Offer type *</label>
+                        <button type="button" onClick={() => { setShowOfferTypeDropdown(!showOfferTypeDropdown); setShowApplyToDropdown(false); setShowMenuItemSuggestions(false); }} className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-left flex items-center justify-between bg-white hover:bg-gray-50 transition-colors">
+                          <div className="flex items-center gap-2">
+                            <div className="p-1.5 rounded-full bg-gray-100">{getOfferIcon(formData.offer_type)}</div>
+                            <span className="text-sm font-medium text-gray-900">{getOfferTypeDisplay(formData.offer_type)}</span>
+                          </div>
+                          <ChevronDown size={16} className={`text-gray-500 transition-transform ${showOfferTypeDropdown ? 'rotate-180' : ''}`} />
+                        </button>
+                        {showOfferTypeDropdown && (
+                          <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-xl shadow-xl max-h-60 overflow-y-auto">
+                            {OFFER_TYPES.map((opt) => (
+                              <div key={opt.type} onClick={(e) => { e.stopPropagation(); handleOfferTypeChange(opt.type as Offer['offer_type']); }} className={`flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 cursor-pointer border-b last:border-b-0 ${formData.offer_type === opt.type ? 'bg-orange-50' : ''}`}>
+                                <div className="p-1.5 rounded-full bg-gray-100">{opt.icon}</div>
+                                <span className="text-sm font-medium text-gray-900">{opt.label}</span>
+                                {formData.offer_type === opt.type && <Check size={16} className="ml-auto text-green-600" />}
                               </div>
-                              <ChevronDown size={16} className={`text-gray-500 transition-transform ${showOfferTypeDropdown ? 'rotate-180' : ''}`} />
-                            </button>
-                            
-                            {showOfferTypeDropdown && (
-                              <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-xl hide-scrollbar max-h-60 overflow-y-auto">
-                                {[
-                                  { type: 'PERCENTAGE' as const, label: 'Percentage Discount', icon: <Percent size={14} className="text-green-600" /> },
-                                  { type: 'FLAT' as const, label: 'Flat Amount Discount', icon: <DollarSign size={14} className="text-blue-600" /> },
-                                  { type: 'COUPON' as const, label: 'Coupon Discount', icon: <Tag size={14} className="text-red-600" /> },
-                                  { type: 'BUY_N_GET_M' as const, label: 'Buy N Get M', icon: <Gift size={14} className="text-purple-600" /> },
-                                  { type: 'FREE_ITEM' as const, label: 'Free Item', icon: <User size={14} className="text-orange-600" /> }
-                                ].map((option) => (
-                                  <div
-                                    key={option.type}
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      handleOfferTypeChange(option.type)
-                                    }}
-                                    className={`flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 cursor-pointer border-b last:border-b-0 ${
-                                      formData.offer_type === option.type ? 'bg-orange-50' : ''
-                                    }`}
-                                  >
-                                    <div className="p-1.5 rounded-full bg-gray-100">
-                                      {option.icon}
-                                    </div>
-                                    <div>
-                                      <div className="text-sm font-medium text-gray-900">{option.label}</div>
-                                    </div>
-                                    {formData.offer_type === option.type && (
-                                      <div className="ml-auto w-2 h-2 bg-green-500 rounded-full"></div>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      {/* Dynamic form by type */}
+                      {(formData.offer_type === 'PERCENTAGE' || formData.offer_type === 'FLAT' || formData.offer_type === 'COUPON') && (
+                        <>
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-700 mb-1.5">Discount value *</label>
+                            <div className="relative flex items-center">
+                              {formData.offer_type !== 'PERCENTAGE' && (
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 font-semibold pointer-events-none z-10">₹</span>
+                              )}
+                              <input
+                                type="text"
+                                value={formData.discount_value}
+                                onChange={handleNumberInputChange('discount_value')}
+                                className={`w-full py-2.5 border border-gray-300 rounded-xl text-sm bg-white ${
+                                  formData.offer_type === 'PERCENTAGE' ? 'px-3 pr-9' : 'pl-9 pr-3'
+                                }`}
+                                placeholder={formData.offer_type === 'PERCENTAGE' ? 'e.g. 10 for 10%' : 'e.g. 50'}
+                              />
+                              {formData.offer_type === 'PERCENTAGE' && (
+                                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 font-semibold pointer-events-none">%</span>
+                              )}
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-700 mb-1.5">Max discount per order (optional)</label>
+                            <div className="relative">
+                              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 font-bold">₹</span>
+                              <input type="text" value={formData.max_discount_amount} onChange={handleNumberInputChange('max_discount_amount')} className="w-full pl-8 pr-3 py-2.5 border border-gray-300 rounded-xl text-sm" placeholder="Cap amount" />
+                            </div>
+                          </div>
+                        </>
+                      )}
+                      {formData.offer_type === 'BUY_X_GET_Y' || formData.offer_type === 'BUY_N_GET_M' ? (
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-700 mb-1.5">Buy quantity *</label>
+                            <input type="number" min={1} value={formData.buy_quantity} onChange={handleNumberInputChange('buy_quantity')} className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm" />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-700 mb-1.5">Get quantity *</label>
+                            <input type="number" min={1} value={formData.get_quantity} onChange={handleNumberInputChange('get_quantity')} className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm" />
                           </div>
                         </div>
-                        
-                        {/* Apply To Dropdown */}
-                        <div>
-                          <label className="block text-xs font-bold text-gray-700 mb-1.5">
-                            Apply To *
-                          </label>
-                          <div className="relative" ref={applyToRef}>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setShowApplyToDropdown(!showApplyToDropdown)
-                                setShowOfferTypeDropdown(false)
-                                setShowMenuItemSuggestions(false)
-                              }}
-                              className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-left flex items-center justify-between bg-white hover:bg-gray-50 transition-colors"
-                            >
-                              <span className="text-sm font-medium text-gray-900">{getApplyToDisplay(formData.offer_sub_type)}</span>
-                              <ChevronDown size={16} className={`text-gray-500 transition-transform ${showApplyToDropdown ? 'rotate-180' : ''}`} />
-                            </button>
-                            
-                            {showApplyToDropdown && (
-                              <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-xl">
-                                {[
-                                  { type: 'ALL_ORDERS' as const, label: 'All Orders' },
-                                  { type: 'SPECIFIC_ITEM' as const, label: 'Specific Items' }
-                                ].map((option) => (
-                                  <div
-                                    key={option.type}
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      handleApplyToChange(option.type)
-                                    }}
-                                    className={`px-3 py-2.5 hover:bg-gray-50 cursor-pointer border-b last:border-b-0 ${
-                                      formData.offer_sub_type === option.type ? 'bg-orange-50' : ''
-                                    }`}
-                                  >
-                                    <div className="text-sm font-medium text-gray-900">{option.label}</div>
-                                    {formData.offer_sub_type === option.type && (
-                                      <div className="ml-auto w-2 h-2 bg-green-500 rounded-full"></div>
-                                    )}
-                                  </div>
-                                ))}
+                      ) : null}
+                      {formData.offer_type === 'TIERED' && (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <label className="block text-xs font-semibold text-gray-700">Tiers (spend min → discount)</label>
+                            <button type="button" onClick={addTieredTier} className="text-xs font-bold text-orange-600 hover:text-orange-700">+ Add tier</button>
+                          </div>
+                          {formData.tiered_tiers.map((tier, i) => (
+                            <div key={i} className="flex gap-2 items-center">
+                              <div className="relative flex-1">
+                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">₹</span>
+                                <input type="text" value={tier.min} onChange={e => updateTieredTier(i, 'min', e.target.value)} placeholder="Min" className="w-full pl-6 pr-2 py-2 border border-gray-300 rounded-lg text-sm" />
                               </div>
-                            )}
+                              <span className="text-gray-400">→</span>
+                              <div className="relative flex-1">
+                                <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 text-xs">₹</span>
+                                <input type="text" value={tier.discount} onChange={e => updateTieredTier(i, 'discount', e.target.value)} placeholder="Discount" className="w-full pl-6 pr-2 py-2 border border-gray-300 rounded-lg text-sm" />
+                              </div>
+                              <button type="button" onClick={() => removeTieredTier(i)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg"><X size={14} /></button>
+                            </div>
+                          ))}
+                          {formData.tiered_tiers.length === 0 && <p className="text-xs text-gray-500">Add at least one tier (e.g. spend 500 → ₹50 off)</p>}
+                        </div>
+                      )}
+                      {formData.offer_type === 'FREE_DELIVERY' && <p className="text-xs text-gray-600 rounded-xl bg-teal-50 border border-teal-200 p-3">Delivery fee will be waived when this offer applies.</p>}
+                      {formData.offer_type === 'FREE_ITEM' && (
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1.5">Minimum order amount *</label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 font-bold">₹</span>
+                            <input type="text" value={formData.min_order_amount} onChange={handleNumberInputChange('min_order_amount')} className="w-full pl-8 pr-3 py-2.5 border border-gray-300 rounded-xl text-sm" placeholder="e.g. 300" />
                           </div>
                         </div>
-                      </div>
+                      )}
+                      {formData.offer_type === 'COUPON' && (
+                        <div className="p-3 rounded-xl bg-rose-50 border border-rose-200">
+                          <label className="block text-xs font-bold text-rose-800 mb-2">Coupon code *</label>
+                          {generatedCouponCode ? (
+                            <div className="flex items-center justify-between gap-2">
+                              <code className="text-sm font-bold text-rose-900 font-mono">{generatedCouponCode}</code>
+                              <button type="button" onClick={() => copyToClipboard(generatedCouponCode)} className="text-xs font-medium text-rose-700">Copy</button>
+                              <button type="button" onClick={generateCoupon} disabled={isGeneratingCoupon} className="text-xs font-medium text-rose-700">Regenerate</button>
+                            </div>
+                          ) : (
+                            <button type="button" onClick={generateCoupon} disabled={isGeneratingCoupon} className="w-full py-2 px-4 rounded-lg bg-rose-500 text-white text-sm font-bold flex items-center justify-center gap-2">
+                              {isGeneratingCoupon ? 'Generating...' : <><Sparkles size={14} /> Generate code</>}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
-                      {/* Menu Items Selection (Only when Apply To is Specific Item) */}
-                      {formData.offer_sub_type === 'SPECIFIC_ITEM' && (
+                  {/* Step 3: Applicability */}
+                  {activeTab === 'applicability' && (
+                    <div className="space-y-4">
+                      <div className="rounded-xl bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200/80 p-3 mb-2">
+                        <h3 className="text-sm font-bold text-emerald-900 mb-0.5">Where it applies</h3>
+                        <p className="text-xs text-emerald-700">All items, specific items, categories, cart, or delivery</p>
+                      </div>
+                      <div className="relative" ref={applyToRef}>
+                        <label className="block text-xs font-bold text-gray-700 mb-1.5">Apply to *</label>
+                        <button type="button" onClick={() => { setShowApplyToDropdown(!showApplyToDropdown); setShowOfferTypeDropdown(false); setShowMenuItemSuggestions(false); }} className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-left flex items-center justify-between bg-white hover:bg-gray-50">
+                          <span className="text-sm font-medium text-gray-900">{getApplyToDisplay(formData.applicability_type)}</span>
+                          <ChevronDown size={16} className={`text-gray-500 ${showApplyToDropdown ? 'rotate-180' : ''}`} />
+                        </button>
+                        {showApplyToDropdown && (
+                          <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-xl shadow-xl">
+                            {APPLICABILITY_OPTIONS.map((opt) => (
+                              <div key={opt.value} onClick={() => toggleApplicability(opt.value as ApplicabilityType)} className={`px-3 py-2.5 hover:bg-gray-50 cursor-pointer border-b last:border-b-0 flex items-center justify-between ${formData.applicability_type === opt.value ? 'bg-orange-50' : ''}`}>
+                                <span className="text-sm font-medium text-gray-900">{opt.label}</span>
+                                {formData.applicability_type === opt.value && <Check size={16} className="text-green-600" />}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      {(formData.applicability_type === 'SPECIFIC_ITEMS_SET' || formData.offer_sub_type === 'SPECIFIC_ITEM') && (
                         <div className="space-y-2">
                           <label className="block text-xs font-bold text-gray-700 mb-1.5">
                             Select Menu Items *
@@ -1237,339 +1524,165 @@ function OffersContent() {
                             )}
                           </div>
                           
-                          {/* Instructions */}
-                          <p className="text-xs text-gray-500 mt-1">
-                            {menuItems.length > 0 
-                              ? `Found ${menuItems.length} menu items. Search or click to select.` 
-                              : 'No menu items available for this store.'}
-                          </p>
-                        </div>
-                      )}
-
-                      {/* Offer Rules */}
-                      <div className="space-y-3">
-                        <div className="border-t border-gray-200 pt-3">
-                          <h4 className="text-xs font-bold text-gray-700 mb-2">Offer Rules & Values</h4>
-                          
-                          {formData.offer_type === 'BUY_N_GET_M' && (
-                            <div className="grid grid-cols-2 gap-3">
-                              <div>
-                                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                                  Buy Quantity *
-                                </label>
-                                <input
-                                  type="number"
-                                  min="1"
-                                  value={formData.buy_quantity}
-                                  onChange={handleNumberInputChange('buy_quantity')}
-                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-100 text-sm"
-                                  required
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                                  Get Quantity *
-                                </label>
-                                <input
-                                  type="number"
-                                  min="1"
-                                  value={formData.get_quantity}
-                                  onChange={handleNumberInputChange('get_quantity')}
-                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-100 text-sm"
-                                  required
-                                />
-                              </div>
-                            </div>
-                          )}
-                          
-                          {(formData.offer_type === 'PERCENTAGE' || formData.offer_type === 'FLAT' || formData.offer_type === 'COUPON') && (
-                            <>
-                              <div>
-                                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                                  Discount Value *
-                                </label>
-                                <div className="relative">
-                                  <input
-                                    type="text"
-                                    value={formData.discount_value}
-                                    onChange={handleNumberInputChange('discount_value')}
-                                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-100 text-sm"
-                                    placeholder={formData.offer_type === 'PERCENTAGE' ? 'e.g., 10 for 10%' : 'e.g., 50 for ₹50'}
-                                    required
-                                  />
-                                  {formData.offer_type === 'PERCENTAGE' ? (
-                                    <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 font-bold">%</div>
-                                  ) : null}
-                                </div>
-                              </div>
-                              
-                              <div>
-                                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                                  Minimum Order Amount (Optional)
-                                </label>
-                                <div className="relative">
-                                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 font-bold">₹</span>
-                                  <input
-                                    type="text"
-                                    value={formData.min_order_amount}
-                                    onChange={handleNumberInputChange('min_order_amount')}
-                                    className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-100 text-sm"
-                                    placeholder="e.g., 500"
-                                  />
-                                </div>
-                              </div>
-                            </>
-                          )}
-                          
-                          {formData.offer_type === 'FREE_ITEM' && (
-                            <div>
-                              <label className="block text-xs font-semibold text-gray-700 mb-1">
-                                Minimum Order Amount for New Users *
-                              </label>
-                              <div className="relative">
-                                <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 font-bold">₹</span>
-                                <input
-                                  type="text"
-                                  value={formData.min_order_amount}
-                                  onChange={handleNumberInputChange('min_order_amount')}
-                                  className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-100 text-sm"
-                                  placeholder="Order amount required for free item"
-                                  required
-                                />
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Coupon Code Generator - Only for COUPON type */}
-                        {formData.offer_type === 'COUPON' && (
-                          <div className="mt-3 p-3 bg-gradient-to-r from-red-50 to-red-100 border border-red-200 rounded-lg">
-                            <label className="block text-xs font-bold text-red-800 mb-2">
-                              Coupon Code *
-                            </label>
-                            
-                            {generatedCouponCode ? (
-                              <div>
-                                <div className="flex items-center justify-between mb-2">
-                                  <div className="flex items-center gap-2">
-                                    <Tag size={14} className="text-red-600" />
-                                    <span className="text-sm font-semibold text-red-700">Generated Code:</span>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => copyToClipboard(generatedCouponCode)}
-                                    className="text-xs font-medium text-red-700 hover:text-red-800"
-                                  >
-                                    <Copy size={12} className="inline mr-1" />
-                                    Copy
-                                  </button>
-                                </div>
-                                <div className="bg-white px-3 py-2 rounded border border-red-300">
-                                  <code className="text-lg font-bold text-red-800 font-mono tracking-wider">
-                                    {generatedCouponCode}
-                                  </code>
-                                </div>
-                                <div className="flex items-center gap-2 mt-2">
-                                  <div className="flex-1">
-                                    <p className="text-xs text-red-600">
-                                      ✓ Coupon code auto-generated
-                                    </p>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={generateCoupon}
-                                    disabled={isGeneratingCoupon}
-                                    className="text-xs font-medium text-red-700 hover:text-red-800"
-                                  >
-                                    {isGeneratingCoupon ? 'Regenerating...' : 'Regenerate'}
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="text-center">
-                                <button
-                                  type="button"
-                                  onClick={generateCoupon}
-                                  disabled={isGeneratingCoupon}
-                                  className={`w-full py-2 px-4 rounded-lg flex items-center justify-center gap-2 font-bold ${
-                                    isGeneratingCoupon
-                                      ? 'bg-gradient-to-r from-red-300 to-red-400 cursor-not-allowed'
-                                      : 'bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700'
-                                  } text-white transition-all shadow-md hover:shadow-lg`}
-                                >
-                                  {isGeneratingCoupon ? (
-                                    <>
-                                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                                      Generating...
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Sparkles size={14} />
-                                      Generate Coupon Code
-                                    </>
-                                  )}
-                                </button>
-                                <p className="text-xs text-red-600 mt-2">
-                                  Click to generate a unique coupon code for this offer
-                                </p>
-                              </div>
+                          {/* Instructions + refresh when empty */}
+                          <div className="flex flex-wrap items-center gap-2 mt-1">
+                            <p className="text-xs text-gray-500">
+                              {menuItems.length > 0 ? `Found ${menuItems.length} menu items. Search or click to select.` : 'No menu items available for this store.'}
+                            </p>
+                            {menuItems.length === 0 && storeId && (
+                              <button
+                                type="button"
+                                onClick={() => fetchMenuItemsForOffers(storeId).then((items) => { setMenuItems(items); setFilteredMenuItems(items); }).catch(() => toast.error('Could not load menu items'))}
+                                className="text-xs font-medium text-orange-600 hover:text-orange-700"
+                              >
+                                Refresh items
+                              </button>
                             )}
                           </div>
-                        )}
-                      </div>
+                        </div>
+                      )}
+                      {formData.applicability_type === 'CATEGORY' && (
+                        <div className="space-y-2">
+                          <label className="block text-xs font-bold text-gray-700 mb-1.5">Select categories *</label>
+                          <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-xl p-2 space-y-1">
+                            {menuCategories.map(cat => (
+                              <label key={cat.id} className="flex items-center gap-2 p-2 rounded-lg hover:bg-gray-50 cursor-pointer">
+                                <input type="checkbox" checked={formData.category_ids.includes(cat.id)} onChange={() => toggleCategory(cat.id)} className="rounded border-gray-300 text-orange-500" />
+                                <span className="text-sm font-medium text-gray-900">{cat.category_name}</span>
+                              </label>
+                            ))}
+                            {menuCategories.length === 0 && <p className="text-xs text-gray-500 p-2">No categories found.</p>}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
-                  
-                  {activeTab === 'validity' && (
+
+                  {/* Step 4: Conditions */}
+                  {activeTab === 'conditions' && (
                     <div className="space-y-4">
-                      <div className="bg-gradient-to-r from-blue-50 to-blue-100 border border-blue-200 rounded-lg p-3 mb-2">
-                        <h3 className="text-sm font-bold text-blue-800 mb-1">Validity Period</h3>
-                        <p className="text-xs text-blue-600">Set when your offer will be active</p>
+                      <div className="rounded-xl bg-gradient-to-r from-sky-50 to-blue-50 border border-sky-200/80 p-3 mb-2">
+                        <h3 className="text-sm font-bold text-sky-900 mb-0.5">Conditions</h3>
+                        <p className="text-xs text-sky-700">Min order, first order, usage limits, time & days</p>
                       </div>
-                      
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">Minimum order value (₹)</label>
+                        <input type="text" value={formData.min_order_amount} onChange={handleNumberInputChange('min_order_amount')} className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm" placeholder="Optional" />
+                      </div>
+                      <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200">
+                        <span className="text-xs font-semibold text-gray-700">First order only</span>
+                        <button type="button" onClick={() => setFormData(prev => ({ ...prev, first_order_only: !prev.first_order_only }))} className={`relative w-11 h-6 rounded-full transition-colors ${formData.first_order_only ? 'bg-orange-500' : 'bg-gray-300'}`}>
+                          <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${formData.first_order_only ? 'translate-x-5' : 'translate-x-0'}`} />
+                        </button>
+                      </div>
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="block text-xs font-bold text-gray-700 mb-1.5">
-                            Start Date *
-                          </label>
-                          <input
-                            type="date"
-                            value={formData.valid_from}
-                            onChange={handleInputChange('valid_from')}
-                            className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-100 text-sm"
-                            min={new Date().toISOString().split('T')[0]}
-                            required
-                          />
+                          <label className="block text-xs font-semibold text-gray-700 mb-1.5">Max uses total</label>
+                          <input type="text" value={formData.max_uses_total} onChange={handleNumberInputChange('max_uses_total')} className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm" placeholder="Optional" />
                         </div>
                         <div>
-                          <label className="block text-xs font-bold text-gray-700 mb-1.5">
-                            End Date *
-                          </label>
-                          <input
-                            type="date"
-                            value={formData.valid_till}
-                            onChange={handleInputChange('valid_till')}
-                            className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-100 text-sm"
-                            min={formData.valid_from || new Date().toISOString().split('T')[0]}
-                            required
-                          />
+                          <label className="block text-xs font-semibold text-gray-700 mb-1.5">Max per user</label>
+                          <input type="text" value={formData.max_uses_per_user} onChange={handleNumberInputChange('max_uses_per_user')} className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm" placeholder="Optional" />
                         </div>
                       </div>
-                      
-                      {formData.valid_from && formData.valid_till && (
-                        <div className="p-3 bg-gradient-to-r from-gray-50 to-gray-100 rounded-lg border border-gray-200">
-                          <div className="text-xs font-bold text-gray-700 flex items-center gap-2">
-                            <Calendar size={12} />
-                            Valid from <span className="text-orange-600">{formData.valid_from}</span> to <span className="text-orange-600">{formData.valid_till}</span>
-                          </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">Applicable days</label>
+                        <div className="flex flex-wrap gap-1">
+                          {DAYS_OF_WEEK.map(d => (
+                            <button key={d} type="button" onClick={() => toggleDay(d)} className={`px-2 py-1.5 rounded-lg text-xs font-medium ${formData.applicable_on_days.includes(d) ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                              {d.slice(0, 3)}
+                            </button>
+                          ))}
                         </div>
-                      )}
-                      
-                      {/* Offer Summary */}
-                      <div className="border border-gray-200 rounded-lg overflow-hidden bg-gradient-to-br from-white to-gray-50">
-                        <div className="px-4 py-3 bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
-                          <h4 className="text-sm font-bold text-gray-900">Offer Summary</h4>
+                        <p className="text-xs text-gray-500 mt-1">Leave empty for all days</p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1.5">Time start</label>
+                          <input type="time" value={formData.applicable_time_start} onChange={e => setFormData(prev => ({ ...prev, applicable_time_start: e.target.value }))} className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm" />
                         </div>
-                        <div className="p-4">
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-semibold text-gray-600">Title:</span>
-                              <span className="text-xs font-bold text-gray-900">{formData.offer_title || 'Not set'}</span>
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-semibold text-gray-600">Type:</span>
-                              <span className="text-xs font-bold text-gray-900">{getOfferTypeDisplay(formData.offer_type)}</span>
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-semibold text-gray-600">Apply To:</span>
-                              <span className="text-xs font-bold text-gray-900">{getApplyToDisplay(formData.offer_sub_type)}</span>
-                            </div>
-                            {formData.offer_sub_type === 'SPECIFIC_ITEM' && formData.menu_item_ids.length > 0 && (
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs font-semibold text-gray-600">Selected Items:</span>
-                                <span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded">
-                                  {formData.menu_item_ids.length} item(s)
-                                </span>
-                              </div>
-                            )}
-                            {formData.offer_type === 'COUPON' && generatedCouponCode && (
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs font-semibold text-gray-600">Coupon Code:</span>
-                                <span className="text-xs font-bold text-red-600 bg-red-50 px-2 py-1 rounded font-mono">
-                                  {generatedCouponCode}
-                                </span>
-                              </div>
-                            )}
-                            {formData.discount_value && (
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs font-semibold text-gray-600">Discount:</span>
-                                <span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded">
-                                  {formData.offer_type === 'PERCENTAGE' ? `${formData.discount_value}% OFF` : `₹${formData.discount_value} OFF`}
-                                </span>
-                              </div>
-                            )}
-                            {formData.min_order_amount && (
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs font-semibold text-gray-600">Min. Order:</span>
-                                <span className="text-xs font-bold text-orange-600 bg-orange-50 px-2 py-1 rounded">
-                                  ₹{formData.min_order_amount}+
-                                </span>
-                              </div>
-                            )}
-                          </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1.5">Time end</label>
+                          <input type="time" value={formData.applicable_time_end} onChange={e => setFormData(prev => ({ ...prev, applicable_time_end: e.target.value }))} className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm" />
                         </div>
                       </div>
                     </div>
                   )}
 
-                  {/* Navigation Buttons - Fixed at bottom of content */}
+                  {/* Step 5: Stackability */}
+                  {activeTab === 'stackability' && (
+                    <div className="space-y-4">
+                      <div className="rounded-xl bg-gradient-to-r from-indigo-50 to-violet-50 border border-indigo-200/80 p-3 mb-2">
+                        <h3 className="text-sm font-bold text-indigo-900 mb-0.5">Stacking & priority</h3>
+                        <p className="text-xs text-indigo-700">Allow combining with other offers and set priority</p>
+                      </div>
+                      <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200">
+                        <span className="text-xs font-semibold text-gray-700">Allow stacking with other offers</span>
+                        <button type="button" onClick={() => setFormData(prev => ({ ...prev, is_stackable: !prev.is_stackable }))} className={`relative w-11 h-6 rounded-full transition-colors ${formData.is_stackable ? 'bg-orange-500' : 'bg-gray-300'}`}>
+                          <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${formData.is_stackable ? 'translate-x-5' : 'translate-x-0'}`} />
+                        </button>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">Priority (higher = applied first when non-stackable)</label>
+                        <input type="number" value={formData.priority} onChange={e => setFormData(prev => ({ ...prev, priority: e.target.value }))} className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm" min={0} placeholder="0" />
+                      </div>
+                      <div className="border border-gray-200 rounded-xl overflow-hidden bg-gradient-to-br from-white to-gray-50">
+                        <div className="px-4 py-3 bg-gray-100 border-b border-gray-200">
+                          <h4 className="text-sm font-bold text-gray-900">Summary</h4>
+                        </div>
+                        <div className="p-4 space-y-2 text-sm">
+                          <div className="flex justify-between"><span className="text-gray-600">Title</span><span className="font-semibold">{formData.offer_title || '—'}</span></div>
+                          <div className="flex justify-between"><span className="text-gray-600">Type</span><span className="font-semibold">{getOfferTypeDisplay(formData.offer_type)}</span></div>
+                          <div className="flex justify-between"><span className="text-gray-600">Applies to</span><span className="font-semibold">{getApplyToDisplay(formData.applicability_type)}</span></div>
+                          {formData.valid_from && formData.valid_till && <div className="flex justify-between"><span className="text-gray-600">Valid</span><span className="font-semibold">{formData.valid_from} → {formData.valid_till}</span></div>}
+                          {formData.is_stackable && <span className="inline-block px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs font-semibold">Stackable</span>}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Navigation Buttons */}
                   <div className="flex items-center justify-between gap-2 pt-6 mt-6 border-t border-gray-200">
                     <div>
                       {activeTab !== 'basic' && (
                         <button
                           type="button"
-                          className="px-4 py-2.5 rounded-lg bg-gradient-to-r from-gray-100 to-gray-200 border border-gray-300 text-gray-700 hover:from-gray-200 hover:to-gray-300 transition-all text-xs font-bold flex items-center gap-1"
-                          onClick={() => {
-                            if (activeTab === 'details') setActiveTab('basic')
-                            if (activeTab === 'validity') setActiveTab('details')
-                          }}
+                          className="px-4 py-2.5 rounded-xl bg-gray-100 border border-gray-200 text-gray-700 hover:bg-gray-200 transition-all text-xs font-bold"
+                          onClick={() => setActiveTab(STEPS[STEPS.indexOf(activeTab) - 1])}
                         >
                           ← Previous
                         </button>
                       )}
                     </div>
-                    
                     <div className="flex gap-2">
-                      {activeTab !== 'validity' && (
+                      {activeTab !== 'stackability' && (
                         <button
                           type="button"
-                          className="px-4 py-2.5 rounded-lg bg-gradient-to-r from-gray-800 to-gray-900 text-white hover:from-gray-900 hover:to-black transition-all text-xs font-bold flex items-center gap-1"
-                          onClick={() => {
-                            if (activeTab === 'basic') setActiveTab('details')
-                            if (activeTab === 'details') setActiveTab('validity')
-                          }}
+                          className="px-4 py-2.5 rounded-xl bg-gray-800 text-white hover:bg-gray-900 transition-all text-xs font-bold"
+                          onClick={() => setActiveTab(STEPS[STEPS.indexOf(activeTab) + 1])}
                         >
                           Next →
                         </button>
                       )}
-                      
-                      {activeTab === 'validity' && (
+                      {activeTab === 'stackability' && (
                         <button
                           type="submit"
-                          disabled={isSaving || !formData.offer_title.trim() || !formData.valid_from || !formData.valid_till || 
-                            (formData.offer_sub_type === 'SPECIFIC_ITEM' && formData.menu_item_ids.length === 0) ||
+                          disabled={isSaving || !formData.offer_title.trim() || !formData.valid_from || !formData.valid_till ||
+                            (formData.applicability_type === 'SPECIFIC_ITEMS_SET' && formData.menu_item_ids.length === 0) ||
+                            (formData.applicability_type === 'CATEGORY' && formData.category_ids.length === 0) ||
                             (formData.offer_type === 'COUPON' && !generatedCouponCode)}
-                          className={`px-6 py-2.5 rounded-lg font-bold text-white transition-all text-xs ${
-                            isSaving || !formData.offer_title.trim() || !formData.valid_from || !formData.valid_till || 
-                            (formData.offer_sub_type === 'SPECIFIC_ITEM' && formData.menu_item_ids.length === 0) ||
+                          className={`px-6 py-2.5 rounded-xl font-bold text-white transition-all text-xs ${
+                            isSaving || !formData.offer_title.trim() || !formData.valid_from || !formData.valid_till ||
+                            (formData.applicability_type === 'SPECIFIC_ITEMS_SET' && formData.menu_item_ids.length === 0) ||
+                            (formData.applicability_type === 'CATEGORY' && formData.category_ids.length === 0) ||
                             (formData.offer_type === 'COUPON' && !generatedCouponCode)
-                              ? 'bg-gradient-to-r from-orange-300 to-red-300 cursor-not-allowed' 
+                              ? 'bg-orange-300 cursor-not-allowed'
                               : 'bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 shadow-lg hover:shadow-xl'
                           }`}
                         >
                           {isSaving ? (
                             <span className="flex items-center gap-1">
-                              <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white"></div>
+                              <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white" />
                               Saving...
                             </span>
                           ) : (

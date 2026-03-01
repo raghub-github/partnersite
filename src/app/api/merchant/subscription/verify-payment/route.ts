@@ -204,6 +204,13 @@ export async function POST(request: NextRequest) {
       billing_period_end: expiryDate.toISOString(),
     });
 
+    // Unlock plan-locked items after successful upgrade
+    try {
+      await supabase.rpc('enforce_plan_limits', { p_store_id: store.id });
+    } catch (enforceErr) {
+      console.warn('[verify-payment] enforce_plan_limits after upgrade failed (non-blocking):', enforceErr);
+    }
+
     return NextResponse.json({
       success: true,
       subscriptionId,

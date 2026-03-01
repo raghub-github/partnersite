@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { validateMerchantFromSession } from '@/lib/auth/validate-merchant'
+import { deleteFromR2, extractR2KeyFromUrl } from '@/lib/r2'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
@@ -171,6 +172,39 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Store does not belong to this merchant' }, { status: 403 })
     }
 
+    // Check plan limits before inserting
+    const { count: currentItemCount } = await supabase
+      .from('merchant_menu_items')
+      .select('id', { count: 'exact', head: true })
+      .eq('store_id', store.id)
+      .eq('is_deleted', false)
+      .eq('is_locked_by_plan', false)
+
+    const { data: activeSub } = await supabase
+      .from('merchant_subscriptions')
+      .select('plan_id, merchant_plans(max_menu_items)')
+      .eq('merchant_id', store.parent_id)
+      .or(`store_id.is.null,store_id.eq.${store.id}`)
+      .eq('is_active', true)
+      .eq('subscription_status', 'ACTIVE')
+      .gt('expiry_date', new Date().toISOString())
+      .order('expiry_date', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    let maxItems: number | null = (activeSub?.merchant_plans as any)?.max_menu_items ?? null;
+    if (!activeSub) {
+      const { data: freePlan } = await supabase
+        .from('merchant_plans')
+        .select('max_menu_items')
+        .eq('plan_code', 'FREE')
+        .eq('is_active', true)
+        .maybeSingle()
+      maxItems = freePlan?.max_menu_items ?? 15;
+    }
+
+    const willExceedLimit = maxItems !== null && (currentItemCount ?? 0) >= maxItems;
+
     const categoryId = body.category_id ?? null
     if (categoryId) {
       const { data: catData, error: catError } = await supabase
@@ -212,6 +246,9 @@ export async function POST(req: NextRequest) {
       serves: body.serves ?? 1,
       is_active: body.is_active ?? true,
       allergens: allergens.length ? allergens : null,
+      is_locked_by_plan: willExceedLimit,
+      locked_reason: willExceedLimit ? 'plan_item_limit_exceeded' : null,
+      locked_at: willExceedLimit ? new Date().toISOString() : null,
     }
 
     const { data, error } = await supabase
@@ -347,6 +384,19 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: 'Store not found or access denied' }, { status: 404 })
     }
 
+    const { data: existingItemRow } = await supabase
+      .from('merchant_menu_items')
+      .select('id, is_locked_by_plan')
+      .eq('item_id', String(itemId))
+      .eq('store_id', store.id)
+      .maybeSingle()
+    if (existingItemRow && (existingItemRow as any).is_locked_by_plan) {
+      return NextResponse.json(
+        { error: 'This item is locked. Upgrade your plan to edit it.' },
+        { status: 403 }
+      )
+    }
+
     const hasItemFields =
       body.item_name != null ||
       body.base_price != null ||
@@ -354,6 +404,21 @@ export async function PATCH(req: NextRequest) {
     let data: any = null
 
     if (hasItemFields) {
+      // If image is being replaced, fetch existing first so we can clean up old R2 key + old DB rows.
+      const isUpdatingImage = body.item_image_url !== undefined
+      let existingItem: { id: number; item_image_url: string | null } | null = null
+      if (isUpdatingImage) {
+        const { data: existingRow, error: existingErr } = await supabase
+          .from('merchant_menu_items')
+          .select('id, item_image_url')
+          .eq('item_id', String(itemId))
+          .eq('store_id', store.id)
+          .maybeSingle()
+        if (!existingErr && existingRow?.id) {
+          existingItem = existingRow as any
+        }
+      }
+
       // Only update fields that are explicitly sent to avoid wiping existing data (e.g. description, image_url)
       const updatePayload: Record<string, unknown> = { updated_at: new Date().toISOString() }
       if (body.category_id !== undefined) updatePayload.category_id = body.category_id ?? null
@@ -395,6 +460,41 @@ export async function PATCH(req: NextRequest) {
         return NextResponse.json({ error: error.message || 'Failed to update menu item', code: error.code }, { status: 500 })
       }
       data = updated
+
+      // Enforce: one menu item -> one image (replace old when new comes).
+      if (body.item_image_url !== undefined) {
+        const oldUrl = existingItem?.item_image_url ?? null
+        const newUrl = (updated as any)?.item_image_url ?? null
+
+        const oldKey = oldUrl ? extractR2KeyFromUrl(String(oldUrl)) : null
+        const newKey = newUrl ? extractR2KeyFromUrl(String(newUrl)) : null
+
+        // Best-effort delete old object when replacing with a new one.
+        // Guardrails: only delete keys under our docs/merchants/... menu paths.
+        if (oldKey && oldKey !== newKey && oldKey.startsWith('docs/merchants/') && oldKey.includes('/menu/')) {
+          deleteFromR2(oldKey).catch((e) => {
+            console.error('[menu-items PATCH] Failed to delete old menu item image from R2', e)
+          })
+        }
+
+        const menuItemInternalId = (updated as any)?.id ?? existingItem?.id
+        if (menuItemInternalId != null) {
+          try {
+            // Remove any old rows for this item, then insert exactly one row if image exists.
+            await supabase.from('merchant_menu_item_images').delete().eq('menu_item_id', menuItemInternalId)
+            if (newUrl) {
+              await supabase.from('merchant_menu_item_images').insert([{
+                menu_item_id: menuItemInternalId,
+                image_url: newUrl,
+                is_primary: true,
+                display_order: 0,
+              }])
+            }
+          } catch (imgErr) {
+            console.error('[menu-items PATCH] merchant_menu_item_images replace error', imgErr)
+          }
+        }
+      }
     }
 
     const customizations = Array.isArray(body.customizations) ? body.customizations : []
