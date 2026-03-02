@@ -38,6 +38,8 @@ interface PreviewPageProps {
     menuSpreadsheetFile?: File | null;
     menuImageUrls?: string[];
     menuSpreadsheetUrl?: string | null;
+    menuPdfUrl?: string | null;
+    menuPdfFileName?: string | null;
   };
   parentInfo: any;
   onBack: () => void;

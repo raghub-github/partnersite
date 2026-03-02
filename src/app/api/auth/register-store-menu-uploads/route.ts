@@ -141,7 +141,7 @@ export async function GET(req: NextRequest) {
 
     const files = mediaRows.map((r) => ({
       id: r.id,
-      file_url: toProxyUrl(r.r2_key),
+      file_url: r.r2_key ? toProxyUrl(r.r2_key) : null,
       file_name: r.original_file_name,
       file_size: r.file_size_bytes,
       mime_type: r.mime_type,
@@ -329,14 +329,13 @@ export async function POST(req: NextRequest) {
 
         const insertedRow = row as {
           id: number;
-          r2_key: string | null;
           original_file_name: string | null;
           file_size_bytes: number | null;
         };
 
         inserted.push({
           id: insertedRow.id,
-          file_url: toProxyUrl(insertedRow.r2_key),
+          file_url: fileUrl,
           file_name: insertedRow.original_file_name,
           file_size: insertedRow.file_size_bytes,
         });

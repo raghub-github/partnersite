@@ -18,24 +18,30 @@ function getDb() {
   });
 }
 
+type OfferRow = { id: number; store_id: number; offer_title: string; offer_type?: string; offer_image_url?: string | null };
+type StoreRow = { parent_id: number | null };
+
 async function getOfferAndValidate(
-  db: ReturnType<typeof createClient>,
+  db: ReturnType<typeof getDb>,
   offerId: string,
   merchantParentId: number
-): Promise<{ offer: { id: number; store_id: number; offer_title: string; offer_image_url?: string | null }; storeParentId: number } | null> {
-  const { data: offer, error: offerErr } = await db
+): Promise<{ offer: OfferRow; storeParentId: number } | null> {
+  const { data, error: offerErr } = await db
     .from('merchant_offers')
     .select('id, store_id, offer_title, offer_type, offer_image_url')
     .eq('offer_id', offerId)
     .single();
-  if (offerErr || !offer) return null;
-  const { data: store } = await db
+  if (offerErr || !data) return null;
+  const offer = data as OfferRow;
+  const { data: storeData } = await db
     .from('merchant_stores')
     .select('parent_id')
     .eq('id', offer.store_id)
     .single();
-  if (!store || (store.parent_id as number) !== merchantParentId) return null;
-  return { offer: offer as { id: number; store_id: number; offer_title: string; offer_image_url?: string | null }, storeParentId: store.parent_id as number };
+  if (!storeData) return null;
+  const store = storeData as StoreRow;
+  if (store.parent_id === null || store.parent_id !== merchantParentId) return null;
+  return { offer, storeParentId: store.parent_id };
 }
 
 export async function PATCH(

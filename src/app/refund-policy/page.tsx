@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import React, { useEffect } from 'react';
+import React, { Suspense, useEffect } from "react";
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -16,7 +16,7 @@ import {
   HelpCircle,
 } from 'lucide-react';
 
-export default function RefundPolicyPage() {
+function RefundPolicyPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -238,5 +238,13 @@ export default function RefundPolicyPage() {
         </p>
       </main>
     </div>
+  );
+}
+
+export default function RefundPolicyPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-50" />}>
+      <RefundPolicyPageInner />
+    </Suspense>
   );
 }

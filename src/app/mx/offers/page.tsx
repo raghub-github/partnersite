@@ -338,7 +338,7 @@ function OffersContent() {
       setFormData({
         offer_title: offer.offer_title,
         offer_description: offer.offer_description || '',
-        offer_type: offer.offer_type as Offer['offer_type'],
+        offer_type: offer.offer_type as OfferType | 'BUY_N_GET_M' | 'COUPON',
         offer_sub_type: offer.offer_sub_type || 'ALL_ORDERS',
         applicability_type: (offer.offer_sub_type === 'SPECIFIC_ITEM' ? 'SPECIFIC_ITEMS_SET' : offer.offer_sub_type === 'ALL_ORDERS' ? 'ALL' : (offer as any).applicability_type) || 'ALL',
         menu_item_ids: offer.menu_item_ids ?? meta.menu_item_ids ?? [],
@@ -829,7 +829,7 @@ function OffersContent() {
     toast.success('Copied to clipboard!')
   }
 
-  const handleOfferTypeChange = (type: Offer['offer_type']) => {
+  const handleOfferTypeChange = (type: OfferType | 'BUY_N_GET_M' | 'COUPON') => {
     setFormData(prev => ({ ...prev, offer_type: type }))
     setShowOfferTypeDropdown(false)
     
@@ -839,8 +839,8 @@ function OffersContent() {
     }
   }
 
-  const handleApplyToChange = (type: Offer['offer_sub_type']) => {
-    setFormData(prev => ({ ...prev, offer_sub_type: type }))
+  const handleApplyToChange = (type: string) => {
+    setFormData(prev => ({ ...prev, offer_sub_type: type || 'ALL_ORDERS' }))
     setShowApplyToDropdown(false)
   }
 
@@ -1287,7 +1287,14 @@ function OffersContent() {
                         {showOfferTypeDropdown && (
                           <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-xl shadow-xl max-h-60 overflow-y-auto">
                             {OFFER_TYPES.map((opt) => (
-                              <div key={opt.type} onClick={(e) => { e.stopPropagation(); handleOfferTypeChange(opt.type as Offer['offer_type']); }} className={`flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 cursor-pointer border-b last:border-b-0 ${formData.offer_type === opt.type ? 'bg-orange-50' : ''}`}>
+                              <div
+                                key={opt.type}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOfferTypeChange(opt.type);
+                                }}
+                                className={`flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 cursor-pointer border-b last:border-b-0 ${formData.offer_type === opt.type ? 'bg-orange-50' : ''}`}
+                              >
                                 <div className="p-1.5 rounded-full bg-gray-100">{opt.icon}</div>
                                 <span className="text-sm font-medium text-gray-900">{opt.label}</span>
                                 {formData.offer_type === opt.type && <Check size={16} className="ml-auto text-green-600" />}

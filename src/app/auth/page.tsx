@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { ChefHat, Store, ArrowRight, ChevronDown } from 'lucide-react';
+import { Store, ArrowRight, ChevronDown } from 'lucide-react';
 import { WhyChooseUsSection } from '@/components/onboarding/WhyChooseUsSection';
 import { NeededDocumentsSection } from '@/components/onboarding/NeededDocumentsSection';
 import { FAQSection } from '@/components/onboarding/FAQSection';
@@ -59,7 +59,7 @@ export default function AuthHome() {
               Manage your store and grow your business
             </p>
             <p className="text-sm sm:text-base text-white/80 text-center mb-8 max-w-md mx-auto">
-              Join thousands of restaurant partners
+              Join thousands of partners – restaurants, pharmacies, grocery, and more
             </p>
 
             {/* CTAs – elevated, full-width on mobile */}
@@ -79,7 +79,7 @@ export default function AuthHome() {
                 className="flex w-full items-center justify-between gap-3 rounded-xl border-2 border-white/40 bg-white/15 px-6 py-4 text-base font-semibold text-white shadow-lg backdrop-blur-sm transition-all duration-300 hover:bg-white/25 hover:border-white/60 hover:shadow-xl hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-white/50 focus:ring-offset-2 focus:ring-offset-transparent active:translate-y-0"
               >
                 <span className="flex items-center gap-2.5">
-                  <ChefHat className="h-5 w-5 text-amber-200" />
+                  <Store className="h-5 w-5 text-amber-200" />
                   Sign in to your partner account
                 </span>
                 <ArrowRight className="h-5 w-5 text-white/80" />
@@ -87,7 +87,7 @@ export default function AuthHome() {
             </div>
 
             <p className="text-center text-sm sm:text-base font-semibold text-white/95">
-              For Restaurants – Start deliveries through GatiMitra
+              For Partners – Start selling & delivering through GatiMitra
             </p>
           </div>
         </div>

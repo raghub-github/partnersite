@@ -5,7 +5,7 @@ import {
   CheckCircle2,
   CreditCard,
   Landmark,
-  UtensilsCrossed,
+  LayoutList,
   Image,
   type LucideIcon,
 } from 'lucide-react';
@@ -18,8 +18,8 @@ const DOCUMENTS: { icon: LucideIcon; title: string; detail: string }[] = [
   },
   {
     icon: FileCheck,
-    title: 'FSSAI License Certificate',
-    detail: 'A valid FSSAI license is required.',
+    title: 'Business license',
+    detail: 'As applicable: e.g. FSSAI for food, drug license for pharmacy, or other trade license.',
   },
   {
     icon: Landmark,
@@ -27,14 +27,14 @@ const DOCUMENTS: { icon: LucideIcon; title: string; detail: string }[] = [
     detail: 'Copy of cancelled cheque or bank passbook.',
   },
   {
-    icon: UtensilsCrossed,
-    title: 'Restaurant Delivery Menu',
-    detail: 'Complete menu you want to list for online orders.',
+    icon: LayoutList,
+    title: 'Product / Menu catalog',
+    detail: 'Complete catalog or menu you want to list for online orders.',
   },
   {
     icon: Image,
-    title: 'One Food Image',
-    detail: "Used as your restaurant's cover image on GatiMitra.",
+    title: 'Store cover image',
+    detail: "Used as your store's cover image on GatiMitra.",
   },
 ];
 
