@@ -53,8 +53,12 @@ function LoginPageContent() {
   const oauthCode = searchParams?.get('code');
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && redirectTo) {
+    if (typeof window === 'undefined') return;
+    if (redirectTo) {
       sessionStorage.setItem('auth_redirect', redirectTo);
+    } else {
+      // Ensure after login we always go to child store list, not auth home (no stale /auth)
+      sessionStorage.setItem('auth_redirect', '/auth/post-login');
     }
   }, [redirectTo]);
 
@@ -123,13 +127,14 @@ function LoginPageContent() {
       if (res.status === 502) {
         const check = await fetch('/api/merchant-auth/resolve-session', { credentials: 'include' });
         if (check.ok) {
-          const next =
+          let next =
             (typeof window !== 'undefined' && sessionStorage.getItem('auth_redirect')) ||
             redirectTo ||
             '/auth/post-login';
           if (typeof window !== 'undefined' && sessionStorage.getItem('auth_redirect')) {
             sessionStorage.removeItem('auth_redirect');
           }
+          if (next === '/auth' || next === '/auth/') next = '/auth/post-login';
           window.location.href = next.startsWith('/') ? next : '/auth/post-login';
           return;
         }
@@ -138,13 +143,14 @@ function LoginPageContent() {
       const data = await res.json().catch(() => ({})) as { error?: string; code?: string };
       throw new Error(data.error || 'Session could not be set.');
     }
-    const next =
+    let next =
       (typeof window !== 'undefined' && sessionStorage.getItem('auth_redirect')) ||
       redirectTo ||
       '/auth/post-login';
     if (typeof window !== 'undefined' && sessionStorage.getItem('auth_redirect')) {
       sessionStorage.removeItem('auth_redirect');
     }
+    if (next === '/auth' || next === '/auth/') next = '/auth/post-login';
     window.location.href = next.startsWith('/') ? next : '/auth/post-login';
   };
 

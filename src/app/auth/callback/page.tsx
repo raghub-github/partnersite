@@ -68,6 +68,7 @@ function AuthCallbackContent() {
   useEffect(() => {
     const run = async () => {
       let next = typeof window !== "undefined" ? sessionStorage.getItem("auth_redirect") || "/auth/post-login" : "/auth/post-login";
+      if (next === "/auth" || next === "/auth/") next = "/auth/post-login";
       // Ensure we always redirect on the current origin (avoid redirecting to localhost from production)
       if (typeof window !== "undefined" && next.startsWith("http")) {
         try {
