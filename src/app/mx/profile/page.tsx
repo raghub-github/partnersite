@@ -6,6 +6,16 @@ import { R2Image } from "@/components/R2Image";
 import { fetchRestaurantById as fetchStoreById, updateStoreInfo } from "@/lib/database";
 import { MerchantStore } from "@/lib/merchantStore";
 import { getMerchantAssetsPath } from "@/lib/r2-paths";
+import { toStoredDocumentUrl } from "@/lib/r2";
+
+/** Bank/UPI attachment link that never expires: store keys use proxy?key=; full R2 URLs use proxy?url= so old signed URLs are served via proxy. */
+function bankAttachmentHref(value: string | null | undefined): string | null {
+  if (!value || typeof value !== "string") return null;
+  const t = value.trim();
+  if (!t) return null;
+  if (t.includes("://")) return `/api/attachments/proxy?url=${encodeURIComponent(t)}`;
+  return toStoredDocumentUrl(t) ?? t;
+}
 import { Toaster, toast } from "sonner";
 import { 
   Building, 
@@ -34,9 +44,11 @@ import {
   FileCheck,
   Download,
   ExternalLink,
+  Store,
 } from "lucide-react";
 import { PageSkeletonProfile } from "@/components/PageSkeleton";
 import { MobileHamburgerButton } from "@/components/MobileHamburgerButton";
+import { useRouter, usePathname } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
@@ -222,10 +234,16 @@ function OperatingDaysCard({ storeId }: { storeId: string | null }) {
 }
 
 export default function ProfilePage() {
+  const router = useRouter();
+  const pathname = usePathname();
   const [store, setStore] = useState<MerchantStore | null>(null);
   const [editData, setEditData] = useState<MerchantStore | null>(null);
   const [storeId, setStoreId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [storeCuisines, setStoreCuisines] = useState<string[]>([]);
+  const [storeOptions, setStoreOptions] = useState<Array<{ store_id: string; store_name: string }>>([]);
+  const [storeSwitcherOpen, setStoreSwitcherOpen] = useState(false);
+  const [showAllCuisines, setShowAllCuisines] = useState(false);
   const [confirmSave, setConfirmSave] = useState(false);
   const [editingField, setEditingField] = useState<string | null>(null);
   const [uploadingImages, setUploadingImages] = useState<string[]>([]);
@@ -239,6 +257,7 @@ export default function ProfilePage() {
   const [operatingHours, setOperatingHours] = useState<any[]>([]);
   const [storeDocuments, setStoreDocuments] = useState<any>(null);
   const [bankAccounts, setBankAccounts] = useState<any[]>([]);
+  const [showAllBankAccounts, setShowAllBankAccounts] = useState(false);
   const [areaManager, setAreaManager] = useState<{ id?: number | null; name: string; email: string; mobile: string } | null>(null);
   const [loadingAreaManager, setLoadingAreaManager] = useState(false);
   const [agreement, setAgreement] = useState<{
@@ -263,6 +282,59 @@ export default function ProfilePage() {
     }
     setStoreId(id);
   }, []);
+
+  // Load all approved child stores for quick switching (from merchant-auth resolve-session)
+  useEffect(() => {
+    const loadStores = async () => {
+      try {
+        const res = await fetch("/api/merchant-auth/resolve-session", { credentials: "include" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data || !Array.isArray(data.stores)) return;
+        const approved = (data.stores as any[]).filter(
+          (s) => String(s.approval_status || "").toUpperCase() === "APPROVED"
+        );
+        setStoreOptions(
+          approved.map((s) => ({
+            store_id: String(s.store_id),
+            store_name: String(s.store_name || s.store_id || "Store"),
+          }))
+        );
+      } catch {
+        // ignore; dropdown will just not show
+      }
+    };
+    loadStores();
+  }, []);
+
+  // Load cuisines configured for this store (distinct list from merchant_store_cuisines)
+  useEffect(() => {
+    if (!storeId) return;
+    const loadCuisines = async () => {
+      try {
+        const res = await fetch(`/api/merchant/store-cuisines?storeId=${encodeURIComponent(storeId)}`, {
+          credentials: "include",
+        });
+        if (!res.ok) {
+          setStoreCuisines(Array.isArray(store?.cuisine_types) ? (store?.cuisine_types as string[]) : []);
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        const fromApi = Array.isArray((data as any).cuisines)
+          ? (data as any).cuisines.filter((c: unknown) => typeof c === "string")
+          : [];
+        setStoreCuisines(
+          fromApi.length > 0
+            ? fromApi
+            : Array.isArray(store?.cuisine_types)
+            ? (store?.cuisine_types as string[])
+            : []
+        );
+      } catch {
+        setStoreCuisines(Array.isArray(store?.cuisine_types) ? (store?.cuisine_types as string[]) : []);
+      }
+    };
+    loadCuisines();
+  }, [storeId, store?.cuisine_types]);
 
   /* ===== CONVERT R2 URLs TO SIGNED URLs (so banner/gallery load from onboarding or dashboard) ===== */
   const convertR2UrlToSigned = async (url: string | null | undefined): Promise<string | null> => {
@@ -830,10 +902,55 @@ export default function ProfilePage() {
                             <h2 className="text-base font-bold text-gray-900 truncate">
                               {store?.store_name || '—'}
                             </h2>
-                            {store?.cuisine_types && store.cuisine_types.length > 0 && (
-                              <span className="text-[10px] text-gray-600 shrink-0">
-                                • {formatArray(store.cuisine_types)}
-                              </span>
+                            {storeOptions.length > 0 && storeId && (
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  onClick={() => setStoreSwitcherOpen((v) => !v)}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-full border border-blue-200 bg-white text-[11px] font-medium text-blue-700 hover:bg-blue-50"
+                                >
+                                  Switch store
+                                  <span className="ml-0.5">{storeSwitcherOpen ? "▲" : "▼"}</span>
+                                </button>
+                                {storeSwitcherOpen && (
+                                  <div className="absolute z-30 mt-1 w-56 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg py-1">
+                                    {storeOptions.map((s) => (
+                                      <button
+                                        key={s.store_id}
+                                        type="button"
+                                        onClick={() => {
+                                          localStorage.setItem("selectedStoreId", s.store_id);
+                                          setStoreSwitcherOpen(false);
+                                          const base = (pathname || "/mx/dashboard").split("?")[0];
+                                          const params = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+                                          params.set("storeId", s.store_id);
+                                          window.location.href = `${base}?${params.toString()}`;
+                                        }}
+                                        className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between hover:bg-blue-50 ${
+                                          s.store_id === storeId ? "bg-blue-50 font-semibold text-blue-700" : "text-gray-700"
+                                        }`}
+                                      >
+                                        <span className="truncate">{s.store_name}</span>
+                                        <span className="ml-2 text-[10px] text-gray-500 font-mono truncate shrink-0">
+                                          {s.store_id}
+                                        </span>
+                                      </button>
+                                    ))}
+                                    <div className="border-t border-gray-100 my-1" />
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setStoreSwitcherOpen(false);
+                                        window.location.href = "/auth/post-login";
+                                      }}
+                                      className="w-full text-left px-3 py-2 text-xs font-medium text-blue-600 hover:bg-blue-50 flex items-center gap-2"
+                                    >
+                                      <Store size={14} />
+                                      View all stores
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                             )}
                           </div>
                           <div className="flex items-center gap-2.5 text-xs text-gray-600 mt-0.5">
@@ -931,10 +1048,35 @@ export default function ProfilePage() {
                               label="Store Display Name"
                               value={store.store_display_name || '—'}
                             />
-                            <CompactLockedRow
-                              label="Cuisine Types"
-                              value={Array.isArray(store.cuisine_types) ? store.cuisine_types.join(', ') : (store.cuisine_types || '—')}
-                            />
+                            {/* Cuisine types: show up to 8, rest behind a 'show more' toggle */}
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-xs font-medium text-gray-600">Cuisine Types</span>
+                                <span className="text-xs text-red-500 bg-red-50 px-1.5 py-0.5 rounded">
+                                  Read Only
+                                </span>
+                              </div>
+                              {storeCuisines.length === 0 ? (
+                                <div className="text-sm text-gray-400">—</div>
+                              ) : (
+                                <div className="text-sm text-gray-900 font-medium">
+                                  <span>
+                                    {(showAllCuisines ? storeCuisines : storeCuisines.slice(0, 8)).join(', ')}
+                                  </span>
+                                  {storeCuisines.length > 8 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowAllCuisines((v) => !v)}
+                                      className="ml-1 text-xs font-semibold text-blue-600 hover:text-blue-800 hover:underline"
+                                    >
+                                      {showAllCuisines
+                                        ? 'Show less'
+                                        : `+${storeCuisines.length - 8} more`}
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
                             <CompactLockedRow
                               label="Food Categories"
                               value={Array.isArray(store.food_categories) ? store.food_categories.join(', ') : (store.food_categories || '—')}
@@ -1426,9 +1568,9 @@ export default function ProfilePage() {
                           </div>
                           {/* Priority: Show bank_accounts table data if available, otherwise show UI (store table) data */}
                           {bankAccounts && Array.isArray(bankAccounts) && bankAccounts.length > 0 ? (
-                            // Show data from merchant_store_bank_accounts table
+                            // Show data from merchant_store_bank_accounts table: primary first; rest behind "Show all"
                             <div className="space-y-2">
-                              {bankAccounts.map((bank, idx) => (
+                              {(showAllBankAccounts ? bankAccounts : bankAccounts.slice(0, 1)).map((bank, idx) => (
                                 <div key={bank.id || idx} className="bg-white rounded p-2 border border-gray-200">
                                   {bank.is_primary && (
                                     <span className="text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded mb-1 inline-block">Primary</span>
@@ -1480,9 +1622,54 @@ export default function ProfilePage() {
                                         <span className="font-semibold text-gray-900">{bank.payout_method}</span>
                                       </div>
                                     )}
+                                    {/* Attachments uploaded during onboarding or dashboard update */}
+                                    {bank.bank_proof_file_url && (
+                                      <div className="flex justify-between items-center">
+                                        <span className="text-gray-600">Bank proof:</span>
+                                        <a
+                                          href={bankAttachmentHref(bank.bank_proof_file_url) ?? bank.bank_proof_file_url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-blue-600 hover:text-blue-800 underline font-medium"
+                                        >
+                                          View document
+                                        </a>
+                                      </div>
+                                    )}
+                                    {bank.upi_qr_screenshot_url && (
+                                      <div className="flex justify-between items-center">
+                                        <span className="text-gray-600">UPI QR:</span>
+                                        <a
+                                          href={bankAttachmentHref(bank.upi_qr_screenshot_url) ?? bank.upi_qr_screenshot_url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-blue-600 hover:text-blue-800 underline font-medium"
+                                        >
+                                          View QR
+                                        </a>
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                               ))}
+                              {!showAllBankAccounts && bankAccounts.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setShowAllBankAccounts(true)}
+                                  className="w-full text-sm font-medium text-blue-600 hover:text-blue-800 py-2 rounded border border-gray-200 bg-gray-50 hover:bg-gray-100"
+                                >
+                                  Show all ({bankAccounts.length} accounts)
+                                </button>
+                              )}
+                              {showAllBankAccounts && bankAccounts.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setShowAllBankAccounts(false)}
+                                  className="w-full text-sm font-medium text-gray-600 hover:text-gray-800 py-2 rounded border border-gray-200 bg-gray-50 hover:bg-gray-100"
+                                >
+                                  Show less
+                                </button>
+                              )}
                             </div>
                           ) : (
                             // Show UI data from store table if bank_accounts table is empty

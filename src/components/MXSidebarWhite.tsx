@@ -80,10 +80,13 @@ export const MXSidebarWhite: React.FC<MXSidebarWhiteProps> = ({
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [storeList, setStoreList] = useState<Array<{ store_id: string; store_name: string }>>([]);
+  const [storeDropdownOpen, setStoreDropdownOpen] = useState(false);
 
   // On mobile: keep sidebar closed on any route change and on load/reload (never open automatically).
   useEffect(() => {
     setMobileMenuOpen(false);
+    setStoreDropdownOpen(false);
   }, [pathname]);
   useEffect(() => {
     setMobileMenuOpen(false);
@@ -103,6 +106,31 @@ export const MXSidebarWhite: React.FC<MXSidebarWhiteProps> = ({
       window.removeEventListener('closeMobileSidebar', handleCloseSidebar);
       window.removeEventListener('openMobileSidebar', handleOpenSidebar);
     };
+  }, []);
+
+  // Load approved stores for sidebar store switcher
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/merchant-auth/resolve-session', { credentials: 'include' });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok || !Array.isArray((data as any).stores)) return;
+        const approved = ((data as any).stores as any[]).filter(
+          (s: any) => String(s.approval_status || '').toUpperCase() === 'APPROVED'
+        );
+        setStoreList(
+          approved.map((s: any) => ({
+            store_id: String(s.store_id),
+            store_name: String(s.store_name || s.store_id || 'Store'),
+          }))
+        );
+      } catch {
+        // ignore
+      }
+    };
+    load();
+    return () => { cancelled = true; };
   }, []);
 
   const merchantSession = useMerchantSession();
@@ -169,6 +197,22 @@ export const MXSidebarWhite: React.FC<MXSidebarWhiteProps> = ({
   }
 
   const isActive = (href: string) => (pathname || '') === href || (pathname || '').startsWith(href + '?')
+
+  const switchToStore = (storeId: string) => {
+    if (typeof localStorage !== 'undefined') localStorage.setItem('selectedStoreId', storeId);
+    setStoreDropdownOpen(false);
+    setMobileMenuOpen(false);
+    const base = (pathname || '/mx/dashboard').split('?')[0];
+    const params = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+    params.set('storeId', storeId);
+    window.location.href = `${base}?${params.toString()}`;
+  };
+
+  const goToAllStores = () => {
+    setStoreDropdownOpen(false);
+    setMobileMenuOpen(false);
+    window.location.href = '/auth/post-login';
+  };
 
   const handleLogout = async () => {
     setIsLoggingOut(true)
@@ -242,15 +286,97 @@ export const MXSidebarWhite: React.FC<MXSidebarWhiteProps> = ({
 
   const SidebarContent = () => (
     <>
-      {/* Header: Store icon, store id, name (no collapse button here) */}
+      {/* Header: Store icon, store id, name, and store switcher dropdown */}
       <div className={`flex items-center border-b border-gray-200 ${effectiveCollapsed ? 'justify-center gap-1 p-2' : 'justify-between gap-2 p-6'}`}>
         <div className={`flex items-center ${effectiveCollapsed ? '' : 'gap-3 flex-1 min-w-0'}`}>
           <div className={`rounded-lg bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center flex-shrink-0 ${effectiveCollapsed ? 'w-8 h-8' : 'w-10 h-10'}`}>
             <Store size={effectiveCollapsed ? 16 : 20} className="text-white" />
           </div>
+          {effectiveCollapsed && storeList.length > 0 && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setStoreDropdownOpen((v) => !v)}
+                className="p-1 rounded hover:bg-orange-50 text-orange-600"
+                title="Switch store"
+                aria-label="Switch store"
+              >
+                <ChevronDown size={14} className={storeDropdownOpen ? 'rotate-180' : ''} />
+              </button>
+              {storeDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" aria-hidden onClick={() => setStoreDropdownOpen(false)} />
+                  <div className="absolute left-full top-0 ml-1 z-50 w-56 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg py-1">
+                    {storeList.map((s) => (
+                      <button
+                        key={s.store_id}
+                        type="button"
+                        onClick={() => switchToStore(s.store_id)}
+                        className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between gap-2 hover:bg-orange-50 ${s.store_id === restaurantId ? 'bg-orange-50 font-semibold text-orange-700' : 'text-gray-700'}`}
+                      >
+                        <span className="truncate">{s.store_name}</span>
+                        <span className="text-[10px] text-gray-500 font-mono truncate shrink-0">{s.store_id}</span>
+                      </button>
+                    ))}
+                    <div className="border-t border-gray-100 my-1" />
+                    <button
+                      type="button"
+                      onClick={goToAllStores}
+                      className="w-full text-left px-3 py-2 text-xs font-medium text-blue-600 hover:bg-blue-50 flex items-center gap-2"
+                    >
+                      <Store size={14} />
+                      View all stores
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           {!effectiveCollapsed && (
             <div className="flex-1 min-w-0">
-              <p className="text-xs font-semibold text-orange-600">{restaurantId || 'ID'}</p>
+              <div className="flex items-center gap-1">
+                <p className="text-xs font-semibold text-orange-600 truncate">{restaurantId || 'ID'}</p>
+                {storeList.length > 0 && (
+                  <div className="relative flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setStoreDropdownOpen((v) => !v)}
+                      className="p-0.5 rounded hover:bg-orange-50 text-orange-600"
+                      title="Switch store"
+                      aria-label="Switch store"
+                    >
+                      <ChevronDown size={16} className={storeDropdownOpen ? 'rotate-180' : ''} />
+                    </button>
+                    {storeDropdownOpen && (
+                      <>
+                        <div className="fixed inset-0 z-40" aria-hidden onClick={() => setStoreDropdownOpen(false)} />
+                        <div className="absolute left-0 top-full mt-1 z-50 w-56 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg py-1">
+                          {storeList.map((s) => (
+                            <button
+                              key={s.store_id}
+                              type="button"
+                              onClick={() => switchToStore(s.store_id)}
+                              className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between gap-2 hover:bg-orange-50 ${s.store_id === restaurantId ? 'bg-orange-50 font-semibold text-orange-700' : 'text-gray-700'}`}
+                            >
+                              <span className="truncate">{s.store_name}</span>
+                              <span className="text-[10px] text-gray-500 font-mono truncate shrink-0">{s.store_id}</span>
+                            </button>
+                          ))}
+                          <div className="border-t border-gray-100 my-1" />
+                          <button
+                            type="button"
+                            onClick={goToAllStores}
+                            className="w-full text-left px-3 py-2 text-xs font-medium text-blue-600 hover:bg-blue-50 flex items-center gap-2"
+                          >
+                            <Store size={14} />
+                            View all stores
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
               <h1 className="text-sm font-bold text-gray-900 truncate">{restaurantName || 'Store'}</h1>
             </div>
           )}
@@ -349,19 +475,61 @@ export const MXSidebarWhite: React.FC<MXSidebarWhiteProps> = ({
             />
             <aside className="fixed left-0 top-0 bottom-0 w-72 max-w-[85vw] bg-white border-r border-gray-200 shadow-xl z-[60] overflow-y-auto">
               <div className="flex items-center justify-between p-4 border-b border-gray-200">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center flex-shrink-0">
                     <Store size={20} className="text-white" />
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold text-orange-600">{restaurantId || 'ID'}</p>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1">
+                      <p className="text-xs font-semibold text-orange-600 truncate">{restaurantId || 'ID'}</p>
+                      {storeList.length > 0 && (
+                        <div className="relative flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => setStoreDropdownOpen((v) => !v)}
+                            className="p-0.5 rounded hover:bg-orange-50 text-orange-600"
+                            title="Switch store"
+                            aria-label="Switch store"
+                          >
+                            <ChevronDown size={14} className={storeDropdownOpen ? 'rotate-180' : ''} />
+                          </button>
+                          {storeDropdownOpen && (
+                            <>
+                              <div className="fixed inset-0 z-[61]" aria-hidden onClick={() => setStoreDropdownOpen(false)} />
+                              <div className="absolute left-0 top-full mt-1 z-[62] w-52 max-h-56 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg py-1">
+                                {storeList.map((s) => (
+                                  <button
+                                    key={s.store_id}
+                                    type="button"
+                                    onClick={() => switchToStore(s.store_id)}
+                                    className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between gap-2 hover:bg-orange-50 ${s.store_id === restaurantId ? 'bg-orange-50 font-semibold text-orange-700' : 'text-gray-700'}`}
+                                  >
+                                    <span className="truncate">{s.store_name}</span>
+                                    <span className="text-[10px] text-gray-500 font-mono truncate shrink-0">{s.store_id}</span>
+                                  </button>
+                                ))}
+                                <div className="border-t border-gray-100 my-1" />
+                                <button
+                                  type="button"
+                                  onClick={goToAllStores}
+                                  className="w-full text-left px-3 py-2 text-xs font-medium text-blue-600 hover:bg-blue-50 flex items-center gap-2"
+                                >
+                                  <Store size={14} />
+                                  View all stores
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
                     <h1 className="text-sm font-bold text-gray-900 truncate">{restaurantName || 'Store'}</h1>
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setMobileMenuOpen(false)}
-                  className="p-2 rounded-lg hover:bg-gray-100 text-gray-500"
+                  className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 flex-shrink-0"
                   aria-label="Close menu"
                 >
                   <X size={20} />

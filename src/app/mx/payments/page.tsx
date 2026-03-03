@@ -179,6 +179,7 @@ function PaymentsContent() {
     ifsc_code: '',
     bank_name: '',
     branch_name: '',
+    account_type: '' as '' | 'savings' | 'current',
     upi_id: '',
     bank_proof_type: '' as '' | 'passbook' | 'cancelled_cheque' | 'bank_statement',
     bank_proof_file_url: '',
@@ -384,14 +385,20 @@ function PaymentsContent() {
   }
 
   const handleAddBank = async () => {
-    const { payout_method, account_holder_name, account_number, ifsc_code, bank_name, branch_name, upi_id, bank_proof_type } = addBankForm
+    const { payout_method, account_holder_name, account_number, ifsc_code, bank_name, branch_name, account_type, upi_id, bank_proof_type } = addBankForm
     if (!account_holder_name.trim() || !account_number.trim()) {
       toast.error('Account holder name and account number are required')
       return
     }
-    if (payout_method === 'bank' && (!ifsc_code.trim() || !bank_name.trim())) {
-      toast.error('IFSC and bank name are required for bank account')
-      return
+    if (payout_method === 'bank') {
+      if (!ifsc_code.trim() || !bank_name.trim()) {
+        toast.error('IFSC and bank name are required for bank account')
+        return
+      }
+      if (!account_type || (account_type !== 'savings' && account_type !== 'current')) {
+        toast.error('Please select account type (Savings or Current)')
+        return
+      }
     }
     if (payout_method === 'upi' && !upi_id.trim()) {
       toast.error('UPI ID is required for UPI')
@@ -420,13 +427,14 @@ function PaymentsContent() {
       formData.append('filename', filename)
       const uploadRes = await fetch('/api/upload/r2', { method: 'POST', body: formData })
       const uploadData = await uploadRes.json()
-      if (!uploadRes.ok || !uploadData.url) {
+      if (!uploadRes.ok || (!uploadData.url && !uploadData.key && !uploadData.path)) {
         toast.error(uploadData.error || 'Upload failed')
         setBankProofUploading(false)
         setAddBankSubmitting(false)
         return
       }
-      bankProofUrl = uploadData.url
+      // Store R2 key (or path) so links use proxy and never expire; avoid storing signed URL
+      bankProofUrl = uploadData.key ?? uploadData.path ?? uploadData.url
       setBankProofUploading(false)
       const res = await fetch('/api/merchant/bank-accounts', {
         method: 'POST',
@@ -439,6 +447,7 @@ function PaymentsContent() {
           ifsc_code: ifsc_code.trim() || undefined,
           bank_name: bank_name.trim() || undefined,
           branch_name: branch_name.trim() || undefined,
+          account_type: payout_method === 'bank' && account_type ? account_type.trim() : undefined,
           upi_id: payout_method === 'upi' ? upi_id.trim() : undefined,
           bank_proof_type: proofType,
           bank_proof_file_url: bankProofUrl,
@@ -448,7 +457,7 @@ function PaymentsContent() {
       if (data.success) {
         toast.success('Bank/UPI account added')
         setShowAddBank(false)
-        setAddBankForm({ payout_method: 'bank', account_holder_name: '', account_number: '', ifsc_code: '', bank_name: '', branch_name: '', upi_id: '', bank_proof_type: '', bank_proof_file_url: '' })
+        setAddBankForm({ payout_method: 'bank', account_holder_name: '', account_number: '', ifsc_code: '', bank_name: '', branch_name: '', account_type: '', upi_id: '', bank_proof_type: '', bank_proof_file_url: '' })
         setBankProofFile(null)
         if (storeId) invalidateBankAccounts(storeId)
       } else {
@@ -1275,6 +1284,18 @@ function PaymentsContent() {
                         placeholder="Branch name"
                       />
                     </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Account type *</label>
+                      <select
+                        value={addBankForm.account_type}
+                        onChange={(e) => setAddBankForm((f) => ({ ...f, account_type: e.target.value as '' | 'savings' | 'current' }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-xl bg-white"
+                      >
+                        <option value="">Select account type</option>
+                        <option value="savings">Savings</option>
+                        <option value="current">Current</option>
+                      </select>
+                    </div>
                   </>
                 ) : (
                   <div>
@@ -1351,7 +1372,7 @@ function PaymentsContent() {
                 <button
                   type="button"
                   onClick={handleAddBank}
-                  disabled={addBankSubmitting || !bankProofFile || !addBankForm.bank_proof_type || (addBankForm.bank_proof_type !== 'passbook' && addBankForm.bank_proof_type !== 'cancelled_cheque' && addBankForm.bank_proof_type !== 'bank_statement')}
+                  disabled={addBankSubmitting || !bankProofFile || !addBankForm.bank_proof_type || (addBankForm.bank_proof_type !== 'passbook' && addBankForm.bank_proof_type !== 'cancelled_cheque' && addBankForm.bank_proof_type !== 'bank_statement') || (addBankForm.payout_method === 'bank' && !addBankForm.account_type)}
                   className="flex-1 py-2.5 bg-emerald-600 text-white rounded-xl font-medium hover:bg-emerald-700 disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {addBankSubmitting ? <Loader2 size={18} className="animate-spin" /> : <Check size={18} />}
